@@ -119,7 +119,7 @@ test('landing.png becomes a brief at 87% for chrome-156-stable', async () => {
     assert.match(brief.task, /image_generation/);
     assert.match(brief.task, /without using a reference image as the page background/);
     assert.match(brief.instructions, /generate_image/);
-    assert.deepEqual(GENERATION_KINDS, ['landing', 'site', 'backend', 'app']);
+    assert.deepEqual(GENERATION_KINDS, ['landing', 'site', 'backend', 'app', 'component']);
     const backend = buildGenerationBrief({ kind: 'backend', prompt: 'api', fidelity: 87, creativity: 0, platform: resolvePlatform(), references: {} });
     assert.match(backend.instructions, /node:http/);
     assert.match(backend.instructions, /127\.0\.0\.1/);

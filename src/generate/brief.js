@@ -16,7 +16,7 @@ import { platformInstructions } from './platform.js';
 import { filesForKind, filesForStack, stackText, recommendStack, renderGenerationTask, kindRules } from './scaffold.js';
 
 /** Kinds `ai gen` accepts. */
-export const GENERATION_KINDS = Object.freeze(['landing', 'site', 'backend', 'app']);
+export const GENERATION_KINDS = Object.freeze(['landing', 'site', 'backend', 'app', 'component']);
 
 /** Files the model is asked to create for each kind. */
 export const KIND_OUTPUTS = Object.freeze({
@@ -24,6 +24,7 @@ export const KIND_OUTPUTS = Object.freeze({
     site: Object.freeze(filesForKind('site')),
     backend: Object.freeze(filesForKind('backend')),
     app: Object.freeze(filesForKind('app')),
+    component: Object.freeze(filesForKind('component')),
 });
 
 /**

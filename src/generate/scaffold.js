@@ -47,6 +47,7 @@ const FRAMEWORKS = Object.freeze({
  * @ai.hint pure
  */
 export function filesForKind(kind) {
+    if (kind === 'component') return ['package.json', 'vite.config.js', 'index.html', 'index.js', ...WEB_TAIL];
     if (kind === 'landing') return ['package.json', 'vite.config.js', 'index.html', ...WEB_TAIL];
     if (kind === 'site') return ['package.json', 'vite.config.js', 'index.html', 'about.html', ...WEB_TAIL];
     if (kind === 'app') return ['package.json', 'vite.config.js', 'index.html', ...WEB_TAIL, 'server.js'];
@@ -165,7 +166,7 @@ const BACKEND_SCRIPTS = Object.freeze({
  * @ai.hint pure
  */
 export function buildPackageManifest({ kind, name, libraries = [], framework = null, styleLanguage = null, markup = null }) {
-    const web = kind === 'landing' || kind === 'site' || kind === 'app';
+    const web = kind === 'landing' || kind === 'site' || kind === 'app' || kind === 'component';
     const scripts = { ...(web ? WEB_SCRIPTS : BACKEND_SCRIPTS) };
     const dev = {};
     const deps = {};
@@ -229,10 +230,15 @@ export function stackText(kind, platform, libraries = [], options = {}) {
     const fw = framework ?? (included.has('react') ? 'react' : included.has('vue') ? 'vue' : included.has('svelte') ? 'svelte' : included.has('@fest-lib/lure') ? 'fest' : null);
     const sty = styleLanguage ?? 'scss';
     const mk = markupLanguage ?? 'html';
+
+    //
     if (kind === 'backend') text = 'Node.js 26, ESM, server.js on node:http, bind 127.0.0.1, port PORT or 3000. No dependencies unless a recommendation includes them.';
     else if (kind === 'landing' || kind === 'site') text = `Node.js 26, ESM, Vite, ${sty === 'scss' ? 'SCSS' : sty === 'sass' ? 'Sass' : sty === 'less' ? 'Less' : sty === 'stylus' ? 'Stylus' : sty === 'postcss-preset-env' ? 'PostCSS' : 'CSS'}, ECMAScript ${platform.ecma.edition} (${platform.id}, experimental flags off). No Node server.`;
-    else if (kind === 'app') text = `Node.js 26, ESM, Vite, ${sty === 'scss' ? 'SCSS' : sty === 'sass' ? 'Sass' : sty === 'less' ? 'Less' : sty === 'stylus' ? 'Stylus' : sty === 'postcss-preset-env' ? 'PostCSS' : 'CSS'}, ECMAScript ${platform.ecma.edition} (${platform.id}, experimental flags off). server.js serves dist/ after vite build.`;
+    else if (kind === 'app')                        text = `Node.js 26, ESM, Vite, ${sty === 'scss' ? 'SCSS' : sty === 'sass' ? 'Sass' : sty === 'less' ? 'Less' : sty === 'stylus' ? 'Stylus' : sty === 'postcss-preset-env' ? 'PostCSS' : 'CSS'}, ECMAScript ${platform.ecma.edition} (${platform.id}, experimental flags off). server.js serves dist/ after vite build.`;
+    else if (kind === 'component')                  text = `Node.js 26, ESM, Vite, ${sty === 'scss' ? 'SCSS' : sty === 'sass' ? 'Sass' : sty === 'less' ? 'Less' : sty === 'stylus' ? 'Stylus' : sty === 'postcss-preset-env' ? 'PostCSS' : 'CSS'}, ECMAScript ${platform.ecma.edition} (${platform.id}, experimental flags off). Write as web-component library. 'index.js' is heading module of component.`;
     else text = 'If this is web, PWA, or frontend, use Node.js 26, ESM, Vite, and SCSS. If it is a backend, use node:http on 127.0.0.1 and port PORT or 3000. Otherwise choose the files the request needs.';
+
+    //
     if (fw === 'react') text += ' Write the interface as React JSX/TSX components with Vite plugin.';
     else if (fw === 'react-ssr') text += ' Write the interface as React SSR with @vitejs/plugin-react.';
     else if (fw === 'vue') text += ' Write the interface as Vue Single-File Components (.vue) with @vitejs/plugin-vue.';
@@ -241,11 +247,17 @@ export function stackText(kind, platform, libraries = [], options = {}) {
     else if (fw === 'solid') text += ' Write the interface as Solid.js TSX with @vitejs/plugin-solid.';
     else if (fw === 'lit') text += ' Write the interface as LitElement web components.';
     else if (fw === 'fest') text += ' Write the interface as Fest-Lib LUR.E components (@fest-lib/lure + @fest-lib/core + @fest-lib/dom + @fest-lib/object).';
+    
+    //
     if (mk === 'htmx') text += ' Markup uses htmx 4 (htmx.org): write HTML attributes hx-get, hx-post, hx-swap, hx-target for server-driven fragments.';
     else if (mk === 'pug') text += ' Markup is Pug (.pug). The prepared vite.config.js compiles index.pug to index.html on dev and build.';
+    
+    //
     if (included.has('preact') && included.has('typescript')) text += ' Write the interface as Preact TSX modules. Each component has a matching SCSS module. Do not implement the UI as h() calls in src/main.js.';
     else if (included.has('preact')) text += ' Write the interface as Preact JSX modules. Each component has a matching SCSS module. Do not implement the UI as h() calls in src/main.js.';
     else if (scriptLanguage === 'typescript' || included.has('typescript')) text += ' Source modules are TypeScript.';
+    
+    //
     if (included.has('fastify')) text += ' The server uses fastify.';
     return text;
 }
@@ -417,7 +429,7 @@ export function recommendStack({ kind, prompt = '', references = {} }) {
     for (const pack of CSS_PACKS) if (pack.test.test(hay)) for (const name of pack.names) add(name, 'Matched the design name.', true);
     const icon = ICON_PACKS.find((pack) => pack.test.test(hay));
     if (icon) add(icon.name, 'Matched the icon design.', true);
-    else if (kind === 'landing' || kind === 'site' || kind === 'app') add('lucide', 'Default web icon recommendation.', false);
+    else if (kind === 'landing' || kind === 'site' || kind === 'app' || kind === 'component') add('lucide', 'Default web icon recommendation.', false);
     for (const match of String(prompt).matchAll(/https?:\/\/[^\s)]+/gi)) {
         const url = match[0].replace(/[.,]$/, '');
         if (/npmjs\.com\/package\//i.test(url) || seen.has(url)) continue;
@@ -438,7 +450,7 @@ export function recommendStack({ kind, prompt = '', references = {} }) {
         if (/\bstatic files?\b|\bserves? files?\b|отдач/i.test(hay)) add('@fastify/static', 'The task serves files.', true);
         if (/\bcors\b/i.test(hay)) add('@fastify/cors', 'The task mentions CORS.', true);
     }
-    const web = kind === 'landing' || kind === 'site' || kind === 'app';
+    const web = kind === 'landing' || kind === 'site' || kind === 'app' || kind === 'component';
     const templates = [
         ...refs.templates.map((source) => ({ name: source, source, reason: 'named template' })),
         ...refs.examples.map((source) => ({ name: source, source, reason: 'named example' })),
@@ -645,7 +657,7 @@ export function kindRules(kind, recommendations, framework = null, markup = null
     const included = new Set(recommendations.libraries.filter((item) => item.include).map((item) => item.name));
     const fw = framework ?? (included.has('react') ? 'react' : included.has('vue') ? 'vue' : included.has('svelte') ? 'svelte' : included.has('@fest-lib/lure') ? 'fest' : included.has('lit') ? 'lit' : included.has('solid') || included.has('solid-js') ? 'solid' : null);
     const mk = markup ?? 'html';
-    const web = kind === 'landing' || kind === 'site' || kind === 'app';
+    const web = kind === 'landing' || kind === 'site' || kind === 'app' || kind === 'component';
     const lines = [];
     if (kind === 'backend') {
         lines.push('Node.js 26 ESM. Bind 127.0.0.1. Port from PORT or 3000.');
@@ -664,7 +676,32 @@ export function kindRules(kind, recommendations, framework = null, markup = null
         lines.push('vite.config.js is already written with the Chromium 156 based browser build targets. Do not plan a step to create or verify it.');
         lines.push('Do not run npm run dev or npm run preview inside a step: they do not exit. Verify with npm run build and read the built files.');
         lines.push('Load fonts and icons from a CDN (Google Fonts, jsDelivr, unpkg). Do not vendor an icon set by hand; use download_font or download_icons only when the task needs local files.');
-        lines.push('For each prominent graphic, compare existing candidates only: suitable Lucide or Phosphor icons available to the project, lightweight HTML/CSS drawings, and existing raster or SVG artwork. Do not generate new images for comparison or atlas packing. Use compare_images to create a local PNG sheet and optional pixel-difference map directly from raster data with sharp/node-canvas, rendering SVG candidates through ReSVG; do not create an SVG snapshot or rasterize comparison in a browser, and do not spend an AI request on comparison. Candidates are fitted proportionally into a common aspect-ratio frame with transparent/neutral padding or a deliberate crop; never stretch them. Preserve the original candidates and prefer a PNG that already has a real alpha channel; an optional SVG conversion may be tried on a copy. If a WebP copy is useful, convert it locally and keep the PNG; never use image generation or editing just to change the format. After npm run build, inspect the rendered page and retain only the best-fitting existing option.');
+        lines.push([
+            'For each prominent graphic, compare existing candidates only: ',
+              'suitable Lucide or Phosphor icons available to the project, ', 
+              'lightweight HTML/CSS drawings, and existing raster or SVG artwork.',
+            'Do not generate new images for comparison or atlas packing. ', 
+            'Use compare_images to create a local PNG sheet and optional pixel-difference map directly from raster data with sharp/node-canvas, rendering SVG candidates through ReSVG; ',
+              'do not create an SVG snapshot or rasterize comparison in a browser, and do not spend an AI request on comparison. ', 
+            'Candidates are fitted proportionally into a common aspect-ratio frame with transparent/neutral padding or a deliberate crop; never stretch them. ', 
+            'Preserve the original candidates and prefer a PNG that already has a real alpha channel; ', 
+              'an optional SVG conversion may be tried on a copy. ', 
+            'If a WebP copy is useful, convert it locally and keep the PNG; ', 
+              'never use image generation or editing just to change the format. ', 
+            'After npm run build, inspect the rendered page and retain only the best-fitting existing option.'
+        ].join(" "));
+        if (kind === 'component') {
+            lines.push('Write as web-component and library with test page (index.html), make it reusable for other web apps and projects. Write heading index.js of component module.');
+            lines.push('For elements in shadow DOM, use \'part\' attribute. Make component skinnable and styleable.');
+            lines.push('Documentation: https://developer.mozilla.org/en-US/docs/Web/API/Web_components');
+            if (fw === 'lit') {
+                lines.push('https://github.com/lit/lit');
+                lines.push('https://lit.dev/docs/');
+            }
+            if (fw === 'fest') {
+                lines.push('Glit: https://github.com/fest-live/lur.e/blob/main/src/lure/misc/Glit.ts');
+            }
+        }
     } else lines.push('Choose the files the request needs.');
     lines.push('Read .rules/ and .skills/ and follow them. Do not overwrite them.');
     lines.push('Add absent package.json keys only. Keep existing script bodies and versions.');
@@ -709,7 +746,7 @@ export function preparedScaffoldFiles({ kind, platform, recommendations, name = 
     const docsOpts = { framework, scriptLanguage, styleLanguage, markupLanguage: markup };
     const docs = stackDocuments(kind, platform, recommendations.libraries, docsOpts);
     const manifest = buildPackageManifest({ kind, name, libraries: recommendations.libraries, framework, styleLanguage, markup });
-    const web = kind === 'landing' || kind === 'site' || kind === 'app';
+    const web = kind === 'landing' || kind === 'site' || kind === 'app' || kind === 'component';
     return {
         'package.json': `${JSON.stringify(manifest, null, 2)}\n`,
         ...(web ? {

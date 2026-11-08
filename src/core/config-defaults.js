@@ -354,20 +354,20 @@ export const defaults = Object.freeze({
             tiers: [
                 { model: 'moonshotai/kimi-k3.1-pro', effort: ['medium', 'high', 'xhigh'] }, // I added this step, due for avoid ceiling to `-sol` models
                 { model: 'moonshotai/kimi-k3.1-pro', effort: ['medium', 'high', 'xhigh'] },
-                { model: 'moonshotai/kimi-k3.1-pro', effort: ['low', 'medium', 'high'] },
+                { model: 'moonshotai/kimi-k3.1-pro', effort: ['medium', 'high', 'xhigh'] },
             ],
         }),
         styler: r({
             tiers: [
                 { model: 'moonshotai/kimi-k3.1-pro', effort: ['medium', 'high', 'xhigh'] },
                 { model: 'moonshotai/kimi-k3.1-pro', effort: ['medium', 'high', 'xhigh'] },
-                { model: 'moonshotai/kimi-k3.1-pro', effort: ['low', 'medium', 'high'] },
+                { model: 'moonshotai/kimi-k3.1-pro', effort: ['medium', 'high', 'xhigh'] },
             ],
         }),
         iconifier: r({
             tiers: [
                 { model: 'moonshotai/kimi-k3.1-pro', effort: ['medium', 'high', 'xhigh'] }, // I added this step, due for avoid ceiling to `-sol` models
-                { model: 'moonshotai/kimi-k3.1-pro', effort: ['high', 'xhigh', 'max'] },
+                { model: 'moonshotai/kimi-k3.1-pro', effort: ['medium', 'high', 'xhigh'] },
                 { model: 'moonshotai/kimi-k3.1-pro', effort: ['medium', 'high', 'xhigh'] },
             ]
         }),

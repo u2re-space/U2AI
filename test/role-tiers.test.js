@@ -64,7 +64,7 @@ test('the shipped coder tiers keep the old values in the ladder form', () => {
     const complex = resolveRole(defaults, 'coder', 'complex');
     assert.deepEqual([trivial.model, trivial.effort], ['moonshotai/kimi-k3.1-pro', 'medium']);
     assert.deepEqual([ normal.model,  normal.effort], ['moonshotai/kimi-k3.1-pro', 'high']);
-    assert.deepEqual([complex.model, complex.effort], ['moonshotai/kimi-k3.1-pro', 'high']);
+    assert.deepEqual([complex.model, complex.effort], ['moonshotai/kimi-k3.1-pro', 'xhigh']);
 });
 
 test('the shipped styler tiers stay on gpt-6.1-sol', () => {

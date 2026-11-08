@@ -20,7 +20,7 @@ test('coder effort and model follow the plan complexity', () => {
 
     const complex = resolveRole(defaults, 'coder', 'complex');
     assert.equal(complex.model, 'moonshotai/kimi-k3.1-pro');
-    assert.equal(complex.effort, 'high');
+    assert.equal(complex.effort, 'xhigh');
 
     const unknown = resolveRole(defaults, 'coder', 'unknown');
     assert.equal(unknown.model, normal.model);

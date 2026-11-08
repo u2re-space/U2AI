@@ -371,6 +371,7 @@ export const defaults = Object.freeze({
                 { model: 'moonshotai/kimi-k3.1-pro', effort: ['medium', 'high', 'xhigh'] },
             ]
         }),
+        installer: r({ model: 'gpt-6.1-terra', effort: 'high' }),
 
         // 'moonshotai/kimi-k3.1-pro' now is necessary for measurer!
         measurer: r({
@@ -394,8 +395,8 @@ export const defaults = Object.freeze({
     agent: {
         mode: 'team',                   // team (planner → architect → orchestrator → worker → reviewer) | single (one model, one loop)
         /**
-         * Stage order for team runs. null = the catalog order; a list reorders or drops stages
-         * (answer, classify, plan, decompose, measure, architect, collect, images, decor, work, iconify, review, outcome, memory).
+     * Stage order for team runs. null = the catalog order; a list reorders or drops stages
+     * (answer, classify, plan, decompose, measure, architect, collect, install, images, decor, work, iconify, review, outcome, memory).
          * The plan may supply its own order, which wins over this list for that task.
          */
         pipeline: null,

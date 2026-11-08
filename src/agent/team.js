@@ -1514,7 +1514,7 @@ export async function runTeam({
                         || marks.some((item) => item.role === 'read' || item.role === 'edit')
                     );
                     const pastCollect = Boolean(resumedWork) && (
-                        progress.cursor > 0 || Boolean(ctx.get('findings')) || ['image-processing', 'work', 'review', 'fix', 'done'].includes(progress.stage)
+                        progress.cursor > 0 || Boolean(ctx.get('findings')) || ['install', 'image-processing', 'work', 'review', 'fix', 'done'].includes(progress.stage)
                     );
                     if (!pastCollect && paced?.collect !== 'off' && wantsContext && readNames.length) {
                         notify({ type: 'stage.start', stage: 'collect', role: 'orchestrator', model: paced.roles.orchestrator.model });
@@ -1538,6 +1538,60 @@ export async function runTeam({
                     }
 
                     await orchestrate('collect');
+                },
+            },
+            {
+                id: 'install',
+                run: async () => {
+                    // 2b. Installer: prepare the environment, install dependencies, configure tooling.
+                    // Skip on trivial plans — no dependency or config work is expected.
+                    if (plan.complexity === 'trivial') return;
+                    const pastInstall = Boolean(resumedWork) && (
+                        progress.cursor > 0 || Boolean(ctx.get('install')) || ['image-processing', 'work', 'review', 'fix', 'done'].includes(progress.stage)
+                    );
+                    if (pastInstall) {
+                        if (progress.install?.status === 'completed' && progress.install.report) {
+                            ctx.set('install', 'Environment setup (by the installer)', progress.install.report, { priority: 6 });
+                        }
+                        return;
+                    }
+                    const previous = progress.install;
+                    if (previous?.status === 'completed' && previous.report) {
+                        ctx.set('install', 'Environment setup (by the installer)', previous.report, { priority: 6 });
+                        return;
+                    }
+                    const installRole = roles.resolve('installer');
+                    const model = installRole.model;
+                    const installEffort = paced?.ready
+                        ? stageEffort(installRole.effort, defaultFineQuality(paceSettings.speed, paceSettings.quality), paceSettings.codeQuality)
+                        : installRole.effort;
+                    progress.stage = 'install';
+                    progress.install = { status: 'running', report: '' };
+                    work.progress = progress;
+                    await persist('running');
+                    notify({ type: 'stage.start', stage: 'install', role: 'installer', model });
+                    const installBrief = `# Installer brief\nTask: ${task}\nPlan: ${JSON.stringify({ steps: plan.steps, complexity: plan.complexity })}\nArchitect brief: ${architectureBrief()}`;
+                    const installed = await roles.run('installer', {
+                        text: `${ctx.render({ maxBytes })}\n\n${installBrief}`, instructions: withAgents(ROLE_INSTRUCTIONS.installer),
+                        toolset: workerTools, builtin: builtin,
+                        maxTurns: config.agent.workerMaxTurnsPerStep,
+                        effort: installEffort,
+                    });
+                    if (HARD_STOP.has(installed.status)) return { exit: stop(installed, 'настройка окружения') };
+                    if (installed.status === 'completed') {
+                        const report = installed.text.trim();
+                        progress.install = { status: 'completed', report };
+                        ctx.set('install', 'Environment setup (by the installer)', report, { priority: 6 });
+                        await writeFile(path.join(root, '.tmp', work.id, 'install-report.md'), report, 'utf8').catch(() => { });
+                        work.progress = progress;
+                        publish();
+                        await persist('running');
+                        notify({ type: 'stage.done', stage: 'install', status: 'completed', report });
+                    } else {
+                        notify({ type: 'warning', message: `Настройка окружения не завершена (${installed.status}${installed.error ? `: ${errorMessage(installed.error)}` : ''}); продолжаем без неё.` });
+                        progress.install = { status: installed.status, report: '' };
+                        notify({ type: 'stage.done', stage: 'install', status: installed.status });
+                    }
                 },
             },
             {

@@ -2,7 +2,7 @@
  * @file src/roles/index.js
  * @module roles/index
  * @purpose Collect the prompt of every named role.
- * @depends roles/default, roles/planner, roles/architect, roles/orchestrator, roles/worker, roles/coder, roles/styler, roles/iconifier, roles/reviewer, roles/solver, roles/clicker, roles/typer, roles/encoder, roles/classifier, roles/decomposer, roles/measurer, roles/decorator, roles/image-processor, roles/designer
+ * @depends roles/default, roles/planner, roles/architect, roles/orchestrator, roles/worker, roles/coder, roles/styler, roles/iconifier, roles/reviewer, roles/solver, roles/clicker, roles/typer, roles/encoder, roles/classifier, roles/decomposer, roles/measurer, roles/decorator, roles/image-processor, roles/designer, roles/installer
  * @usedBy commands/instructions, agent/team
  * @exports ROLE_INSTRUCTIONS
  * @ai.tags roles, prompts
@@ -30,6 +30,7 @@ import * as measurer from './measurer.js';
 import * as decorator from './decorator.js';
 import * as imageProcessor from './image-processor.js';
 import * as designer from './designer.js';
+import * as installer from './installer.js';
 
 /**
  * Prompt strings keyed by role, plus the reviewer, encoder, and measurer variants.
@@ -58,6 +59,7 @@ export const ROLE_INSTRUCTIONS = {
     decorator: decorator.instructions,
     'image-processor': imageProcessor.instructions,
     designer: designer.instructions,
+    installer: installer.instructions,
     reviewerCheck: reviewer.checkInstructions,
     reviewerVision: reviewer.visionInstructions,
     reviewerVisionScreen: reviewer.visionScreenInstructions,

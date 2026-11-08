@@ -72,6 +72,7 @@ function roleOf(body) {
     if (typeof body.instructions === 'string' && body.instructions.includes('You are the iconifier,')) return 'iconifier';
     if (detectCoder && typeof body.instructions === 'string' && body.instructions.includes('You are the styler.')) return 'styler';
     if (detectCoder && typeof body.instructions === 'string' && body.instructions.includes('You are the coder.')) return 'coder';
+    if (typeof body.instructions === 'string' && body.instructions.includes('You are the installer,')) return 'installer';
     if (typeof body.instructions === 'string' && body.instructions.includes('route: encode')) return 'answer';
     if (typeof body.instructions === 'string' && body.instructions.includes('Summarize the given source')) return 'file-summary';
     if (body.input.some((i) => i.type === 'message' && i.content?.some?.((c) => c.type === 'input_image'))) return 'vision';
@@ -189,7 +190,7 @@ test('resolveRole merges role, default role and top-level settings; --role flags
     assert.throws(() => overridesFrom({ role: ['Bad Name=x'] }), /--role/);
     assert.throws(() => overridesFrom({ role: ['UPPER=x'] }), /--role/);
     assert.deepEqual(overridesFrom({ role: ['image-processor=gpt-6.1-terra:medium'] }).roles, { 'image-processor': { model: 'gpt-6.1-terra', effort: 'medium' } });
-    assert.equal(Object.keys(overridesFrom({ role: ['all=cheap'] }).roles).length, 19);
+    assert.equal(Object.keys(overridesFrom({ role: ['all=cheap'] }).roles).length, 20);
     assert.equal(overridesFrom({ extract: 'always' }).agent.extract, 'always');
     assert.equal(overridesFrom({ 'no-extract': true }).agent.extract, 'off');
     assert.throws(() => overridesFrom({ extract: 'nope' }), /--extract/);
@@ -297,6 +298,8 @@ test('team run: planner → collector → worker steps → reviewer (revise → 
                 return { text: JSON.stringify({ taskSummary: 'Добавлена функция sum с тестом.', memories: [
                     { scope: 'project', kind: 'convention', content: 'Тесты в проекте запускаются через node --test', tags: ['tests'] },
                     { scope: 'global', kind: 'preference', content: 'Пользователь просит отчёты по-русски', tags: [] } ] }) };
+            case 'installer':
+                return { text: 'Окружение готово: зависимости установлены, конфигурация проверена.' };
             default:
                 return { text: 'unexpected' };
         }
@@ -330,7 +333,7 @@ test('team run: planner → collector → worker steps → reviewer (revise → 
     // Memory and collect both run under the merged orchestrator role on terra.
     assert.equal(seen.find((s) => s.role === 'memory').model, 'gpt-6.1-terra');
     const stages = events.filter((e) => e.type === 'stage.start').map((e) => e.stage);
-    assert.deepEqual(stages, ['answer', 'plan', 'collect', 'work', 'review', 'fix', 'review', 'memory']);
+    assert.deepEqual(stages, ['answer', 'plan', 'collect', 'install', 'work', 'review', 'fix', 'review', 'memory']);
     assert.ok(events.some((e) => e.type === 'plan.ready' && e.steps.length === 3));
     const { readdir } = await import('node:fs/promises');
     const progresses = [];
@@ -1427,6 +1430,7 @@ test('image processing runs before implementation and passes prepared assets in 
             }) };
         }
         if (role === 'collector') return { text: JSON.stringify({ findings: [], answers: [], conventions: [], notes: '' }) };
+        if (role === 'installer') return { text: 'Окружение готово.' };
         if (role === 'memory') return { text: JSON.stringify({ taskSummary: 'готово', memories: [] }) };
         return { text: 'worker done' };
     };

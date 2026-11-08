@@ -33,7 +33,7 @@ test('the registry is the union of the old specialist and sub-agent lists', () =
     // run_subagent had coder, worker, reviewer, solver, image-processor.
     // 2026-10-31: writer, tester, and vision merged away (reviewer covers review, checks, and images).
     // 2026-11-07: designer added (optional design direction role).
-    const union = ['coder', 'styler', 'iconifier', 'worker', 'reviewer', 'solver', 'decomposer', 'measurer', 'decorator', 'image-processor', 'designer', 'clicker', 'typer', 'encoder'];
+    const union = ['coder', 'styler', 'iconifier', 'worker', 'reviewer', 'solver', 'decomposer', 'measurer', 'decorator', 'image-processor', 'installer', 'designer', 'clicker', 'typer', 'encoder'];
     assert.deepEqual(EXECUTOR_NAMES, union);
     assert.deepEqual(SUBAGENT_NAMES, union);
 });

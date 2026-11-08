@@ -235,7 +235,7 @@ export const PLAN_SCHEMA = object({
     complexity: { type: 'string', enum: ['trivial', 'normal', 'complex'] },
     pipeline: {
         type: 'array',
-        description: 'Stage order for this task. Omit a stage to skip it. Empty means the default order. Known stages: answer, classify, plan, decompose, measure, architect, collect, images, decor, work, iconify, review, outcome, memory.',
+        description: 'Stage order for this task. Omit a stage to skip it. Empty means the default order. Known stages: answer, classify, plan, decompose, measure, architect, collect, install, images, decor, work, iconify, review, outcome, memory.',
         items: { type: 'string', enum: [...PIPELINE_STAGE_IDS] },
     },
     steps: {

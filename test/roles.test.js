@@ -5,7 +5,7 @@ import { isWritingStep } from '../src/roles/orchestrator.js';
 import { EXECUTORS } from '../src/agent/role-registry.js';
 import { defaults } from '../src/core/config.js';
 
-const NAMES = ['default', 'planner', 'architect', 'orchestrator', 'worker', 'coder', 'styler', 'iconifier', 'reviewer', 'solver', 'clicker', 'typer', 'encoder', 'classifier', 'decomposer', 'measurer', 'decorator', 'image-processor', 'designer'];
+const NAMES = ['default', 'planner', 'architect', 'orchestrator', 'worker', 'coder', 'styler', 'iconifier', 'reviewer', 'solver', 'clicker', 'typer', 'encoder', 'classifier', 'decomposer', 'measurer', 'decorator', 'image-processor', 'designer', 'installer'];
 
 test('role modules match config role names', () => {
     assert.deepEqual(Object.keys(defaults.roles).sort(), NAMES.slice().sort());

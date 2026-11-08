@@ -15,9 +15,12 @@ import os from 'node:os';
 import { mkdtemp, rm, readFile, writeFile, mkdir, readdir, copyFile, stat } from 'node:fs/promises';
 import { resolveInside } from '../agent/paths.js';
 import { runCommand } from '../agent/shell.js';
+import { componentPackageName, customElementsManifest, normalizeComponentContract, renderComponentContract, renderComponentReadme, contractBriefLines } from './component.js';
 
 const RULES = ['.rules/stack.md', '.rules/files.md', '.skills/scaffold/SKILL.md'];
 const WEB_TAIL = ['src/main.js', 'src/styles.scss', 'scripts/generate.js', ...RULES];
+// A component ships a module, not an app entry: no src/main.js, no global stylesheet.
+const COMPONENT_TAIL = ['src/component.js', 'src/component.scss', 'custom-elements.json', 'README.md', 'scripts/generate.js', ...RULES];
 
 /**
  * Front-end framework definitions. Maps a canonical framework name to its
@@ -47,7 +50,7 @@ const FRAMEWORKS = Object.freeze({
  * @ai.hint pure
  */
 export function filesForKind(kind) {
-    if (kind === 'component') return ['package.json', 'vite.config.js', 'index.html', 'index.js', ...WEB_TAIL];
+    if (kind === 'component') return ['package.json', 'vite.config.js', 'index.html', 'index.js', ...COMPONENT_TAIL];
     if (kind === 'landing') return ['package.json', 'vite.config.js', 'index.html', ...WEB_TAIL];
     if (kind === 'site') return ['package.json', 'vite.config.js', 'index.html', 'about.html', ...WEB_TAIL];
     if (kind === 'app') return ['package.json', 'vite.config.js', 'index.html', ...WEB_TAIL, 'server.js'];
@@ -62,8 +65,9 @@ export function filesForKind(kind) {
  * @exports
  * @ai.hint pure
  */
-export function filesForStack({ kind, libraries = [], framework = null, scriptLanguage = null, styleLanguage = null, markup = null }) {
+export function filesForStack({ kind, libraries = [], framework = null, scriptLanguage = null, styleLanguage = null, markup = null, contract = null }) {
     const files = [...filesForKind(kind)];
+    if (kind === 'component') return componentStackFiles({ files, contract, framework, scriptLanguage, styleLanguage, markup });
     const included = new Set(libraries.filter((item) => item.include).map((item) => item.name));
 
     // Backward compatibility: when no explicit framework/scriptLanguage is given,
@@ -138,6 +142,62 @@ export function filesForStack({ kind, libraries = [], framework = null, scriptLa
 }
 
 /**
+ * Whether a component ships TypeScript: explicit choice wins, then the
+ * contract language, then a typed framework default.
+ * @ai.hint pure
+ */
+function componentIsTyped({ contract = null, framework = null, scriptLanguage = null } = {}) {
+    if (scriptLanguage) return scriptLanguage === 'typescript';
+    const fw = framework ?? (contract ? contract.framework ?? 'vanilla' : 'vanilla');
+    return (contract && contract.scriptLanguage === 'typescript')
+        || FRAMEWORKS[fw]?.defaultScript === 'typescript';
+}
+
+/**
+ * File list for a component: one public entry, one element file, its styles,
+ * the demo page, and the machine-readable API. Names follow the contract tag,
+ * so the file, the class, and the custom element all agree.
+ * @param {{ files: string[], contract: object | null, framework?: string | null, scriptLanguage?: string | null, styleLanguage?: string | null, markup?: string | null }} input
+ * @returns {string[]}
+ * @ai.hint pure
+ */
+function componentStackFiles({ files, contract = null, framework = null, scriptLanguage = null, styleLanguage = null, markup = null }) {
+    const c = contract ? normalizeComponentContract(contract) : null;
+    const tag = c?.tag ?? 'component';
+    const cls = c?.className ?? 'AiComponent';
+    const fw = framework ?? c?.framework ?? 'vanilla';
+    const sty = styleLanguage ?? c?.styleLanguage ?? 'scss';
+    const typed = componentIsTyped({ contract: c, framework, scriptLanguage });
+    const mk = markup ?? 'html';
+    const styExt = sty === 'css' || sty === 'postcss-preset-env' ? 'css' : sty === 'scss' || sty === 'sass' ? 'scss' : sty;
+
+    const isFest = fw === 'fest' || fw === 'fest-lib';
+    let ext;
+    if (fw === 'lit') ext = 'ts';
+    else if (isFest) ext = 'tsx';
+    else if (fw === 'solid' || fw === 'solidjs') ext = 'tsx';
+    else if (fw === 'react' || fw === 'react-ssr') ext = typed ? 'tsx' : 'jsx';
+    else ext = typed ? 'ts' : 'js';
+
+    // The element file name: framework components are named by class, custom elements by tag.
+    const asClass = fw === 'react' || fw === 'react-ssr' || fw === 'vue' || fw === 'vue-runtime' || fw === 'svelte' || fw === 'solid' || fw === 'solidjs';
+    const base = asClass ? cls : tag;
+    const elementExt = fw === 'vue' ? 'vue' : fw === 'svelte' ? 'svelte' : ext;
+    const element = `src/${base}.${elementExt}`;
+
+    // Lit inlines css``, a Vue SFC and a Svelte component carry their own styles.
+    const ownStyles = fw === 'lit' || fw === 'vue' || fw === 'vue-runtime' || fw === 'svelte';
+    const styles = ownStyles ? null : `src/${base}.${fw === 'react' || fw === 'react-ssr' ? `module.${styExt}` : styExt}`;
+    // Fest moves heavy logic to a worker through @fest-lib/uniform.
+    const worker = isFest ? `src/${tag}.worker.${typed ? 'ts' : 'js'}` : null;
+
+    const head = ['package.json', 'vite.config.js', mk === 'pug' ? 'index.pug' : 'index.html', `index.${typed ? 'ts' : 'js'}`];
+    const sources = [element, styles, worker].filter(Boolean);
+    const tail = files.filter((file) => !['package.json', 'vite.config.js', 'index.html', 'index.js', 'src/component.js', 'src/component.scss'].includes(file));
+    return [...head, ...sources, ...tail];
+}
+
+/**
  * A legal npm name, or `app`.
  * @param {string} basename
  * @returns {string}
@@ -165,9 +225,11 @@ const BACKEND_SCRIPTS = Object.freeze({
  * @exports
  * @ai.hint pure
  */
-export function buildPackageManifest({ kind, name, libraries = [], framework = null, styleLanguage = null, markup = null }) {
-    const web = kind === 'landing' || kind === 'site' || kind === 'app' || kind === 'component';
+export function buildPackageManifest({ kind, name, libraries = [], framework = null, styleLanguage = null, markup = null, contract = null }) {
+    const component = kind === 'component';
+    const web = kind === 'landing' || kind === 'site' || kind === 'app' || component;
     const scripts = { ...(web ? WEB_SCRIPTS : BACKEND_SCRIPTS) };
+    if (component) scripts.demo = 'vite';
     const dev = {};
     const deps = {};
     if (web) { dev.vite = '*'; }
@@ -206,11 +268,58 @@ export function buildPackageManifest({ kind, name, libraries = [], framework = n
         if (!(lib.name in bucket) && !(lib.name in dev) && !(lib.name in deps) &&
             Array.from(Object.keys(KNOWN) || [])?.includes?.(lib.name?.trim?.())) bucket[lib.name?.trim?.()] = '*';
     }
-    const manifest = { name: npmPackageName(name), private: true, type: 'module', engines: { node: '>=26' }, scripts };
+    const manifest = component
+        ? componentManifestFields({ name, contract, styleLanguage, framework })
+        : { name: npmPackageName(name), private: true, type: 'module', engines: { node: '>=26' } };
+    manifest.scripts = scripts;
+    for (const dep of contract?.deps ?? []) {
+        if (typeof dep !== 'string' || !dep.trim()) continue;
+        const key = dep.trim();
+        if (!(key in deps) && !(key in dev)) deps[key] = '*';
+    }
     if (Object.keys(deps).length) manifest.dependencies = deps;
     if (Object.keys(dev).length) manifest.devDependencies = dev;
     manifest.generate = { command: '', protect: [] };
     return manifest;
+}
+
+/**
+ * Package fields that make a component installable as a dependency.
+ * `exports` and `files` decide what a consumer sees; `sideEffects` keeps the
+ * `customElements.define` call and the stylesheets alive under tree shaking;
+ * `customElements` points editors at the manifest.
+ * @param {{ name: string, contract: object | null, styleLanguage?: string | null, framework?: string | null }} input
+ * @returns {object}
+ * @ai.hint pure
+ */
+function componentManifestFields({ name, contract, styleLanguage = null, framework = null }) {
+    const c = contract ? normalizeComponentContract(contract) : normalizeComponentContract({});
+    const entry = c.entry || 'index.js';
+    const typed = componentIsTyped({ contract: c, framework });
+    // A JavaScript component is consumed from its sources; a TypeScript one is
+    // consumed through the library build, because a host does not compile
+    // TypeScript inside node_modules.
+    const target = typed ? `./dist/${c.tag}.js` : `./${entry}`;
+    const exportsMap = { '.': { import: target, default: target }, './custom-elements.json': './custom-elements.json' };
+    if (c.styles) exportsMap[`./${path.posix.basename(c.styles)}`] = `./${c.styles}`;
+    const files = ['src', 'custom-elements.json', 'README.md'];
+    if (typed) files.unshift('dist');
+    else files.unshift(entry);
+    if (c.styles && !files.includes(c.styles)) files.splice(1, 0, c.styles);
+    return {
+        name: c.name || componentPackageName({ tag: c.tag }),
+        version: c.version,
+        description: c.summary,
+        private: true,
+        type: 'module',
+        engines: { node: '>=26' },
+        main: target,
+        module: target,
+        exports: exportsMap,
+        files,
+        sideEffects: ['*.css', `*.${styleLanguage === 'scss' || !styleLanguage ? 'scss' : styleLanguage}`, entry],
+        customElements: 'custom-elements.json',
+    };
 }
 
 /**
@@ -225,7 +334,7 @@ export function buildPackageManifest({ kind, name, libraries = [], framework = n
  */
 export function stackText(kind, platform, libraries = [], options = {}) {
     const included = new Set(libraries.filter((item) => item.include).map((item) => item.name));
-    const { framework = null, scriptLanguage = null, styleLanguage = null, markupLanguage = null } = options;
+    const { framework = null, scriptLanguage = null, styleLanguage = null, markupLanguage = null, contract = null } = options;
     let text;
     const fw = framework ?? (included.has('react') ? 'react' : included.has('vue') ? 'vue' : included.has('svelte') ? 'svelte' : included.has('@fest-lib/lure') ? 'fest' : null);
     const sty = styleLanguage ?? 'scss';
@@ -235,7 +344,11 @@ export function stackText(kind, platform, libraries = [], options = {}) {
     if (kind === 'backend') text = 'Node.js 26, ESM, server.js on node:http, bind 127.0.0.1, port PORT or 3000. No dependencies unless a recommendation includes them.';
     else if (kind === 'landing' || kind === 'site') text = `Node.js 26, ESM, Vite, ${sty === 'scss' ? 'SCSS' : sty === 'sass' ? 'Sass' : sty === 'less' ? 'Less' : sty === 'stylus' ? 'Stylus' : sty === 'postcss-preset-env' ? 'PostCSS' : 'CSS'}, ECMAScript ${platform.ecma.edition} (${platform.id}, experimental flags off). No Node server.`;
     else if (kind === 'app')                        text = `Node.js 26, ESM, Vite, ${sty === 'scss' ? 'SCSS' : sty === 'sass' ? 'Sass' : sty === 'less' ? 'Less' : sty === 'stylus' ? 'Stylus' : sty === 'postcss-preset-env' ? 'PostCSS' : 'CSS'}, ECMAScript ${platform.ecma.edition} (${platform.id}, experimental flags off). server.js serves dist/ after vite build.`;
-    else if (kind === 'component')                  text = `Node.js 26, ESM, Vite, ${sty === 'scss' ? 'SCSS' : sty === 'sass' ? 'Sass' : sty === 'less' ? 'Less' : sty === 'stylus' ? 'Stylus' : sty === 'postcss-preset-env' ? 'PostCSS' : 'CSS'}, ECMAScript ${platform.ecma.edition} (${platform.id}, experimental flags off). Write as web-component library. 'index.js' is heading module of component.`;
+    else if (kind === 'component') {
+        const tag = contract ? normalizeComponentContract(contract).tag : 'the contract tag';
+        text = `Node.js 26, ESM, Vite library build, ${sty === 'scss' ? 'SCSS' : sty === 'sass' ? 'Sass' : sty === 'less' ? 'Less' : sty === 'stylus' ? 'Stylus' : sty === 'postcss-preset-env' ? 'PostCSS' : 'CSS'}, ECMAScript ${platform.ecma.edition} (${platform.id}, experimental flags off). It is a reusable package, not a page: \`index.js\` is the public entry, the element is defined once, and \`index.html\` is only the demo host.`;
+        text += ` The public API is the contract in .ai/component.json (tag ${tag}); keep every file equal to it.`;
+    }
     else text = 'If this is web, PWA, or frontend, use Node.js 26, ESM, Vite, and SCSS. If it is a backend, use node:http on 127.0.0.1 and port PORT or 3000. Otherwise choose the files the request needs.';
 
     //
@@ -402,7 +515,7 @@ function library(name, reason, include) {
  * @exports
  * @ai.hint pure
  */
-export function recommendStack({ kind, prompt = '', references = {} }) {
+export function recommendStack({ kind, prompt = '', references = {}, components = [] }) {
     const refs = {
         images: references.images ?? [], files: references.files ?? [],
         templates: references.templates ?? [], examples: references.examples ?? [],
@@ -458,7 +571,18 @@ export function recommendStack({ kind, prompt = '', references = {} }) {
     const bases = [{ name: web ? 'vite-scss' : 'node-http', reason: web ? 'default web skeleton' : 'default backend server' }];
     if (/shadcn/i.test(hay)) bases.push({ name: 'shadcn', reason: 'named component base' });
     if (/\bradix\b/i.test(hay)) bases.push({ name: 'radix', reason: 'named component base' });
-    return { libraries, templates, bases };
+    // The local registry makes the second calendar an install instead of a second
+    // generation. A component run keeps the list for reference only.
+    const reuseKinds = kind === 'landing' || kind === 'site' || kind === 'app';
+    const reuse = (reuseKinds ? (Array.isArray(components) ? components : []) : []).slice(0, 4).map((item) => ({
+        tag: item.tag,
+        version: item.version ?? '0.1.0',
+        name: item.name ?? item.tag,
+        summary: item.summary ?? '',
+        framework: item.framework ?? 'vanilla',
+        reason: `Published in the local registry. Install it with "ai install ${item.tag}" and use the tag <${item.tag}> as it is; do not write a second component for the same job.`,
+    }));
+    return { libraries, templates, bases, reuse };
 }
 
 /**
@@ -546,11 +670,13 @@ export function scaffoldScript() {
  * @exports
  * @ai.hint pure
  */
-export function viteConfig(platform = {}, { framework = null, markup = null } = {}) {
+export function viteConfig(platform = {}, { framework = null, markup = null, kind = null, contract = null, crossOriginIsolated = false } = {}) {
     const target = platform?.vite?.target ?? 'esnext';
     const cssTarget = platform?.vite?.cssTarget ?? 'chrome156';
     const fw = framework ?? 'vanilla';
     const mk = markup ?? 'html';
+    const component = kind === 'component';
+    const c = component && contract ? normalizeComponentContract(contract) : null;
     const lines = ["import { defineConfig } from 'vite';"];
     const plugins = [];
     // Framework Vite plugin.
@@ -616,13 +742,39 @@ export function viteConfig(platform = {}, { framework = null, markup = null } = 
         plugins.push('pugPlugin()');
     }
     lines.push('');
+    if (crossOriginIsolated) {
+        // http://127.0.0.1 is already a secure context, so COOP + COEP are enough
+        // for crossOriginIsolated and SharedArrayBuffer; no TLS certificate is needed.
+        lines.push('const ISOLATION_HEADERS = {');
+        lines.push("    'Cross-Origin-Opener-Policy': 'same-origin',");
+        lines.push("    'Cross-Origin-Embedder-Policy': 'require-corp',");
+        lines.push('};');
+    }
     lines.push('// Chromium 156 based browser is the only target. esnext keeps the ES2026 syntax intact.');
     lines.push('export default defineConfig({');
     if (plugins.length) lines.push(`    plugins: [${plugins.join(', ')}],`);
-    lines.push('    build: {');
-    lines.push(`        target: '${target}',`);
-    lines.push(`        cssTarget: '${cssTarget}',`);
-    lines.push('    },');
+    if (crossOriginIsolated) {
+        // SharedArrayBuffer and Atomics need a cross-origin isolated context.
+        // 127.0.0.1 is already a secure context, so COOP and COEP are enough; no TLS is involved.
+        lines.push('    server: { headers: ISOLATION_HEADERS },');
+        lines.push('    preview: { headers: ISOLATION_HEADERS },');
+    }
+    if (component) {
+        // A component builds as a library; the demo page runs on the dev server.
+        const entry = c?.entry ?? 'index.js';
+        const tag = c?.tag ?? 'component';
+        lines.push('    build: {');
+        lines.push(`        lib: { entry: './${entry}', formats: ['es'], fileName: () => '${tag}.js' },`);
+        lines.push('        emptyOutDir: true,');
+        lines.push(`        target: '${target}',`);
+        lines.push(`        cssTarget: '${cssTarget}',`);
+        lines.push('    },');
+    } else {
+        lines.push('    build: {');
+        lines.push(`        target: '${target}',`);
+        lines.push(`        cssTarget: '${cssTarget}',`);
+        lines.push('    },');
+    }
     lines.push('});');
     lines.push('');
     return lines.join('\n');
@@ -652,7 +804,7 @@ export function stackDocuments(kind, platform, libraries = [], options = {}) {
  * @exports
  * @ai.hint pure
  */
-export function kindRules(kind, recommendations, framework = null, markup = null) {
+export function kindRules(kind, recommendations, framework = null, markup = null, contract = null) {
     const fastify = recommendations.libraries.some((item) => item.name === 'fastify' && item.include);
     const included = new Set(recommendations.libraries.filter((item) => item.include).map((item) => item.name));
     const fw = framework ?? (included.has('react') ? 'react' : included.has('vue') ? 'vue' : included.has('svelte') ? 'svelte' : included.has('@fest-lib/lure') ? 'fest' : included.has('lit') ? 'lit' : included.has('solid') || included.has('solid-js') ? 'solid' : null);
@@ -691,22 +843,44 @@ export function kindRules(kind, recommendations, framework = null, markup = null
             'After npm run build, inspect the rendered page and retain only the best-fitting existing option.'
         ].join(" "));
         if (kind === 'component') {
-            lines.push('Write as web-component and library with test page (index.html), make it reusable for other web apps and projects. Write heading index.js of component module.');
-            lines.push('For elements in shadow DOM, use \'part\' attribute. Make component skinnable and styleable.');
-            lines.push('Documentation: https://developer.mozilla.org/en-US/docs/Web/API/Web_components');
+            const c = contract ? normalizeComponentContract(contract) : null;
+            const tag = c?.tag ?? 'ai-example';
+            lines.push('A component is a reusable package, not a page. index.js is the public entry, index.html is only the demo host, and nothing in the package may depend on the demo or on a host application.');
+            lines.push('The public API is the contract in .ai/component.json: tag, attributes, properties, events, slots, parts, states, and CSS custom properties. Implement exactly that API and extend the contract in the same step as the code.');
+            lines.push(`Define the element once: guard with customElements.get("${tag}") before customElements.define, and export the class so a host can subclass or test it.`);
+            lines.push('Shadow DOM: attachShadow({ mode: "open" }) and keep every rule inside it. No global stylesheet, no element or id selectors, no !important, no id attribute — use classes and refs. Add delegatesFocus when the component hosts a focusable control.');
+            lines.push('Attributes are the declarative API: list each one in static observedAttributes, parse it in attributeChangedCallback, keep the attribute type in sync, and reflect boolean and enumerated attributes so CSS can match them.');
+            lines.push('Objects, arrays, dates, and callbacks are properties, not attributes. Never serialize state into an attribute.');
+            lines.push('State the host can style: report it with attachInternals() and internals.states.add("--busy") so the outside can match :state(busy). Use a custom state rather than a class on the host.');
+            lines.push('Form parts set formAssociated = true and drive the native form through ElementInternals (setFormValue, setValidity, formResetCallback).');
+            lines.push('Styling from outside: expose ::part() hooks for every region a host may restyle, and theme through custom properties named --' + tag + '-* with a fallback value. Publish both in the contract.');
+            lines.push('Events: dispatch CustomEvent with bubbles: true, composed: true, and a documented detail, otherwise a listener outside the shadow root never sees it.');
+            lines.push('Content the host supplies goes through slots; keep a default slot and listen for slotchange when layout depends on the slotted nodes.');
+            lines.push('Cleanup: one AbortController per instance, pass its signal to every listener and observer, and abort it in disconnectedCallback. Timers, observers, and channels never outlive the element.');
+            lines.push('Accessibility: the host carries the role and aria attributes, the whole API is reachable by keyboard, focus is visible with :focus-visible, and prefers-reduced-color and forced-colors are not broken.');
+            lines.push('The demo page exercises the API rather than a design: every attribute value, every state, every part, both light and dark, and a keyboard-only pass. Demo CSS stays outside the component.');
+            lines.push('Docs: https://developer.mozilla.org/en-US/docs/Web/API/Web_components and https://web.dev/articles/creating-custom-elements');
             if (fw === 'lit') {
-                lines.push('https://github.com/lit/lit');
-                lines.push('https://lit.dev/docs/');
+                lines.push('Lit: extend LitElement, use the html and css tagged templates, static styles, @customElement with the contract tag, @property({ type, reflect, attribute }) for the public attributes, and @state for internal render state. Do not mix a hand-written render loop into a Lit element.');
+                lines.push('Lit helpers: nothing for an empty branch, ifDefined and live for attributes, repeat for lists, eventOptions for once and passive. Docs: https://lit.dev/docs/ and https://github.com/lit/lit');
             }
-            if (fw === 'fest') {
-                lines.push('Glit: https://github.com/fest-live/lur.e/blob/main/src/lure/misc/Glit.ts');
+            if (fw === 'fest' || fw === 'fest-lib') {
+                lines.push('Fest channels: heavy or blocking logic goes to a module worker. Create it with new Worker(new URL("./' + tag + '.worker.js", import.meta.url), { type: "module" }).');
+                lines.push('In the worker call createUnifiedChannel("worker") and expose("api", { ... }). In the element call createUnifiedChannel("host"), connect(worker), then proxy("worker", ["api"]) and await the returned methods. Import both from @fest-lib/uniform.');
+                lines.push('Request and response by channel name use createInvoker(name), autoInvoker(name), and detectContextType(); the first argument is the channel name string, not a channel instance.');
+                lines.push('Components of the same kind talk through a named channel, never through window globals, custom window events, or an imported singleton store.');
+                lines.push('SharedArrayBuffer and Atomics need crossOriginIsolated. Without it, stay on the proxy above; the vite config only sets COOP and COEP when generate.crossOriginIsolated is enabled.');
+                lines.push('Glit (Lit-like glue over LUR.E): https://github.com/fest-live/lur.e/blob/main/src/lure/misc/Glit.ts');
             }
         }
     } else lines.push('Choose the files the request needs.');
     lines.push('Read .rules/ and .skills/ and follow them. Do not overwrite them.');
     lines.push('Add absent package.json keys only. Keep existing script bodies and versions.');
     lines.push('Do not pass --force or -f to a scaffold command. Do not chain a scaffold command with &&, ||, ;, |, or redirection.');
-    const prepared = ['package.json', 'scripts/generate.js', ...(web ? ['vite.config.js'] : []), '.rules/stack.md', '.rules/files.md', '.skills/scaffold/SKILL.md'];
+    // For a component the contract, the editor manifest, and the README follow
+    // mechanically from .ai/component.json, so they are written up front.
+    const componentDocs = kind === 'component' && contract ? ['.ai/component.json', 'custom-elements.json', 'README.md'] : [];
+    const prepared = ['package.json', 'scripts/generate.js', ...(web ? ['vite.config.js'] : []), ...componentDocs, '.rules/stack.md', '.rules/files.md', '.skills/scaffold/SKILL.md'];
     lines.push(`${prepared.join(', ')} are already written. Do not plan a step to create or rewrite them.`);
     lines.push('Every step must create or change a named file. Do not spend a step only inspecting installed packages, tool versions, or toolchain internals.');
     lines.push('Dependencies from package.json are installed before the first step. Run npm install only when you add a new package.');
@@ -742,17 +916,25 @@ export function kindRules(kind, recommendations, framework = null, markup = null
  * @exports
  * @ai.hint pure
  */
-export function preparedScaffoldFiles({ kind, platform, recommendations, name = 'app', framework = null, scriptLanguage = null, styleLanguage = null, markup = null }) {
-    const docsOpts = { framework, scriptLanguage, styleLanguage, markupLanguage: markup };
+export function preparedScaffoldFiles({ kind, platform, recommendations, name = 'app', framework = null, scriptLanguage = null, styleLanguage = null, markup = null, contract = null, crossOriginIsolated = false }) {
+    const docsOpts = { framework, scriptLanguage, styleLanguage, markupLanguage: markup, contract };
     const docs = stackDocuments(kind, platform, recommendations.libraries, docsOpts);
-    const manifest = buildPackageManifest({ kind, name, libraries: recommendations.libraries, framework, styleLanguage, markup });
+    const manifest = buildPackageManifest({ kind, name, libraries: recommendations.libraries, framework, styleLanguage, markup, contract });
     const web = kind === 'landing' || kind === 'site' || kind === 'app' || kind === 'component';
+    const componentDocs = kind === 'component' && contract
+        ? {
+            '.ai/component.json': renderComponentContract(contract),
+            'custom-elements.json': `${JSON.stringify(customElementsManifest(contract), null, 2)}\n`,
+            'README.md': renderComponentReadme(contract),
+        }
+        : {};
     return {
         'package.json': `${JSON.stringify(manifest, null, 2)}\n`,
         ...(web ? {
-            'vite.config.js': viteConfig(platform, { framework, markup }),
+            'vite.config.js': viteConfig(platform, { framework, markup, kind, contract, crossOriginIsolated }),
         } : {}),
         'scripts/generate.js': scaffoldScript(),
+        ...componentDocs,
         ...docs,
     };
 }
@@ -827,10 +1009,10 @@ export async function ensureDependencies({ root, level = 'read', approve = async
  * @exports
  * @ai.hint pure
  */
-export function renderGenerationTask({ kind, prompt = '', platform, recommendations, name = 'app', framework = null, scriptLanguage = null, styleLanguage = null, markup = null }) {
+export function renderGenerationTask({ kind, prompt = '', platform, recommendations, name = 'app', framework = null, scriptLanguage = null, styleLanguage = null, markup = null, contract = null, crossOriginIsolated = false }) {
     void prompt;
-    const opts = { framework, scriptLanguage, styleLanguage, markup };
-    const prepared = new Set(Object.keys(preparedScaffoldFiles({ kind, platform, recommendations, name, ...opts })));
+    const opts = { framework, scriptLanguage, styleLanguage, markup, contract };
+    const prepared = new Set(Object.keys(preparedScaffoldFiles({ kind, platform, recommendations, name, ...opts, crossOriginIsolated })));
     const application = filesForStack({ kind, libraries: recommendations.libraries, ...opts }).filter((file) => !prepared.has(file));
     const libs = recommendations.libraries.map((item) => {
         const docsUrl = item.docs ? ` Docs: ${item.docs}.` : '';
@@ -850,6 +1032,7 @@ export function renderGenerationTask({ kind, prompt = '', platform, recommendati
         '',
         'Stack:',
         stackText(kind, platform, recommendations.libraries, opts),
+        ...(kind === 'component' && contract ? ['', ...contractBriefLines(contract)] : []),
         '',
         'Already written. Do not plan a step to create, copy, or rewrite them:',
         ...Object.keys(preparedScaffoldFiles({ kind, platform, recommendations, name, ...opts })).map((file) => `- ${file}`),
@@ -859,6 +1042,11 @@ export function renderGenerationTask({ kind, prompt = '', platform, recommendati
         '',
         'Recommendations:',
         ...(libs.length ? libs : ['- (none)']),
+        ...(recommendations.reuse?.length ? [
+            '',
+            'Already published in the local registry. Plan to install and reuse them, not to rebuild them:',
+            ...recommendations.reuse.map((item) => `- ${item.tag}@${item.version} (${item.name}): ${item.summary || item.reason}`),
+        ] : []),
         '',
         'The prepared files are complete. Plan the application, not a step per boilerplate file.',
         'Every step must create or change a named file. Do not plan a step only to inspect installed packages, tool versions, or toolchain internals.',

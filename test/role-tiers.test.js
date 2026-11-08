@@ -62,9 +62,9 @@ test('the shipped coder tiers keep the old values in the ladder form', () => {
     const trivial = resolveRole(defaults, 'coder', 'trivial');
     const normal = resolveRole(defaults, 'coder', 'normal');
     const complex = resolveRole(defaults, 'coder', 'complex');
-    assert.deepEqual([trivial.model, trivial.effort], ['gpt-6.1-terra', 'medium']);
-    assert.deepEqual([normal.model, normal.effort], ['gpt-6.1-terra', 'high']);
-    assert.deepEqual([complex.model, complex.effort], ['gpt-6.1-sol', 'high']);
+    assert.deepEqual([trivial.model, trivial.effort], ['moonshotai/kimi-k3.1-pro', 'medium']);
+    assert.deepEqual([ normal.model,  normal.effort], ['moonshotai/kimi-k3.1-pro', 'high']);
+    assert.deepEqual([complex.model, complex.effort], ['moonshotai/kimi-k3.1-pro', 'high']);
 });
 
 test('the shipped styler tiers stay on gpt-6.1-sol', () => {
@@ -85,9 +85,9 @@ test('the shipped measurer tiers keep the cheap model for normal work', () => {
     const trivial = resolveRole(defaults, 'measurer', 'trivial');
     const normal = resolveRole(defaults, 'measurer', 'normal');
     const complex = resolveRole(defaults, 'measurer', 'complex');
-    assert.deepEqual([trivial.model, trivial.effort], ['gpt-6.1-terra', 'medium']);
-    assert.deepEqual([normal.model, normal.effort], ['gpt-6.1-terra', 'high']);
-    assert.deepEqual([complex.model, complex.effort], ['gpt-6.1-terra', 'xhigh']);
+    assert.deepEqual([trivial.model, trivial.effort], ['moonshotai/kimi-k3.1-pro', 'medium']);
+    assert.deepEqual([ normal.model,  normal.effort], ['moonshotai/kimi-k3.1-pro', 'high']);
+    assert.deepEqual([complex.model, complex.effort], ['moonshotai/kimi-k3.1-pro', 'xhigh']);
     //assert.deepEqual([normal.model, normal.effort], ['gpt-6.1-terra', 'xhigh']);
     //assert.deepEqual([normal.model, complex.effort], ['gpt-6.1-terra', 'max']);
     //assert.deepEqual([complex.model, complex.effort], ['gpt-6.1-sol', 'high']);
@@ -97,7 +97,7 @@ test('the shipped decorator tiers keep the cheap model until the ornament is com
     const trivial = resolveRole(defaults, 'decorator', 'trivial');
     const normal = resolveRole(defaults, 'decorator', 'normal');
     const complex = resolveRole(defaults, 'decorator', 'complex');
-    assert.deepEqual([trivial.model, trivial.effort], ['gpt-6.1-terra', 'high']);
-    assert.deepEqual([normal.model, normal.effort], ['gpt-6.1-terra', 'xhigh']);
-    assert.deepEqual([complex.model, complex.effort], ['gpt-6.1-sol', 'xhigh']);
+    assert.deepEqual([trivial.model, trivial.effort], ['gpt-6.1-terra', 'medium']);
+    assert.deepEqual([ normal.model,  normal.effort], ['gpt-6.1-terra', 'high']);
+    assert.deepEqual([complex.model, complex.effort], ['gpt-6.1-terra', 'xhigh']);
 });

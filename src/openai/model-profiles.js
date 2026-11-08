@@ -48,11 +48,18 @@ export const MODEL_PROFILES = Object.freeze({
     'gpt-6-luna': { window: 256 * 1024, maxOutput: 16384, ceiling: 'max', efforts: null, modes: null },
     'gpt-6-astra': { window: 200 * 1024, maxOutput: 32768, ceiling: 'xhigh', efforts: null, modes: null },
     'gpt-6-luna-decisions': { window: 128 * 1024, maxOutput: 256, ceiling: null, efforts: null, modes: [] },
-    'openai/gpt-6-luna-decisions': { window: 128 * 1024, maxOutput: 256, ceiling: null, efforts: null, modes: [] }
+    
+    'openai/gpt-6.1-sol': { window: 256 * 1024, maxOutput: 32768, ceiling: 'xhigh', efforts: null, modes: null },
+    'openai/gpt-6.1-terra': { window: 256 * 1024, maxOutput: 32768, ceiling: 'max', efforts: null, modes: null },
+    'openai/gpt-6-luna': { window: 256 * 1024, maxOutput: 16384, ceiling: 'max', efforts: null, modes: null },
+    'openai/gpt-6-astra': { window: 200 * 1024, maxOutput: 32768, ceiling: 'xhigh', efforts: null, modes: null },
+    'openai/gpt-6-luna-decisions': { window: 128 * 1024, maxOutput: 256, ceiling: null, efforts: null, modes: [] },
+
+    'moonshotai/kimi-k3.1-pro': { window: 256 * 1024, maxOutput: 32768, ceiling: 'max', efforts: null, modes: null },
 });
 
 /** Vendor prefixes, so a qualified id resolves to the same profile as the bare one. */
-const QUALIFIED_PREFIXES = Object.freeze(['openai/', 'anthropic/']);
+const QUALIFIED_PREFIXES = Object.freeze(['openai/', 'anthropic/', 'moonshotai/']);
 
 /**
  * Strip a known vendor prefix: `openai/gpt-6.1-sol` finds the `gpt-6.1-sol` profile.

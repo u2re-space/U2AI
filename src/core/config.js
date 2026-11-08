@@ -461,6 +461,10 @@ export async function loadConfig({ configPath = null, overrides = {}, env = null
     const legacyMerged = normalizeBackends(config, env);
     config.baseURL ||= 'https://api.openai.com/v1/';
     config.memory.dbFile ||= path.join(home, 'memory.db');
+    if (!isRecord(config.components)) config.components = {};
+    config.components.dir ||= path.join(home, 'components');
+    config.components.dbFile ||= path.join(home, 'components.db');
+    config.components.vendorDir ||= 'vendor/components';
     config.configFiles = [path.join(home, 'config.json'), ...(configPath ? [path.resolve(configPath)] : [])];
     normalizeContext(config);
     validateConfig(config, env);
@@ -886,6 +890,18 @@ function validateConfig(c, env = liveEnv() ?? process.env) {
     if (!Number.isInteger(c.generate.fidelity) || c.generate.fidelity < 0 || c.generate.fidelity > 100) fail('generate.fidelity: целое 0..100');
     if (!Number.isInteger(c.generate.creativity) || c.generate.creativity < 0 || c.generate.creativity > 100) fail('generate.creativity: целое 0..100');
     if (!Object.hasOwn(PLATFORMS, c.generate.platform)) fail(`generate.platform: ${Object.keys(PLATFORMS).join(' | ')}`);
+    if (c.components != null && !isRecord(c.components)) fail('components должен быть объектом');
+    if (isRecord(c.components)) {
+        for (const key of Object.keys(c.components)) {
+            if (!(key in defaults.components)) fail(`неизвестный параметр components.${key}`);
+        }
+        for (const key of ['enabled', 'autoReuse']) {
+            if (c.components[key] != null && typeof c.components[key] !== 'boolean') fail(`components.${key}: true | false`);
+        }
+        for (const key of ['dir', 'dbFile', 'vendorDir']) {
+            if (typeof c.components[key] !== 'string' || !c.components[key].trim()) fail(`components.${key}: путь`);
+        }
+    }
     if (!isRecord(c.pace)) fail('pace должен быть объектом');
     for (const key of Object.keys(c.pace)) {
         if (!['speed', 'quality', 'mode', 'models', ...FINE_QUALITY_KEYS].includes(key)) fail(`неизвестный параметр pace.${key}`);

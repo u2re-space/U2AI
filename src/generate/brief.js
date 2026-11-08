@@ -14,6 +14,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { fidelityContract, fidelityInstructions, effectiveFidelity } from './fidelity.js';
 import { platformInstructions } from './platform.js';
 import { filesForKind, filesForStack, stackText, recommendStack, renderGenerationTask, kindRules } from './scaffold.js';
+import { draftComponentContract, normalizeComponentContract } from './component.js';
 
 /** Kinds `ai gen` accepts. */
 export const GENERATION_KINDS = Object.freeze(['landing', 'site', 'backend', 'app', 'component']);
@@ -56,7 +57,7 @@ function formatStagedRef(ref) {
  * @exports
  * @ai.hint pure
  */
-export function buildGenerationBrief({ kind = null, prompt = '', name = 'app', fidelity, creativity, platform, quality = 40, references = {}, stagedRefs = [], framework = null, scriptLanguage = null, styleLanguage = null, iconSet = null, markupLanguage = null }) {
+export function buildGenerationBrief({ kind = null, prompt = '', name = 'app', fidelity, creativity, platform, quality = 40, references = {}, stagedRefs = [], framework = null, scriptLanguage = null, styleLanguage = null, iconSet = null, markupLanguage = null, tag = null, componentContract = null, crossOriginIsolated = false, availableComponents = [] }) {
     if (kind != null && !GENERATION_KINDS.includes(kind)) throw new Error(`Вид генерации: ${GENERATION_KINDS.join('|')}`);
     const contract = fidelityContract({ fidelity, creativity });
     const effective = effectiveFidelity(contract.fidelity, quality);
@@ -80,17 +81,23 @@ export function buildGenerationBrief({ kind = null, prompt = '', name = 'app', f
         ? ['', 'Staged references (project-relative, ready for crop/generate):', ...stagedRefs.map(formatStagedRef)]
         : [];
 
-    const recommendations = recommendStack({ kind, prompt, references: refs });
-    const opts = { framework, scriptLanguage, styleLanguage, markupLanguage };
+    const recommendations = recommendStack({ kind, prompt, references: refs, components: availableComponents });
+    // A component gets its contract before the first step: the package name, the
+    // tag, the class, and the demo must agree with package.json from the start.
+    const component = kind === 'component'
+        ? normalizeComponentContract(componentContract ?? draftComponentContract({ name, tag, prompt, framework, scriptLanguage, styleLanguage }))
+        : null;
+    const opts = { framework, scriptLanguage, styleLanguage, markupLanguage, contract: component };
     const outputs = kind ? [...filesForStack({ kind, libraries: recommendations.libraries, ...opts, markup: markupLanguage })] : [];
     const manifest = {
         kind, prompt, fidelity: contract.fidelity, effectiveFidelity: effective, creativity: contract.creativity, measured: null,
         method: 'unmeasured', reason: contract.reason, platform: platform.id, experimentalFlags: false,
         references: refs, outputs, stack: { kind, text: stackText(kind, platform, recommendations.libraries, opts) }, recommendations,
         stagedRefs: stagedRefs.map((r) => ({ rel: r.rel, bytes: r.bytes, mime: r.mime, width: r.width, height: r.height })),
+        ...(component ? { component } : {}),
     };
     const task = [
-        renderGenerationTask({ kind, prompt, platform, recommendations, name, ...opts, markup: markupLanguage }),
+        renderGenerationTask({ kind, prompt, platform, recommendations, name, ...opts, markup: markupLanguage, crossOriginIsolated }),
         '',
         `Fidelity target: ${effective}%. Measured match: unmeasured. Do not invent a percentage.`,
         `Requested fidelity ${contract.fidelity}% at quality ${quality} works as ${effective}%.`,
@@ -122,7 +129,8 @@ export function buildGenerationBrief({ kind = null, prompt = '', name = 'app', f
     const instructions = [
         platformInstructions(platform),
         '',
-        kindRules(kind, recommendations, framework, markupLanguage),
+        kindRules(kind, recommendations, framework, markupLanguage, component),
+        ...(component ? ['', 'A component needs no mockup: a written description of the behavior is enough. Derive the layout, the states, and the API from that description, and keep the demo page neutral so any host design can wrap the component.'] : []),
         '',
         fidelityInstructions({ ...contract, fidelity: effective }),
         ...(refs.images.length ? ['', 'The worker must create each artwork region with generate_image or edit_image before the page is finished. The saved image paths belong in the HTML and CSS. Use generate_image(reference=...) to send cropped regions directly to the generator.'] : []),

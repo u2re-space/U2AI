@@ -33,6 +33,8 @@ import { gen } from './commands/gen.js';
 import { mcpCommand } from './commands/mcp.js';
 import { decide, moderate, channels, telegram } from './commands/channels.js';
 import { serve } from './commands/serve.js';
+import { componentCommand } from './commands/component.js';
+import { installCommand } from './commands/install.js';
 import { attachPublisher, splitServeUrl } from './server/publish.js';
 
 const pkg = createRequire(import.meta.url)('../package.json');
@@ -86,9 +88,13 @@ const OPTIONS = {
     // Generation stacks
     'frontend-framework': { type: 'string' }, 'frontend-script-language': { type: 'string' },
     'frontend-style-language': { type: 'string' }, 'frontend-markup-language': { type: 'string' }, 'icon-set': { type: 'string' },
+    // Component registry
+    tag: { type: 'string' }, link: { type: 'boolean', default: false }, dev: { type: 'boolean', default: false },
+    force: { type: 'boolean', default: false }, save: { type: 'boolean', default: true },
+    'keep-files': { type: 'boolean', default: false }, 'cross-origin-isolated': { type: 'boolean', default: false },
 };
 
-const COMMANDS = { ask, chat, run, image, jobs, memory: memoryCommand, resume, cancel, models, config: configCommand, agents: agentsCommand, map: mapCommand, complete, gen, mcp: mcpCommand, decide, moderate, channels, telegram, serve };
+const COMMANDS = { ask, chat, run, image, jobs, memory: memoryCommand, resume, cancel, models, config: configCommand, agents: agentsCommand, map: mapCommand, complete, gen, mcp: mcpCommand, decide, moderate, channels, telegram, serve, component: componentCommand, install: installCommand };
 const NEEDS_API_KEY = new Set(['ask', 'chat', 'run', 'image', 'resume', 'cancel', 'models', 'gen', 'decide', 'moderate', 'channels']);
 const DETACHABLE = new Set(['ask', 'run', 'image', 'gen']);
 

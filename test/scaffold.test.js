@@ -495,3 +495,195 @@ test('preparedScaffoldFiles with Fest-Lib framework includes fest deps in packag
     assert.equal(pkg.dependencies['@fest-lib/core'], '*');
     assert.equal(pkg.devDependencies['@fest-lib/style-lib'], '*');
 });
+
+// ---------------------------------------------------------------- component kind
+
+const { draftComponentContract } = await import('../src/generate/component.js');
+const { buildGenerationBrief } = await import('../src/generate/brief.js');
+const { resolvePlatform } = await import('../src/generate/platform.js');
+
+const calendar = draftComponentContract({ tag: 'ui-calendar', prompt: 'Three-mode calendar with schedules' });
+
+test('filesForKind component ships a module, not an app entry', () => {
+    const files = filesForKind('component');
+    assert.ok(files.includes('index.js'), 'a public entry');
+    assert.ok(files.includes('custom-elements.json'), 'an editor manifest');
+    assert.ok(files.includes('README.md'), 'documented API');
+    assert.equal(files.includes('src/main.js'), false, 'a library has no application entry');
+    assert.equal(files.includes('server.js'), false);
+});
+
+test('filesForStack component names files after the contract tag', () => {
+    const vanilla = filesForStack({ kind: 'component', contract: calendar });
+    assert.ok(vanilla.includes('index.js'));
+    assert.ok(vanilla.includes('src/ui-calendar.js'), 'the element file carries the tag');
+    assert.ok(vanilla.includes('src/ui-calendar.scss'), 'styles sit beside it');
+    assert.equal(vanilla.includes('src/component.scss'), false, 'the placeholder name is gone');
+    assert.equal(vanilla.includes('src/main.js'), false);
+});
+
+test('filesForStack component follows the framework', () => {
+    const lit = filesForStack({ kind: 'component', contract: calendar, framework: 'lit' });
+    assert.ok(lit.includes('index.ts'), 'Lit is drafted typed');
+    assert.ok(lit.includes('src/ui-calendar.ts'));
+    assert.equal(lit.includes('src/ui-calendar.scss'), false, 'Lit keeps css`` inside the class');
+
+    const react = filesForStack({ kind: 'component', contract: calendar, framework: 'react' });
+    assert.ok(react.includes('src/UiCalendar.jsx'), 'a framework component is named by class');
+    assert.ok(react.includes('src/UiCalendar.module.scss'), 'a CSS module keeps the styles local');
+
+    const vue = filesForStack({ kind: 'component', contract: calendar, framework: 'vue' });
+    assert.ok(vue.includes('src/UiCalendar.vue'));
+
+    const fest = filesForStack({ kind: 'component', contract: calendar, framework: 'fest' });
+    assert.ok(fest.includes('src/ui-calendar.tsx'), 'LUR.E uses TSX');
+    assert.ok(fest.includes('src/ui-calendar.worker.ts'), 'heavy logic gets a worker file');
+});
+
+test('filesForStack component honours the markup language', () => {
+    const pug = filesForStack({ kind: 'component', contract: calendar, markup: 'pug' });
+    assert.ok(pug.includes('index.pug'));
+    assert.equal(pug.includes('index.html'), false);
+});
+
+test('buildPackageManifest component produces an installable package', () => {
+    const manifest = buildPackageManifest({ kind: 'component', name: 'ui-calendar', contract: calendar });
+    assert.equal(manifest.name, '@ai/ui-calendar');
+    assert.equal(manifest.version, '0.1.0');
+    assert.equal(manifest.type, 'module');
+    assert.equal(manifest.main, './index.js');
+    assert.equal(manifest.exports['.'].import, './index.js');
+    assert.equal(manifest.exports['./custom-elements.json'], './custom-elements.json');
+    assert.ok(manifest.files.includes('src'));
+    assert.ok(manifest.files.includes('custom-elements.json'));
+    assert.ok(manifest.sideEffects.includes('*.css'), 'styles must survive tree shaking');
+    assert.ok(manifest.sideEffects.includes('index.js'), 'customElements.define must survive tree shaking');
+    assert.equal(manifest.customElements, 'custom-elements.json');
+    assert.equal(manifest.scripts.demo, 'vite', 'the demo has its own script');
+});
+
+test('a TypeScript component resolves through its build output', () => {
+    const manifest = buildPackageManifest({ kind: 'component', name: 'ui-calendar', contract: calendar, framework: 'lit' });
+    assert.equal(manifest.main, './dist/ui-calendar.js');
+    assert.equal(manifest.exports['.'].default, './dist/ui-calendar.js');
+    assert.ok(manifest.files.includes('dist'));
+});
+
+test('a component manifest carries the contract dependencies', () => {
+    const contract = { ...calendar, deps: ['lit', '  ', 7] };
+    const manifest = buildPackageManifest({ kind: 'component', name: 'ui-calendar', contract });
+    assert.equal(manifest.dependencies.lit, '*');
+});
+
+test('viteConfig component builds a library and can isolate the origin', () => {
+    const config = viteConfig(platform, { kind: 'component', contract: calendar });
+    assert.match(config, /lib: \{ entry: '\.\/index\.js', formats: \['es'\], fileName: \(\) => 'ui-calendar\.js' \}/);
+    const isolated = viteConfig(platform, { kind: 'component', contract: calendar, crossOriginIsolated: true });
+    assert.match(isolated, /const ISOLATION_HEADERS = \{/);
+    assert.match(isolated, /'Cross-Origin-Opener-Policy': 'same-origin'/);
+    assert.match(isolated, /server: \{ headers: ISOLATION_HEADERS \}/);
+    assert.match(isolated, /preview: \{ headers: ISOLATION_HEADERS \}/);
+    const plain = viteConfig(platform, { kind: 'landing' });
+    assert.equal(plain.includes('ISOLATION_HEADERS'), false, 'a page does not need the headers');
+    assert.equal(plain.includes('lib:'), false, 'a page is not a library build');
+});
+
+test('kindRules component states the Web Component contract', () => {
+    const rules = kindRules('component', { libraries: [] }, null, null, calendar);
+    assert.match(rules, /reusable package, not a page/);
+    assert.match(rules, /customElements\.get\("ui-calendar"\)/, 'define must be guarded');
+    assert.match(rules, /static observedAttributes/);
+    assert.match(rules, /attributeChangedCallback/);
+    assert.match(rules, /attachShadow\(\{ mode: "open" \}\)/);
+    assert.match(rules, /internals\.states\.add\("--busy"\).*:state\(busy\)/s, 'states are custom states, not host classes');
+    assert.match(rules, /attachInternals\(\)/);
+    assert.match(rules, /formAssociated = true/);
+    assert.match(rules, /::part\(\)/);
+    assert.match(rules, /--ui-calendar-\*/);
+    assert.match(rules, /composed: true/);
+    assert.match(rules, /slotchange/);
+    assert.match(rules, /AbortController/);
+    assert.match(rules, /disconnectedCallback/);
+    assert.match(rules, /:focus-visible/);
+    assert.match(rules, /\/Web\/API\/Web_components\b/);
+    assert.match(rules, /\.ai\/component\.json is the source of truth|public API is the contract/);
+});
+
+test('kindRules component adds the Lit and the Fest branches', () => {
+    const lit = kindRules('component', { libraries: [] }, 'lit', null, calendar);
+    assert.match(lit, /extend LitElement/);
+    assert.match(lit, /@customElement/);
+    assert.match(lit, /@property\(\{ type, reflect, attribute \}\)/);
+    assert.match(lit, /@state/);
+    assert.match(lit, /lit\.dev\/docs/);
+
+    const fest = kindRules('component', { libraries: [] }, 'fest', null, calendar);
+    assert.match(fest, /createUnifiedChannel\("worker"\)/);
+    assert.match(fest, /expose\("api"/);
+    assert.match(fest, /connect\(worker\)/);
+    assert.match(fest, /proxy\("worker", \["api"\]\)/);
+    assert.match(fest, /createInvoker\(name\)/);
+    assert.match(fest, /autoInvoker\(name\)/);
+    assert.match(fest, /detectContextType/);
+    assert.match(fest, /new Worker\(new URL\("\.\/ui-calendar\.worker\.js"/, 'the worker is a module worker');
+    assert.match(fest, /crossOriginIsolated/);
+    assert.match(fest, /never through window globals/);
+});
+
+test('preparedScaffoldFiles writes the contract, the editor manifest, and the README', () => {
+    const recommendations = recommendStack({ kind: 'component', prompt: 'calendar', references: {} });
+    const files = preparedScaffoldFiles({ kind: 'component', platform, recommendations, contract: calendar });
+    assert.ok(files['.ai/component.json']);
+    assert.equal(JSON.parse(files['.ai/component.json']).tag, 'ui-calendar');
+    assert.equal(JSON.parse(files['custom-elements.json']).modules[0].declarations[0].tagName, 'ui-calendar');
+    assert.match(files['README.md'], /^# `ui-calendar`/m);
+    assert.match(files['package.json'], /@ai\/ui-calendar/);
+    assert.match(files['vite.config.js'], /lib: \{/);
+    // They are announced as prepared, so the model spends no step rewriting them.
+    const rules = kindRules('component', { libraries: [], ...recommendations }, null, null, calendar);
+    assert.ok(rules.includes('.ai/component.json, custom-elements.json, README.md'), 'the contract files are listed');
+    assert.ok(rules.includes('are already written'), 'and announced as written');
+});
+
+test('renderGenerationTask states the contract for a component run', () => {
+    const recommendations = recommendStack({ kind: 'component', prompt: 'calendar', references: {} });
+    const task = renderGenerationTask({ kind: 'component', platform, recommendations, contract: calendar });
+    assert.match(task, /Component contract: tag "ui-calendar", class "UiCalendar", package "@ai\/ui-calendar"/);
+    assert.match(task, /\.ai\/component\.json is the source of truth/);
+    assert.match(task, /custom-elements\.json/);
+});
+
+test('recommendStack offers a published component instead of a second generation', () => {
+    const found = [{ tag: 'ui-calendar', version: '1.0.0', name: '@ai/ui-calendar', summary: 'Three-mode calendar', framework: 'vanilla' }];
+    const app = recommendStack({ kind: 'app', prompt: 'app with a calendar', components: found });
+    assert.equal(app.reuse.length, 1);
+    assert.match(app.reuse[0].reason, /ai install ui-calendar/);
+    assert.match(app.reuse[0].reason, /do not write a second component/);
+    const page = recommendStack({ kind: 'landing', prompt: 'calendar', components: found });
+    assert.equal(page.reuse.length, 1);
+    const fresh = recommendStack({ kind: 'component', prompt: 'calendar', components: found });
+    assert.equal(fresh.reuse.length, 0, 'generating a component does not reuse one');
+    const none = recommendStack({ kind: 'app', prompt: 'calendar' });
+    assert.deepEqual(none.reuse, []);
+    assert.ok(Array.isArray(none.libraries), 'the old shape is unchanged');
+});
+
+test('the component brief carries the contract and the reuse list', () => {
+    const brief = buildGenerationBrief({
+        kind: 'component', prompt: 'Three-mode calendar with plans', name: 'calendar',
+        fidelity: 80, creativity: 20, platform: resolvePlatform('chrome-156-stable'), tag: 'ui-calendar',
+    });
+    assert.equal(brief.manifest.component.tag, 'ui-calendar');
+    assert.match(brief.task, /Component contract: tag "ui-calendar"/);
+    assert.match(brief.instructions, /static observedAttributes/);
+    assert.match(brief.instructions, /A component needs no mockup/, 'a reference is not required');
+    assert.ok(brief.manifest.outputs.includes('custom-elements.json'));
+
+    const withReuse = buildGenerationBrief({
+        kind: 'app', prompt: 'dashboard with a calendar', name: 'dash',
+        fidelity: 80, creativity: 20, platform: resolvePlatform('chrome-156-stable'),
+        availableComponents: [{ tag: 'ui-calendar', version: '1.0.0', name: '@ai/ui-calendar', summary: 'Calendar', framework: 'vanilla' }],
+    });
+    assert.match(withReuse.task, /Already published in the local registry/);
+    assert.match(withReuse.task, /ui-calendar@1\.0\.0/);
+});

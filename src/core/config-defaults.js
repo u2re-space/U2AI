@@ -80,7 +80,7 @@ let defaultProviders = [
 ];
 let providersRef = null;
 export const defaults = Object.freeze({
-    model: 'gpt-6.1-terra',
+    model: 'moonshotai/kimi-k3.1-pro',
     imageModel: 'openai/gpt-image-2.6-sunburst',                 // null → gpt-image-2.6 (flare for generation, sunburst for edits) on the images API
     baseURL: "https://sprutdock.ru/v1",                    // null → OPENAI_BASE_URL or https://api.openai.com/v1/
     apiKey: "{{env:SPRUTDOCK_API_KEY}}",                     // prefer the OPENAI_API_KEY environment variable
@@ -326,17 +326,17 @@ export const defaults = Object.freeze({
      */
 
     roles: {
-        default: r({}),
-        planner: r({ model: 'gpt-6.1-terra', effort: 'xhigh' }),
-        architect: r({ model: 'gpt-6.1-terra', effort: 'xhigh' }),
-        orchestrator: r({
-            model: 'gpt-6.1-terra', effort: 'xhigh',
-            // Memory extraction and file summaries come from the merged summarizer role.
-            summary: 'none', verbosity: 'medium',
-        }),
-        worker: r({ model: 'gpt-6.1-terra', effort: 'high' }),
-        reviewer: r({ model: "gpt-6.1-terra",
-            // Review, single-claim checks, and image descriptions of any size.
+        default          : r({}),
+        planner          : r({ model: 'gpt-6.1-terra', effort: 'xhigh' }),
+        architect        : r({ model: 'gpt-6.1-terra', effort: 'xhigh' }),
+        orchestrator     : r({ model: 'gpt-6.1-terra', effort: 'xhigh', verbosity: 'high' }),
+        encoder          : r({ model: "gpt-6.1-terra", effort: 'xhigh', verbosity: 'low' }),
+        worker           : r({ model: 'moonshotai/kimi-k3.1-pro', effort: 'high' }),
+        classifier       : r({ model: "gpt-6.1-terra", effort: 'xhigh' }),
+        decomposer       : r({ model: 'gpt-6.1-terra', effort: 'xhigh' }),
+        'image-processor': r({ model: "gpt-6.1-terra", effort: 'xhigh' }),
+        designer         : r({ model: 'gpt-6.1-terra', effort: 'xhigh' }),
+        reviewer : r({ model: "gpt-6.1-terra",
             tiers: [
                 { model: 'gpt-6.1-terra', effort: ['medium', 'high', 'xhigh'] }, // check (review tier)
                 { model: 'gpt-6.1-terra', effort: ['medium', 'high', 'xhigh'] }, // vision: trivial and normal images
@@ -346,55 +346,47 @@ export const defaults = Object.freeze({
         solver: r({
             tiers: {
                 trivial: { model: 'gpt-6.1-terra', effort: 'high' },
-                normal: { model: 'gpt-6.1-terra', effort: 'xhigh' },
-                complex: { model: 'gpt-6.1-sol', effort: 'xhigh' },
+                normal : { model: 'gpt-6.1-terra', effort: 'xhigh' },
+                complex: { model: 'gpt-6.1-sol'  , effort: 'xhigh' },
             },
         }),
-        clicker: r({ model: "gpt-6.1-terra", effort: 'low' }),
-        typer: r({ model: "gpt-6.1-terra", effort: 'low' }),
-        encoder: r({ model: "gpt-6.1-terra", effort: 'xhigh', verbosity: 'low' }),
-        classifier: r({ model: "gpt-6.1-terra", effort: 'xhigh' }),
         coder: r({
             tiers: [
-                { model: 'gpt-6.1-terra', effort: ['medium', 'high', 'xhigh'] }, // I added this step, due for avoid ceiling to `-sol` models
-                { model: 'gpt-6.1-terra', effort: ['medium', 'high', 'xhigh'] },
-                { model: 'gpt-6.1-sol', effort: ['low', 'medium', 'high'] },
+                { model: 'moonshotai/kimi-k3.1-pro', effort: ['medium', 'high', 'xhigh'] }, // I added this step, due for avoid ceiling to `-sol` models
+                { model: 'moonshotai/kimi-k3.1-pro', effort: ['medium', 'high', 'xhigh'] },
+                { model: 'moonshotai/kimi-k3.1-pro', effort: ['low', 'medium', 'high'] },
             ],
         }),
         styler: r({
-            /*model: 'gpt-6.1-sol', effort: 'xhigh',*/
             tiers: [
-                { model: 'gpt-6.1-terra', effort: ['medium', 'high', 'xhigh'] },
-                { model: 'gpt-6.1-terra', effort: ['medium', 'high', 'xhigh'] },
-                { model: 'gpt-6.1-sol', effort: ['low', 'medium', 'high'] },
+                { model: 'moonshotai/kimi-k3.1-pro', effort: ['medium', 'high', 'xhigh'] },
+                { model: 'moonshotai/kimi-k3.1-pro', effort: ['medium', 'high', 'xhigh'] },
+                { model: 'moonshotai/kimi-k3.1-pro', effort: ['low', 'medium', 'high'] },
             ],
         }),
         iconifier: r({
-            /*model: 'gpt-6.1-sol', effort: 'xhigh',*/ tiers: [
-                { model: 'gpt-6.1-terra', effort: ['medium', 'high', 'xhigh'] }, // I added this step, due for avoid ceiling to `-sol` models
-                { model: 'gpt-6.1-terra', effort: ['high', 'xhigh', 'max'] },
-                { model: 'gpt-6.1-sol', effort: ['medium', 'high', 'xhigh'] },
+            tiers: [
+                { model: 'moonshotai/kimi-k3.1-pro', effort: ['medium', 'high', 'xhigh'] }, // I added this step, due for avoid ceiling to `-sol` models
+                { model: 'moonshotai/kimi-k3.1-pro', effort: ['high', 'xhigh', 'max'] },
+                { model: 'moonshotai/kimi-k3.1-pro', effort: ['medium', 'high', 'xhigh'] },
             ]
         }),
-        decomposer: r({ model: 'gpt-6.1-terra', effort: 'xhigh' }),
         measurer: r({
-            /*model: 'gpt-6.1-sol', effort: 'xhigh',*/ tiers: [
-                { model: 'gpt-6.1-terra', effort: ['medium', 'high', 'xhigh'] }, // I added this step, due for avoid ceiling to `-sol` models
-                { model: 'gpt-6.1-terra', effort: ['medium', 'high', 'xhigh'] },
-                { model: 'gpt-6.1-terra', effort: ['medium', 'high', 'xhigh'] }
-                //{ model: 'gpt-6.1-sol', effort: ['low', 'medium', 'high'] },
+            tiers: [
+                { model: 'moonshotai/kimi-k3.1-pro', effort: ['medium', 'high', 'xhigh'] }, // I added this step, due for avoid ceiling to `-sol` models
+                { model: 'moonshotai/kimi-k3.1-pro', effort: ['medium', 'high', 'xhigh'] },
+                { model: 'moonshotai/kimi-k3.1-pro', effort: ['medium', 'high', 'xhigh'] }
             ],
         }),
         decorator: r({
-            /*model: 'gpt-6.1-terra', effort: 'xhigh',*/
             tiers: [
-                { model: 'gpt-6.1-terra', effort: ['high', 'xhigh', 'max'] },
-                { model: 'gpt-6.1-terra', effort: ['high', 'xhigh', 'max'] }, // I added this step, due for avoid ceiling to `-sol` models
-                { model: 'gpt-6.1-sol', effort: ['high', 'xhigh', 'max'] },
+                { model: 'gpt-6.1-terra', effort: ['medium', 'high', 'xhigh'] },
+                { model: 'gpt-6.1-terra', effort: ['medium', 'high', 'xhigh'] }, // I added this step, due for avoid ceiling to `-sol` models
+                { model: 'gpt-6.1-terra', effort: ['medium', 'high', 'xhigh'] },
             ],
         }),
-        'image-processor': r({ model: "gpt-6.1-terra", effort: 'xhigh' }),
-        designer: r({ model: 'gpt-6.1-terra', effort: 'xhigh' }),
+        clicker          : r({ model: "gpt-6.1-terra", effort: 'low' }),
+        typer            : r({ model: "gpt-6.1-terra", effort: 'low' }),
     },
     /** Multi-role orchestration used by `ai run`. */
     agent: {
@@ -528,6 +520,20 @@ export const defaults = Object.freeze({
         styleLanguage: 'scss',
         markupLanguage: 'html',
         iconSet: 'auto',
+        // COOP and COEP on the local server. Needed only for SharedArrayBuffer
+        // and Atomics; 127.0.0.1 is already a secure context, so this needs no TLS.
+        crossOriginIsolated: false,
+    },
+    /**
+     * Local component registry (`ai component`, `ai install`). A SQLite index
+     * plus a directory of sources; `ai install` copies from it as a `file:` package.
+     */
+    components: {
+        enabled: true,
+        dir: null,          // null → <home>/components
+        dbFile: null,       // null → <home>/components.db
+        vendorDir: 'vendor/components',   // relative to the target project
+        autoReuse: true,    // suggest registry components in a generation brief
     },
     /**
      * Team pace. models run from cheap to expensive.

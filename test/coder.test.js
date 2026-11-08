@@ -11,15 +11,15 @@ const pinned = (overrides) => ({
 
 test('coder effort and model follow the plan complexity', () => {
     const trivial = resolveRole(defaults, 'coder', 'trivial');
-    assert.equal(trivial.model, 'gpt-6.1-terra');
+    assert.equal(trivial.model, 'moonshotai/kimi-k3.1-pro');
     assert.equal(trivial.effort, 'medium');
 
     const normal = resolveRole(defaults, 'coder', 'normal');
-    assert.equal(normal.model, 'gpt-6.1-terra');
+    assert.equal(normal.model, 'moonshotai/kimi-k3.1-pro');
     assert.equal(normal.effort, 'high');
 
     const complex = resolveRole(defaults, 'coder', 'complex');
-    assert.equal(complex.model, 'gpt-6.1-sol');
+    assert.equal(complex.model, 'moonshotai/kimi-k3.1-pro');
     assert.equal(complex.effort, 'high');
 
     const unknown = resolveRole(defaults, 'coder', 'unknown');

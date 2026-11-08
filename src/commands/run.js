@@ -35,6 +35,7 @@ import { buildGenerationBrief, writeGenerationManifest } from '../generate/brief
 import { stageReferences } from '../generate/references.js';
 import { preparedScaffoldFiles, writePreparedScaffold, ensureDependencies } from '../generate/scaffold.js';
 import { resolvePlatform } from '../generate/platform.js';
+import { openRegistry } from '../core/registry.js';
 import { stdinFence, loadImageAttachment } from '../core/attachments.js';
 import { startEncodeHost } from '../encode/host.js';
 import { discoverAgents } from '../core/agents-md.js';
@@ -117,6 +118,14 @@ export async function run(ctx) {
         for (const w of result.warnings) renderer.line('warn', w, { dim: true });
     }
     if (prepared.wantsProfile) {
+        // A repeated need should become an install, not a second generation.
+        let availableComponents = [];
+        if (config.components?.enabled !== false && config.components?.autoReuse !== false) {
+            try {
+                const registry = openRegistry({ file: config.components.dbFile, dir: config.components.dir });
+                try { availableComponents = registry.search(task, { limit: 4 }); } finally { registry.close(); }
+            } catch { /* an empty registry is the normal case */ }
+        }
         const brief = buildGenerationBrief({
             kind: prepared.kind, prompt: task, fidelity: config.generate.fidelity, creativity: config.generate.creativity,
             quality: config.pace.quality,
@@ -128,17 +137,22 @@ export async function run(ctx) {
             styleLanguage: config.generate.styleLanguage ?? 'scss',
             iconSet: config.generate.iconSet ?? 'auto',
             markupLanguage: config.generate.markupLanguage ?? 'html',
+            tag: values.tag ?? null,
+            crossOriginIsolated: Boolean(config.generate.crossOriginIsolated) || Boolean(values['cross-origin-isolated']),
+            availableComponents,
         });
         await writeGenerationManifest(ctx.cwd, brief.manifest);
         if (level === 'write' || level === 'all') {
-        const boilerplate = preparedScaffoldFiles({
-            kind: prepared.kind, platform: resolvePlatform(config.generate.platform),
-            recommendations: brief.manifest.recommendations, name: path.basename(ctx.cwd),
-            framework: config.generate.frontendFramework ?? 'vanilla',
-            scriptLanguage: config.generate.scriptLanguage ?? 'javascript',
-            styleLanguage: config.generate.styleLanguage ?? 'scss',
-            markup: config.generate.markupLanguage ?? 'html',
-        });
+            const boilerplate = preparedScaffoldFiles({
+                kind: prepared.kind, platform: resolvePlatform(config.generate.platform),
+                recommendations: brief.manifest.recommendations, name: path.basename(ctx.cwd),
+                framework: config.generate.frontendFramework ?? 'vanilla',
+                scriptLanguage: config.generate.scriptLanguage ?? 'javascript',
+                styleLanguage: config.generate.styleLanguage ?? 'scss',
+                markup: config.generate.markupLanguage ?? 'html',
+                contract: brief.manifest.component ?? null,
+                crossOriginIsolated: Boolean(config.generate.crossOriginIsolated) || Boolean(values['cross-origin-isolated']),
+            });
             const saved = await writePreparedScaffold(ctx.cwd, boilerplate);
             if (saved.written.length) renderer.line('info', `Каркас уже записан: ${saved.written.join(', ')}`, { dim: true });
         }

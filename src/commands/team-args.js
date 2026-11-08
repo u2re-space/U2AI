@@ -18,7 +18,7 @@ import { renderPlaceholders } from '../core/placeholders.js';
 import { liveEnv } from '../core/runtime-env.js';
 
 const utf8 = new TextDecoder('utf-8', { fatal: true });
-const KIND_WORD = /\b(landing|site|backend|app)\b/gi;
+const KIND_WORD = /\b(landing|site|backend|app|component)\b/gi;
 
 /**
  * A leading kind token is the generation kind. The rest is the task.

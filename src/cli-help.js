@@ -20,7 +20,10 @@ export const HELP = `ai — CLI-агент на OpenAI Responses API (Node.js 26
   ai [ask] "запрос"                 один запрос → ответ (текст, код, документ)
   ai chat                           интерактивный чат (/help — команды чата)
   ai run "задача"                   автономный агент: файлы, команды, URL, web, картинки
-  ai gen [landing|site|backend|app] "задача"   то же, что run; первое слово-вид выбирает генерацию
+  ai gen [landing|site|backend|app|component] "задача"   то же, что run; первое слово-вид выбирает генерацию
+  ai gen component "описание"        переиспользуемый web-компонент: референс не обязателен, довольно описание поведения
+  ai component [list|publish|search|show|rm|path]  локальный реестр компонентов (~/.ai-agent/components)
+  ai install <tag>[@версия] …        установить компонент из реестра в проект как file:-пакет
   ai image "описание"               генерация изображения (image_generation)
   ai resume                         последний незавершённый шаг в этом каталоге
   ai resume --id <имя> ["текст"]    продолжить конкретную работу .tmp/<имя>
@@ -194,6 +197,9 @@ context=false запускает роль на чистом контексте. 
   --frontend-style-language <name>   язык стилей: scss (по умолчанию), css, sass, stylus, less, postcss-preset-env
   --frontend-markup-language <name>  язык разметки: html (по умолчанию), htmx, pug
   --icon-set <name>      набор иконок: auto (по умолчанию), lucide, phosphor
+  --tag <tag[@версия]>   имя web-компонента для ai gen component и ai component publish. Без дефиса добавится префикс ai-
+  --cross-origin-isolated  заголовки COOP и COEP в vite: нужны только для SharedArrayBuffer и Atomics.
+                         127.0.0.1 уже secure context, поэтому HTTPS не требуется ни для воркеров, ни для каналов
   --example <путь|url>   пример или шаблон оформления, можно несколько; для decompose — ./examples/for-decompose/*.png
   --kind landing|site|backend|app  вид генерации. У memory --kind по-прежнему вид записи
   --no-memory            не использовать долговременную память (SQLite в ~/.ai-agent/memory.db)
@@ -240,6 +246,27 @@ context=false запускает роль на чистом контексте. 
   rules — порядок импортов, группы свойств, слои. prompt — своя задача. selection правит только диапазон.
 
 Референсы run/gen: --image, --file, --example. Контракт .ai/generation.json пишется, когда задан вид или флаг точности, креативности, платформы или примера. measured остаётся null.
+
+Компоненты и реестр:
+  ai gen component "трёхрежимный календарь на день, неделю и месяц с планами" --tag ui-calendar
+                         Дизайн и референс не нужны: достаточно описания поведения. Пишутся .ai/component.json
+                         (контракт API), custom-elements.json, README с таблицами API, index.html как нейтральное
+                         демо-стенд и сам компонент. Контракт — источник правды: package.json (name, exports, files,
+                         sideEffects, customElements), манифест редактора и README собираются из него до первого шага.
+  ai component publish [путь]  положить компонент в реестр: исходники в ~/.ai-agent/components/<tag>/<версия>,
+                         индекс и поиск в SQLite (~/.ai-agent/components.db). --tag ui-calendar@1.2.0 задаёт имя и
+                         версию, --tags календарь,расписание добавляет метки поиска
+  ai component list | search <текст> | show <tag> | rm <tag>[@версия] [--keep-files] | path
+  ai install <tag>[@версия] …   копирует исходники в vendor/components/<tag> и прописывает в package.json
+                         «@ai/<tag>»: «file:./vendor/components/<tag>». --link ставит symlink (компонент правится
+                         на месте), --dev пишет в devDependencies, --no-save не трогает package.json, --force
+                         переустанавливает поверх. Дальше обычный npm install — офлайн, без HTTP-реестра.
+  Готовые компоненты попадают в бриф генерации: если в реестре есть похожий, план получает «установить и
+  использовать», а не писать второй такой же (components.autoReuse: false выключает подбор).
+  Стилизация из-вне — ::part() и переменные --<tag>-*; состояния — ElementInternals и :state(name).
+  Компонент не зависит от хозяина: ни глобального CSS, ни id, ни данных конкретного проекта.
+  Fest: тяжёлая логика уходит в module worker через @fest-lib/uniform (createUnifiedChannel, expose, connect,
+  proxy), обмен между компонентами идёт по именованному каналу (createInvoker, autoInvoker), а не через window.
 
 MCP:
   ai mcp add <id> --mcp-command <команда> [--mcp-arg <аргумент> ...]

@@ -737,7 +737,9 @@ export function resolveImageFormat({ model, format = null }) {
 /** True when a model can return native transparent output. */
 export function supportsTransparentBackground(model) {
     const version = /^(?:openai\/)?gpt-image-(\d+(?:\.\d+)?)/i.exec(String(model ?? '').trim())?.[1];
-    return (Boolean(version) && version !== '2') || /riverflow-v2\.6-pro$/i.test(String(model ?? '').trim());
+    return (Boolean(version) && version !== '2') || 
+        /riverflow-v2\.6-pro$/i.test(String(model ?? '').trim()) ||
+        /seedream-5\.5-pro$/i.test(String(model ?? '').trim());
 }
 
 /** Return the supported background setting, or null when it cannot be sent. */

@@ -146,6 +146,8 @@ export const RESERVED_BODY = new Set(['model', 'input', 'messages', 'instruction
 /** OpenAI gpt-image-2.5 family (sunburst, flare, …). */
 export const GPT_IMAGE_25 = /^(?:openai\/)?gpt-image-2\.5(?:-|$)/i;
 export const GPT_IMAGE_26 = /^(?:openai\/)?gpt-image-2\.6(?:-|$)/i;
+/** ByteDance Seedream 5.5 family — accepts free WIDTHxHEIGHT, padded to 16px. */
+export const SEEDREAM_5_5 = /seedream[-_.]5[-_.]5/i;
 /** Sourceful Riverflow family — a Flux-based id such as sourceful/riverflow-v2.6-pro. */
 export const RIVERFLOW = /(?:^|\/)riverflow-/i;
 
@@ -205,9 +207,13 @@ export const IMAGE_CAPABILITIES = Object.freeze({
  * instead, where every field is honored.
  * Riverflow takes a far smaller frame than gpt-image (128x128 is already legal) and a much wider
  * ratio, so its limits are spelled out here rather than guessed from the model id.
+ * Seedream 5.5 (`bytedance-seed/seedream-5-5`) draws free frames on a 16-pixel grid like
+ * gpt-image-2.6, but its floor sits on the grid itself: 16x16 — 256 pixels — is already a legal
+ * frame, so a small source is padded to the grid instead of being rescaled up to a megapixel.
  */
 export const IMAGE_MODEL_PROFILES = Object.freeze([
     Object.freeze({ match: GPT_IMAGE_26, customSizes: true, div16Padding: true, complexity: 'high', minPixels: 655_360, maxPixels: 8_294_400, maxEdge: 3840, maxRatio: 3 }),
+    Object.freeze({ match: SEEDREAM_5_5, customSizes: true, div16Padding: true, keepProSuffix: true, complexity: 'high', minPixels: 256, maxPixels: 8_294_400, maxEdge: 3840, maxRatio: 3 }),
     Object.freeze({ match: GPT_IMAGE_25, customSizes: true, div16Padding: true }),
     Object.freeze({ match: RIVERFLOW, customSizes: true, keepProSuffix: true, omitSizeOnReject: true, complexity: 'high', routeEditsThroughGeneration: true, resolutionTiers: true, paintsFakeTransparency: true, minPixels: 16_384, maxPixels: 16_777_216, maxEdge: 4096, maxRatio: 16 }),
 ]);

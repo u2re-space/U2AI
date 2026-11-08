@@ -780,3 +780,79 @@ test('images edits reports response shape when a gateway returns no image payloa
         await new Promise((resolve) => server.close(resolve));
     }
 });
+
+test('Seedream 5.5 profile: minPixels 256, free-frame with 16px grid', () => {
+    const SEED = 'bytedance-seed/seedream-5-5';
+    const seedLimits = { minPixels: 256, maxPixels: 8_294_400, maxEdge: 3840, maxRatio: 3 };
+    const read = (model) => ({
+        minPixels: MIN_IMAGE_PIXELS(model),
+        maxPixels: MAX_IMAGE_PIXELS(model),
+        maxEdge: MAX_IMAGE_EDGE(model),
+        maxRatio: MAX_IMAGE_RATIO(model),
+    });
+
+    // Profile accessors agree.
+    assert.deepEqual(read(SEED), seedLimits);
+    assert.deepEqual(read('seedream-5-5'), seedLimits);
+    // A bare id with the version written with a dot gets the same limits.
+    assert.deepEqual(read('bytedance-seed/seedream-5.5'), seedLimits);
+    for (const model of [SEED, 'seedream-5-5', 'bytedance-seed/seedream-5-5']) {
+        const profile = imageModelProfile(model);
+        assert.deepEqual(read(model), {
+            minPixels: profile.minPixels, maxPixels: profile.maxPixels,
+            maxEdge: profile.maxEdge, maxRatio: profile.maxRatio,
+        }, `profile and accessors agree for ${model}`);
+    }
+
+    // Family stays 'other' → gpt-image dispatch path (same as gpt-image-2.6).
+    assert.equal(imageModelFamily(SEED), 'other');
+
+    // Profile flags mirror gpt-image-2.6 with keepProSuffix for pro/flash/lite variants.
+    const profile = imageModelProfile(SEED);
+    assert.equal(profile.customSizes, true);
+    assert.equal(profile.div16Padding, true);
+    assert.equal(profile.keepProSuffix, true);
+    assert.equal(profile.omitSizeOnReject, false);
+    assert.equal(profile.complexity, 'high');
+    assert.equal(profile.routeEditsThroughGeneration, false);
+    assert.equal(profile.resolutionTiers, false);
+    assert.equal(profile.paintsFakeTransparency, false);
+
+    // 16x16 is already legal (minPixels=256).
+    assert.equal(sameAspectImageSize('16x16', SEED), null);
+
+    // 100x100 → rounds to 96x96 (16px grid, area 9216 ≥ 256).
+    assert.equal(sameAspectImageSize('100x100', SEED), '96x96');
+
+    // 100x100 request → pad16 → 112x112 (imageRequestSize applies div16).
+    assert.equal(imageRequestSize('100x100', SEED), '112x112');
+
+    // 2048x2048 is within limits → passed through.
+    assert.equal(imageRequestSize('2048x2048', SEED), '2048x2048');
+
+    // Aspect ratio request at 4K budget.
+    assert.equal(imageRequestSize('2.39:1', SEED), '1984x832');
+    assert.equal(imageRequestSize('2.39:1', SEED, '4K'), '3472x1456');
+
+    // imageSizeFields: free-size → size field (no resolution tiers).
+    assert.deepEqual(imageSizeFields('512x512', SEED), { size: '512x512' });
+    assert.deepEqual(imageSizeFields('512', SEED), { size: '512' });
+    assert.deepEqual(imageSizeFields('auto', SEED), {});
+
+    // imageSizeAttempts: pad16 + preset fallback (not resolution tier).
+    assert.deepEqual(imageSizeAttempts('16x16', SEED), ['16x16', '512x512']);
+    assert.deepEqual(imageSizeAttempts('100x100', SEED), ['112x112', '512x512']);
+    assert.deepEqual(imageSizeAttempts('2048x2048', SEED), ['2048x2048']);
+
+    // generationBody: includes complexity and image_format (vendor default).
+    const body = generationBody({ model: SEED, prompt: 'test', size: '512x512', format: 'png' });
+    assert.equal(body.model, SEED);
+    assert.equal(body.prompt, 'test');
+    assert.equal(body.size, '512x512');
+    assert.equal(body.complexity, 'high');
+    assert.equal(body.image_format, 'png');
+
+    // No background for seedream (does not support transparent).
+    assert.equal(supportsTransparentBackground(SEED), false);
+    assert.equal(backgroundValue({ model: SEED, format: 'png', background: 'transparent' }), null);
+});

@@ -331,11 +331,11 @@ export const defaults = Object.freeze({
         architect        : r({ model: 'gpt-6.1-terra', effort: 'xhigh' }),
         orchestrator     : r({ model: 'gpt-6.1-terra', effort: 'xhigh', verbosity: 'high' }),
         encoder          : r({ model: "gpt-6.1-terra", effort: 'xhigh', verbosity: 'low' }),
-        worker           : r({ model: 'moonshotai/kimi-k3.1-pro', effort: 'high' }),
         classifier       : r({ model: "gpt-6.1-terra", effort: 'xhigh' }),
         decomposer       : r({ model: 'gpt-6.1-terra', effort: 'xhigh' }),
-        'image-processor': r({ model: "gpt-6.1-terra", effort: 'xhigh' }),
-        designer         : r({ model: 'gpt-6.1-terra', effort: 'xhigh' }),
+        designer         : r({ model: 'moonshotai/kimi-k3.1-pro', effort: 'xhigh' }),
+        worker           : r({ model: 'moonshotai/kimi-k3.1-pro', effort: 'high' }),
+        'image-processor': r({ model: "moonshotai/kimi-k3.1-pro", effort: 'xhigh' }),
         reviewer : r({ model: "gpt-6.1-terra",
             tiers: [
                 { model: 'gpt-6.1-terra', effort: ['medium', 'high', 'xhigh'] }, // check (review tier)
@@ -371,6 +371,8 @@ export const defaults = Object.freeze({
                 { model: 'moonshotai/kimi-k3.1-pro', effort: ['medium', 'high', 'xhigh'] },
             ]
         }),
+
+        // 'moonshotai/kimi-k3.1-pro' now is necessary for measurer!
         measurer: r({
             tiers: [
                 { model: 'moonshotai/kimi-k3.1-pro', effort: ['medium', 'high', 'xhigh'] }, // I added this step, due for avoid ceiling to `-sol` models
@@ -380,9 +382,9 @@ export const defaults = Object.freeze({
         }),
         decorator: r({
             tiers: [
-                { model: 'gpt-6.1-terra', effort: ['medium', 'high', 'xhigh'] },
-                { model: 'gpt-6.1-terra', effort: ['medium', 'high', 'xhigh'] }, // I added this step, due for avoid ceiling to `-sol` models
-                { model: 'gpt-6.1-terra', effort: ['medium', 'high', 'xhigh'] },
+                { model: 'moonshotai/kimi-k3.1-pro', effort: ['medium', 'high', 'xhigh'] },
+                { model: 'moonshotai/kimi-k3.1-pro', effort: ['medium', 'high', 'xhigh'] }, // I added this step, due for avoid ceiling to `-sol` models
+                { model: 'moonshotai/kimi-k3.1-pro', effort: ['medium', 'high', 'xhigh'] },
             ],
         }),
         clicker          : r({ model: "gpt-6.1-terra", effort: 'low' }),

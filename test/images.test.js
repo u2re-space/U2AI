@@ -11,7 +11,7 @@ import { rasterInfo, rasterIsOpaque, rasterPadImageBytes } from '../src/agent/im
 import { runProgram } from '../src/agent/shell.js';
 import { imageModelFamily as sharedImageModelFamily, IMAGE_SIZES as SHARED_IMAGE_SIZES, VECTOR_RATIOS as SHARED_VECTOR_RATIOS } from '../src/openai/shared/images.js';
 import { imageModelProfile as agentImageModelProfile, imageSizeAttempts as agentImageSizeAttempts } from '../src/agent/riverflow/images.js';
-import { backgroundValue, encodeMultipart, generationBody, imageFormatField, imageModelFamily, imageModelFor, imageModelProfile, imagePayloads, imageComplexityValue, imageRequestSize, imageSizeAttempts, imageSizeFields, imageTransport, normalizeImageFormat, normalizeImageSize, normalizeVectorRatio, sameAspectImageSize, isImageSizeError, isVectorModel, pngHasAlphaChannel, sniffImage, supportsTransparentBackground, PROXY_RIVERFLOW_MODEL, PROXY_VECTOR_MODEL, VECTOR_RATIOS, RIVERFLOW_RATIOS, readImageSize, MIN_IMAGE_PIXELS, MAX_IMAGE_PIXELS, MAX_IMAGE_EDGE, MAX_IMAGE_RATIO, aspectRatioToken, aspectFrame, ceilAspect, nearestAspect, parseAspectToken, rationalAspect, supportedAspectRatios } from '../src/openai/images.js';
+import { backgroundValue, encodeMultipart, generationBody, imageFormatField, imageModelFamily, imageModelFor, imageModelProfile, imagePayloads, imageComplexityValue, imageRequestSize, imageSizeAttempts, imageSizeFields, imageTransport, normalizeImageFormat, normalizeImageSize, normalizeVectorRatio, sameAspectImageSize, isImageSizeError, isVectorModel, pngHasAlphaChannel, sniffImage, supportsTransparentBackground, PROXY_RIVERFLOW_MODEL, PROXY_VECTOR_MODEL, VECTOR_RATIOS, RIVERFLOW_RATIOS, readImageSize, MIN_IMAGE_PIXELS, MAX_IMAGE_PIXELS, MAX_IMAGE_EDGE, MAX_IMAGE_RATIO, aspectRatioToken, aspectFrame, ceilAspect, nearestAspect, parseAspectToken, rationalAspect, supportedAspectRatios, tierFromToken } from '../src/openai/images.js';
 import { builtinTools } from '../src/agent/loop.js';
 import { enabledToolNames } from '../src/agent/tool-specs.js';
 import { createToolset } from '../src/agent/tools.js';
@@ -86,6 +86,17 @@ test('proxyapi uses the images API and omits Responses-only image fields', () =>
     assert.deepEqual(imageSizeAttempts('100x100', 'gpt-image-2.6-sunburst'), ['100x100', '816x816', '1024x1024']);
     //assert.deepEqual(imageSizeAttempts('4096x2048', 'gpt-image-2.6-sunburst'), ['4096x2048', '3840x1920', '1536x1024']); // not able to pass this test...
     assert.deepEqual(imageSizeAttempts('1024x1024', 'gpt-image-2.6-sunburst'), ['1024x1024']);
+    // 1.5K: a preset-only model resolves the tier token to a concrete frame and falls back to it.
+    assert.equal(imageRequestSize('1.5k', 'gpt-image-2.6-sunburst'), '1536x1536');
+    assert.deepEqual(imageSizeAttempts('2048x2048', 'gpt-image-2.6-sunburst', '1.5k'), ['2048x2048', '1536x1536']);
+    assert.deepEqual(imageSizeAttempts('1536x1536', 'gpt-image-2.6-sunburst', '1.5k'), ['1536x1536']);
+    // 3K: a rare tier some generators publish. The frame is asked first and falls back to the
+    // largest legal frame of the same shape, staying inside 3K rather than jumping up to 4K.
+    assert.equal(imageRequestSize('3k', 'gpt-image-2.6-sunburst'), '3072x3072');
+    assert.deepEqual(imageSizeAttempts('3k', 'gpt-image-2.6-sunburst'), ['3072x3072', '2880x2880']);
+    assert.deepEqual(imageSizeAttempts('3072x2048', 'gpt-image-2.6-sunburst'), ['3072x2048', '3072x2304']);
+    // A bare 3072 names the 3K tier, so a 3K frame is never folded back up into the 4K preset.
+    assert.equal(tierFromToken('3072'), '3k');
     assert.equal(sameAspectImageSize('bad'), null);
     assert.equal(sameAspectImageSize('100x100'), '816x816');
     assert.equal(sameAspectImageSize('100000x100000'), '2880x2880');
@@ -171,9 +182,13 @@ test('Riverflow keeps custom sizes, maps resolution/aspect_ratio, keeps -pro suf
     assert.deepEqual(imageSizeFields('16:9', 'sourceful/riverflow-v2.6-pro'), { aspect_ratio: '16:9' });
     assert.deepEqual(imageSizeFields('9:16', 'sourceful/riverflow-v2.6-pro'), { aspect_ratio: '9:16' });
     assert.deepEqual(imageSizeFields('auto', 'sourceful/riverflow-v2.6-pro'), {});
-    // Non-riverflow: pixel size goes into size as usual.
+    // Non-riverflow: a tier token resolves to a concrete frame (the gateway has no resolution field).
     assert.deepEqual(imageSizeFields('512x512', 'gpt-image-2.6-sunburst'), { size: '512x512' });
-    assert.deepEqual(imageSizeFields('512', 'gpt-image-2.6-sunburst'), { size: '512' });
+    assert.deepEqual(imageSizeFields('512', 'gpt-image-2.6-sunburst'), { size: '512x512' });
+    assert.deepEqual(imageSizeFields('1.5k', 'gpt-image-2.6-sunburst'), { size: '1536x1536' });
+    assert.deepEqual(imageSizeFields('1K', 'gpt-image-2.6-sunburst'), { size: '1024x1024' });
+    assert.deepEqual(imageSizeFields('2k', 'gpt-image-2.6-sunburst'), { size: '2048x2048' });
+    assert.deepEqual(imageSizeFields('4K', 'gpt-image-2.6-sunburst'), { size: '4096x4096' });
 
     // generationBody: pixel size → size field; tier → resolution field.
     assert.equal(generationBody({ model: 'sourceful/riverflow-v2.6-pro', prompt: 'test', size: '512x512' }).size, '512x512');
@@ -834,15 +849,33 @@ test('Seedream 5.5 profile: minPixels 256, free-frame with 16px grid', () => {
     assert.equal(imageRequestSize('2.39:1', SEED), '1984x832');
     assert.equal(imageRequestSize('2.39:1', SEED, '4K'), '3472x1456');
 
-    // imageSizeFields: free-size → size field (no resolution tiers).
+    // imageSizeFields: free-size → size field (no resolution tiers); tier tokens resolve to a frame.
     assert.deepEqual(imageSizeFields('512x512', SEED), { size: '512x512' });
-    assert.deepEqual(imageSizeFields('512', SEED), { size: '512' });
+    assert.deepEqual(imageSizeFields('512', SEED), { size: '512x512' });
+    assert.deepEqual(imageSizeFields('1.5k', SEED), { size: '1536x1536' });
     assert.deepEqual(imageSizeFields('auto', SEED), {});
 
     // imageSizeAttempts: pad16 + preset fallback (not resolution tier).
     assert.deepEqual(imageSizeAttempts('16x16', SEED), ['16x16', '512x512']);
     assert.deepEqual(imageSizeAttempts('100x100', SEED), ['112x112', '512x512']);
     assert.deepEqual(imageSizeAttempts('2048x2048', SEED), ['2048x2048']);
+
+    // 1.5K tier: preset-only models resolve the tier token to a concrete frame.
+    assert.equal(imageRequestSize('1.5k', SEED), '1536x1536');
+    assert.equal(imageRequestSize('1536x1536', SEED), '1536x1536');
+    // With an explicit 1.5K resolution, a larger frame falls back to the 1.5K frame of the shape.
+    assert.deepEqual(imageSizeAttempts('2048x2048', SEED, '1.5k'), ['2048x2048', '1536x1536']);
+    // A 1.5K frame asked at its own tier has no other preset to fall back to.
+    assert.deepEqual(imageSizeAttempts('1536x1536', SEED, '1.5k'), ['1536x1536']);
+
+    // 3K tier: the rare 3072 class, asked through `size` and answered with a concrete frame.
+    assert.equal(imageRequestSize('3k', SEED), '3072x3072');
+    assert.deepEqual(imageSizeFields('3k', SEED), { size: '3072x3072' });
+    // 3072x3072 sits past the model's own pixel ceiling, so the attempt list steps down inside 3K.
+    assert.deepEqual(imageSizeAttempts('3k', SEED), ['3072x3072', '2880x2880']);
+    // A 3K frame that is already legal passes through and stays in its own tier.
+    assert.equal(imageRequestSize('2304x3072', SEED), '2304x3072');
+    assert.deepEqual(imageSizeAttempts('3072x2304', SEED), ['3072x2304']);
 
     // generationBody: includes complexity and image_format (vendor default).
     const body = generationBody({ model: SEED, prompt: 'test', size: '512x512', format: 'png' });

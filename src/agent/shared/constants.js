@@ -281,26 +281,32 @@ export const VECTOR_RATIOS = Object.freeze(['1:1', '3:2', '2:3', '4:3', '3:4', '
 
 /** Frames of one shape per resolution tier, for the families that serve no ratio field. */
 export const PORTRAIT_SIZES = {
-    "512": "384x512",
-    "1k":  "768x1024",
-    "2k": "1536x2048",
-    "4k": "3072x4096"
+    "512":  "384x512",
+    "1k":   "768x1024",
+    "1.5k": "1152x1536",
+    "2k":   "1536x2048",
+    "3k":   "2304x3072",
+    "4k":   "3072x4096"
 }
 
 /** @see PORTRAIT_SIZES */
 export const LANDSCAPE_SIZES = {
-    "512": "512x384",
-    "1k": "1024x768",
-    "2k": "2048x1536",
-    "4k": "4096x3072"
+    "512":  "512x384",
+    "1k":   "1024x768",
+    "1.5k": "1536x1152",
+    "2k":   "2048x1536",
+    "3k":   "3072x2304",
+    "4k":   "4096x3072"
 }
 
 /** @see PORTRAIT_SIZES */
 export const SQUARE_SIZES = {
-    "512": "512x512",
-    "1k": "1024x1024",
-    "2k": "2048x2048",
-    "4k": "4096x4096"
+    "512":  "512x512",
+    "1k":   "1024x1024",
+    "1.5k": "1536x1536",
+    "2k":   "2048x2048",
+    "3k":   "3072x3072",
+    "4k":   "4096x4096"
 }
 
 /**
@@ -329,7 +335,9 @@ export const RIVERFLOW_RESOLUTIONS = Object.freeze(['512', '1K', '2K', '4K']);
 export const IMAGE_TIER_LIMITS = Object.freeze({
     '512': Object.freeze({ edge: 512, pixels: 512 * 512 }),
     '1k': Object.freeze({ edge: 1024, pixels: 1024 * 1024 }),
+    '1.5k': Object.freeze({ edge: 1536, pixels: 1536 * 1536 }),
     '2k': Object.freeze({ edge: 2048, pixels: 2048 * 2048 }),
+    '3k': Object.freeze({ edge: 3072, pixels: 3072 * 3072 }),
     '4k': Object.freeze({ edge: 4096, pixels: 4096 * 4096 }),
 });
 
@@ -340,7 +348,9 @@ export const IMAGE_TIER_LIMITS = Object.freeze({
 const NATIVE_TIER_SIZES = Object.freeze({
     '512': Object.freeze(['512x512']),
     '1k': Object.freeze(['1024x768', '768x1024', '1024x1024']),
+    '1.5k': Object.freeze(['1536x1536', '1024x1536', '1536x1024', '1536x1152', '1152x1536']),
     '2k': Object.freeze(['1024x1536', '1536x1024', '2048x1536', '1536x2048', '2048x2048']),
+    '3k': Object.freeze(['3072x3072', '3072x2048', '2048x3072', '3072x2304', '2304x3072']),
     '4k': Object.freeze(['4096x3072', '3072x4096', '4096x4096']),
 });
 

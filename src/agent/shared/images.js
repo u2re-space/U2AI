@@ -259,6 +259,7 @@ export function inferResolution({ width, height }, model = null) {
     if (maxSide <= 512 && (profile?.minPixels <= (512*512) || !profile?.minPixels)) return '512';
     if (maxSide <= 1024) return '1k';
     if (maxSide <= 2048) return '2k';
+    if (maxSide <= 3072) return '3k';
     if (maxSide > 2048 && maxSide < 8192) return '4k';
 
     // 4k — максимальный уровень; запросы больше него попадут в 4k.
@@ -266,7 +267,7 @@ export function inferResolution({ width, height }, model = null) {
 }
 
 /**
- * Read a resolution tier out of a bare token: `512`, `1k`/`2k`/`4k`, or a plain pixel number
+ * Read a resolution tier out of a bare token: `512`, `1k`/`1.5k`/`2k`/`3k`/`4k`, or a plain pixel number
  * (`512`, `1024`, `2048`, `4096`) which names the tier by its longest side. This is what lets a
  * caller ask for `size: "2048"` and land on the 2K tier instead of leaking an unusable token to
  * the gateway (where it is dropped and the model answers with its default square).
@@ -278,7 +279,7 @@ export function inferResolution({ width, height }, model = null) {
 export function tierFromToken(value, model = null) {
     const token = String(value ?? '').trim().toLowerCase();
     if (!token) return null; if (token === '512') return '512';
-    if (/^\d+k$/.test(token)) return IMAGE_SIZES_BY_RESOLUTION[token] ? token : null;
+    if (/^\d+(\.\d+)?k$/.test(token)) return IMAGE_SIZES_BY_RESOLUTION[token] ? token : null;
     if (/^\d+$/.test(token)) return inferResolution({ width: Number(token), height: Number(token) }, model);
     return null;
 }
@@ -296,7 +297,11 @@ export function tierFromToken(value, model = null) {
 export function presetImageSize(value, resolution = null, model = null) {
     if (IMAGE_SIZES.includes(value)) return value;
     const shape = parseAspectToken(value);
-    if (!shape) return value;
+    if (!shape) {
+        const tier = tierFromToken(value, model);
+        if (tier && IMAGE_SIZES_BY_RESOLUTION[tier]) return SQUARE_SIZES[tier] || SQUARE_SIZES['1k'];
+        return value;
+    }
     const parsed = parseImageSize(value);
     const resolutionKey = tierFromToken(resolution, model)
         || (parsed ? inferResolution(parsed, model) : null) || '1k';
@@ -322,7 +327,7 @@ export function presetImageSize(value, resolution = null, model = null) {
  * `presetImageSize` instead, so it keeps getting the frames it actually has.
  * `auto` and an empty value omit the field.
  * @param {string | null | undefined} size
- * @param {string | null} [resolution] one of `512`/`1K`/`2K`/`4K`
+ * @param {string | null} [resolution] one of `512`/`1K`/`1.5K`/`2K`/`3K`/`4K`
  * @returns {string | null}
  * @exports
  * @ai.hint pure
@@ -489,7 +494,7 @@ export function imageRequestSize(size, model, resolution = null) {
  * tier-based gateways read three shapes, and the order is a priority, not a set:
  *   `WIDTHxHEIGHT`  → `size`   (the exact frame, the cheapest and most faithful — used first);
  *   `W:H` ratio      → `aspect_ratio` (a shape with no fixed pixel count);
- *   `512`/`1K`/`2K`/`4K` → `resolution` (a quality tier, alone or with an aspect_ratio).
+ *   `512`/`1K`/`1.5K`/`2K`/`3K`/`4K` → `resolution` (a quality tier, alone or with an aspect_ratio).
  * A model that is not tier-based keeps the single `size` field, so a gpt-image or Recraft request
  * is unchanged. `auto` and an empty value return nothing, which leaves every field out.
  * @param {string|null|undefined} size

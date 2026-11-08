@@ -332,9 +332,10 @@ export const defaults = Object.freeze({
         orchestrator     : r({ model: 'gpt-6.1-terra', effort: 'xhigh', verbosity: 'high' }),
         encoder          : r({ model: "gpt-6.1-terra", effort: 'xhigh', verbosity: 'low' }),
         classifier       : r({ model: "gpt-6.1-terra", effort: 'xhigh' }),
+        installer        : r({ model: 'gpt-6.1-terra', effort: 'xhigh' }),
         decomposer       : r({ model: 'moonshotai/kimi-k3.1-pro', effort: 'xhigh' }),
         designer         : r({ model: 'moonshotai/kimi-k3.1-pro', effort: 'xhigh' }),
-        worker           : r({ model: 'moonshotai/kimi-k3.1-pro', effort: 'high' }),
+        worker           : r({ model: 'moonshotai/kimi-k3.1-pro', effort: 'xhigh' }),
         'image-processor': r({ model: "moonshotai/kimi-k3.1-pro", effort: 'xhigh' }),
         reviewer : r({ model: "gpt-6.1-terra",
             tiers: [
@@ -371,7 +372,6 @@ export const defaults = Object.freeze({
                 { model: 'moonshotai/kimi-k3.1-pro', effort: ['medium', 'high', 'xhigh'] },
             ]
         }),
-        installer: r({ model: 'gpt-6.1-terra', effort: 'high' }),
 
         // 'moonshotai/kimi-k3.1-pro' now is necessary for measurer!
         measurer: r({

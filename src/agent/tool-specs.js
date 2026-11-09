@@ -293,7 +293,7 @@ export const TOOL_SPECS = {
     },
     generate_image: {
         category: 'write', group: 'images',
-        description: 'Draw a new image and save it in the working directory. Use this for artwork that does not exist yet. When reference is set, the source image is sent directly to the generator (not only a text description) for higher visual fidelity. Ready measurement crops from .tmp/<id>/crops/ can be passed as reference, so the worker does not crop the same region again. Transparency: with background=transparent a gpt-image model that supports alpha is asked to draw the real alpha channel itself; when the reply still comes back solid or with a painted checkerboard, the background is first filled with the subject color and an anti-aliased grayscale matte is drawn from the clean source and merged as alpha (contour matte and corner fill stay as local fallbacks). The matte is always built from the clean source — the reference or the pre-processed original — never from a picture that already has a fake alpha plate, and never from the painted picture itself.',
+        description: 'Draw a new image and save it in the working directory. Use this for artwork that does not exist yet. When reference is set, the source image is sent directly to the generator (not only a text description) for higher visual fidelity. Ready measurement crops from .tmp/<id>/crops/ can be passed as reference, so the worker does not crop the same region again. Transparency: with background=transparent a gpt-image model that supports alpha is asked to draw the real alpha channel itself; when the reply still comes back solid or with a painted checkerboard, the background is first filled with the subject color and an anti-aliased grayscale matte is drawn from the clean source and merged as alpha (contour matte and corner fill stay as local fallbacks). The matte is always built from the clean source — the reference or the pre-processed original — never from a picture that already has a fake alpha plate, and never from the painted picture itself. When purpose is set, the tool selects the best model for the task: "decompose" for layouts/templates, "isolate" for subject cut-out, "upscale" for enlargement, "generate" for general artwork.',
         parameters: schema({
             prompt: str('What to draw or how the reference should look after regeneration. Describe style and composition; do not repeat pixel-level details the image already carries.'),
             path: str('Relative output path such as assets/portrait.png. Empty string lets the tool choose a name.'),
@@ -304,11 +304,12 @@ export const TOOL_SPECS = {
             extra_images: str('JSON array of additional reference paths sent with reference, e.g. ["assets/ref1.png",".tmp/<id>/crops/icon.png"]. Empty string = none.'),
             background: str('transparent, opaque, or an empty string for image.background. transparent asks the model for real alpha and falls back to the matte pipeline.'),
             to_svg: bool('True for a flat mark (logo, badge, icon): the tool answers with the vectorize_image call to make right after this one.'),
+            purpose: { type: 'string', enum: ['decompose', 'isolate', 'upscale', 'generate'], description: 'Intended use of the generated image. Chooses the best model automatically: "decompose" for layouts/templates/screen mockups, "isolate" for subject cut-out and background removal, "upscale" for enlargement (not yet active), "generate" for general artwork. Empty string = default model.' },
         }),
     },
     edit_image: {
         category: 'write', group: 'images',
-        description: 'Edit an existing image with POST /images/edits and save the result. Use this to restyle or extract a region of a reference file. extra_images sends more reference pictures together with the source image. Transparency works as in generate_image: native alpha is requested where the model supports it, otherwise the background is painted with the subject color and an anti-aliased matte drawn from the source is merged as alpha. The source image stays the RGB base for the matte.',
+        description: 'Edit an existing image with POST /images/edits and save the result. Use this to restyle or extract a region of a reference file. extra_images sends more reference pictures together with the source image. Transparency works as in generate_image: native alpha is requested where the model supports it, otherwise the background is painted with the subject color and an anti-aliased matte drawn from the source is merged as alpha. The source image stays the RGB base for the matte. When purpose is set, the tool selects the best model for the task.',
         parameters: schema({
             prompt: str('How to change the source image.'),
             image: str('Source image path relative to the working directory.'),
@@ -318,6 +319,7 @@ export const TOOL_SPECS = {
             extra_images: str('JSON array of additional reference image paths, e.g. ["assets/ref1.png",".ai/refs/abc.png"]. Empty string = none.'),
             background: str('transparent, opaque, or an empty string for image.background.'),
             to_svg: bool('True for a flat mark (logo, badge, icon): the tool answers with the vectorize_image call to make right after this one.'),
+            purpose: { type: 'string', enum: ['decompose', 'isolate', 'upscale', 'generate'], description: 'Intended use of the edited image. Chooses the best model automatically: "decompose" for layouts/templates, "isolate" for subject cut-out, "upscale" for enlargement, "generate" for general artwork. Empty string = default model.' },
         }),
     },
     delegate_role: {

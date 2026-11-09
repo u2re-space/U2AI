@@ -355,6 +355,84 @@ const NATIVE_TIER_SIZES = Object.freeze({
 });
 
 /**
+ * Image-generation purpose: tells the tool which model to prefer for a given task.
+ * The key is the purpose name; the value is an ordered list of model IDs — first match wins.
+ *
+ * - `decompose`   — layouts, templates, screen mockups; needs clean geometry and consistent style.
+ * - `isolate`     — cut out a subject from its background (alpha or matte).
+ * - `upscale`     — enlarge an existing image while preserving quality (not yet actively used).
+ * - `generate`    — standard text-to-image or restyle; the general-purpose default.
+ *
+ * A purpose absent from the map is ignored: the call keeps its configured `imageModel`.
+ * When a listed model is null or empty, it is skipped during resolution.
+ */
+export const PURPOSE_MODEL_MAP = Object.freeze({
+    decompose: Object.freeze([
+        'sourceful/riverflow-v2.6-pro',   // fallback if gpt-image-2.6-* refuses
+        'openai/gpt-image-2.6-sunburst',  // default
+        'bytedance-seed/seedream-5-5',    // if available
+    ]),
+    isolate: Object.freeze([
+        'bytedance-seed/seedream-5-5',    // best at subject isolation
+        'openai/gpt-image-2.6-sunburst',  // min 655360 px or seedream unavailable
+        'sourceful/riverflow-v2.6-pro',   // only if explicitly enabled
+    ]),
+    upscale: Object.freeze([
+        'openai/gpt-image-2.6-sunburst',  // when target is 655360+ px or 1K+
+        'bytedance-seed/seedream-5-5',    // around 512×512 or < 655360
+        'sourceful/riverflow-v2.6-pro',   // fallback when opaque + seedream unavailable
+    ]),
+    generate: Object.freeze([
+        'sourceful/riverflow-v2.6-pro',   // mainly for opaque output
+        'openai/gpt-image-2.6-sunburst',  // from 1K resolution
+        'bytedance-seed/seedream-5-5',    // if available
+    ]),
+});
+
+/**
+ * Resolve the best model for a given purpose from the config's available providers.
+ * Walks the ordered list; returns the first model that matches a provider in `config.backends`
+ * (or `config.imagesBackends`), or null when none match. A bare purpose key that is not in the
+ * map returns null so the caller falls through to the default `imageModel`.
+ * @param {object} config
+ * @param {string} purpose — one of the keys in PURPOSE_MODEL_MAP, or null/empty to skip
+ * @returns {string|null}
+ * @exports
+ * @ai.hint pure
+ */
+export function resolvePurposeModel(config, purpose) {
+    if (!purpose) return null;
+    const models = PURPOSE_MODEL_MAP[String(purpose).trim().toLowerCase()];
+    if (!models) return null;
+
+    // Collect all known provider base URLs from every backend pool.
+    const pools = [
+        ...(config.backends ?? []),
+        ...(config.imagesBackends ?? []),
+    ];
+    const activeUrls = new Set(pools.filter((p) => p.baseURL).map((p) => p.baseURL.replace(/\/+$/, '')));
+
+    for (const modelId of models) {
+        if (!modelId) continue;
+        // A model is "available" if its provider URL is in the active pools, or if it is an
+        // OpenAI-native model (openai/) that goes through the primary URL.
+        const isOpenAi = /^openai\//i.test(modelId);
+        const primary = String(config.baseURL ?? '').replace(/\/+$/, '');
+        const providerUrl = isOpenAi ? primary : null;
+
+        if (isOpenAi) {
+            if (activeUrls.has(primary) || activeUrls.size === 0) return modelId;
+        } else if (providerUrl && activeUrls.has(providerUrl)) {
+            return modelId;
+        } else if (activeUrls.size === 0) {
+            // No explicit backends — accept non-OpenAI models (direct proxyapi.ru, etc.)
+            return modelId;
+        }
+    }
+    return null;
+}
+
+/**
  * One frame per standard shape inside one tier, built the same way a request is answered: the
  * shape as a fraction with terms within `RATIO_MAX_TERM`, scaled by a whole number of 16-pixel
  * increments up to the tier's pixel budget. This is what lets a tier-based model take `21:9` or

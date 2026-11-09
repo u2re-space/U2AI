@@ -21,7 +21,7 @@ import { detectMagick, magickConvert, magickIsOpaque, magickRemoveFlatBackground
 // The family dispatcher, not the shared pipeline: riverflow and gpt-image cut alpha differently,
 // and the tool has to pick the one that matches the model that drew the picture.
 import { applyGeneratedAlphaMask, hasRealAlpha as sharedHasRealAlpha } from '../image-alpha.js';
-import { imageModelFor, imageModelProfile, pngHasAlphaChannel, sniffImage, supportsTransparentBackground, PROXY_VECTOR_MODEL, imageRequestSize, readImageSize } from '../../openai/images.js';
+import { imageModelFor, imageModelProfile, pngHasAlphaChannel, sniffImage, supportsTransparentBackground, PROXY_VECTOR_MODEL, imageRequestSize, readImageSize, resolvePurposeModel } from '../../openai/images.js';
 import { rasterEngine } from './image-raster.js';
 import { formatBytes } from '../../util/text.js';
 import { CUT_OUT, DEFAULT_VECTOR_PROMPT, FLAT_PLATE_NOTE, SOURCE_GUARD, VECTOR_HINT, VECTOR_SOURCE_EXT } from './constants.js';
@@ -493,9 +493,11 @@ export function createImageHandlers({ root, client, config, signal, describeImag
             const toSvg = args.to_svg === true || config.image?.autoVectorize === true;
             const resolution = args.resolution || config.image?.resolution || null;
 
+            // Purpose-based model selection: if purpose is set, try the purpose-specific model first.
+            const purposeModel = resolvePurposeModel(config, args.purpose);
             const ref = String(args.reference ?? '').trim();
             if (ref) {
-                const model = imageModelFor(config, { hasImage: true });
+                const model = purposeModel || imageModelFor(config, { hasImage: true });
                 const files = [await loadFile(ref), ...(await loadExtras(args.extra_images))];
                 if ((!args.size || args.size === 'auto') && files?.length > 0) {
                     const source = readImageSize(files?.[0]?.bytes);
@@ -516,7 +518,7 @@ export function createImageHandlers({ root, client, config, signal, describeImag
             if (String(args.extra_images ?? '').trim()) throw new Error('generate_image: extra_images требует reference.');
 
             // No reference: pure text-to-image generation.
-            const model = imageModelFor(config);
+            const model = purposeModel || imageModelFor(config);
             const flatPlate = transparent && imageModelProfile(model).paintsFakeTransparency;
             const payloads = await client.images.generate({
                 model, prompt: FIX_PROMPT(args.prompt, { flatPlate }), size: imageRequestSize(args.size || null, model, resolution) || args.size, complexity: args.complexity || null,
@@ -535,7 +537,9 @@ export function createImageHandlers({ root, client, config, signal, describeImag
             const requested = normalizeBackground(args.background, background);
             const transparent = requested === 'transparent';
             const toSvg = args.to_svg === true || config.image?.autoVectorize === true;
-            const model = imageModelFor(config, { hasImage: true });
+            // Purpose-based model selection.
+            const purposeModel = resolvePurposeModel(config, args.purpose);
+            const model = purposeModel || imageModelFor(config, { hasImage: true });
             const resolution = args.resolution || config.image?.resolution || null;
             const files = [await loadFile(args.image), ...(await loadExtras(args.extra_images))];
             // No frame asked for: keep the source picture's own frame, so an edit does not come

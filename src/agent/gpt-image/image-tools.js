@@ -17,7 +17,7 @@ import { mkdir, readFile, writeFile, stat, unlink, readdir } from 'node:fs/promi
 import { resolveInside } from '../paths.js';
 import { detectMagick, magickConvert, magickIsOpaque, magickRemoveFlatBackground, assessVectorSuitability, magickTrimImage } from '../shared/image-magick.js';
 import { applyGeneratedAlphaMask } from './image-alpha.js';
-import { imageModelFor, pngHasAlphaChannel, sniffImage, supportsTransparentBackground, PROXY_VECTOR_MODEL } from '../../openai/images.js';
+import { imageModelFor, pngHasAlphaChannel, sniffImage, supportsTransparentBackground, PROXY_VECTOR_MODEL, resolvePurposeModel } from '../../openai/images.js';
 import { formatBytes } from '../../util/text.js';
 
 /**
@@ -454,9 +454,12 @@ export function createImageHandlers({ root, client, config, signal, describeImag
             const transparent = requested === 'transparent';
             const toSvg = args.to_svg === true || config.image?.autoVectorize === true;
 
+            // Purpose-based model selection.
+            const purposeModel = resolvePurposeModel(config, args.purpose);
+
             const ref = String(args.reference ?? '').trim();
             if (ref) {
-                const model = imageModelFor(config, { hasImage: true });
+                const model = purposeModel || imageModelFor(config, { hasImage: true });
                 const files = [await loadFile(ref), ...(await loadExtras(args.extra_images))];
                 const payloads = await client.images.edit({
                     model,
@@ -471,7 +474,7 @@ export function createImageHandlers({ root, client, config, signal, describeImag
             if (String(args.extra_images ?? '').trim()) throw new Error('generate_image: extra_images требует reference.');
 
             // No reference: pure text-to-image generation.
-            const model = imageModelFor(config);
+            const model = purposeModel || imageModelFor(config);
             const payloads = await client.images.generate({
                 model, prompt: args.prompt, size: args.size || null, quality: args.quality || null,
                 format, background: effectiveBackground(model, requested), signal,
@@ -488,7 +491,9 @@ export function createImageHandlers({ root, client, config, signal, describeImag
             const requested = normalizeBackground(args.background, background);
             const transparent = requested === 'transparent';
             const toSvg = args.to_svg === true || config.image?.autoVectorize === true;
-            const model = imageModelFor(config, { hasImage: true });
+            // Purpose-based model selection.
+            const purposeModel = resolvePurposeModel(config, args.purpose);
+            const model = purposeModel || imageModelFor(config, { hasImage: true });
             const files = [await loadFile(args.image), ...(await loadExtras(args.extra_images))];
             const payloads = await client.images.edit({
                 model, prompt: args.prompt, size: args.size || null,

@@ -20,7 +20,8 @@ import { CHAT_PATH, chatGaps, createChatStreamReducer, droppedTools, normalizeCh
 import { envValue } from '../core/runtime-env.js';
 import { detectMagick, magickPadImageBytes, magickRemoveImagePadding } from '../agent/image-magick.js';
 import { rasterPadImageBytes, rasterRemoveImagePadding } from '../agent/image-raster.js';
-import { acceptsResponseFormat, backgroundValue, encodeMultipart, generationBody, imageFormatField, imageModelProfile, imageRequestSize, imageSizeAttempts, imageSizeFields, readImageSize, imageComplexityValue, imageSources, isImageSizeError, isVectorModel, needsDiv16Padding, normalizeVectorRatio, resolveImageFormat, withSizeHint } from './images.js';
+import { acceptsResponseFormat, backgroundValue, encodeMultipart, generationBody, imageFormatField, imageModelProfile, imageRequestSize, imageSizeAttempts, imageSizeFields, readImageSize, imageComplexityValue, imageSources, isImageSizeError, isVectorModel, needsDiv16Padding, normalizeVectorRatio, parseImageSize, resolveImageFormat, withSizeHint } from './images.js';
+import { rasterFitToSourceFrame } from '../agent/image-raster.js';
 
 export { ApiError };
 
@@ -680,6 +681,30 @@ export function createClient({
         /** Whether this host is served by the chat transport. */
         get isFallback() { return chatOnly; },
     };
+    /**
+     * Downscale each payload to the pixel frame the caller asked for. A model's own pipeline (or a
+     * gateway that padded the input to a minimum) can hand back a frame larger than requested; the
+     * whole picture is then resampled back to the target using cover + center-crop so the caller
+     * gets the exact frame it named, without distortion. When the aspect ratio mismatch is
+     * significant (more than 1/16 of either side) the function falls back to `inside` so no
+     * content is destroyed. Only a literal WIDTHxHEIGHT target is honored — a tier or ratio token
+     * leaves the reply as is. A reply already at or under the target is untouched.
+     * @param {string[]} payloads base64 image payloads
+     * @param {string|null|undefined} target the requested size token
+     * @returns {Promise<string[]>}
+     * @ai.hint io
+     */
+    async function fitPayloadsToFrame(payloads, target) {
+        const frame = parseImageSize(String(target ?? '').trim());
+        if (!frame) return payloads;
+        return Promise.all(payloads.map(async (payload) => {
+            const bytes = Buffer.from(payload, 'base64');
+            const got = readImageSize(bytes);
+            if (!got || (got.width <= frame.width && got.height <= frame.height)) return payload;
+            const resized = await rasterFitToSourceFrame({ bytes, width: frame.width, height: frame.height, engine: rasterEngine }).catch(() => null);
+            return resized ? resized.toString('base64') : payload;
+        }));
+    }
     const images = {
          /** POST /images/generations. Returns base64 payloads from data[].b64_json or data[].url. */
         async generate({ model, prompt, size, complexity, n, format, background, references, resolution, signal } = {}) {
@@ -696,7 +721,7 @@ export function createClient({
                     if (index >= attempts.length - 1 || !isImageSizeError(error)) throw error;
                 }
             }
-            return await payloadList(result, signal, 'images/generations');
+            return await fitPayloadsToFrame(await payloadList(result, signal, 'images/generations'), size);
         },
         /** POST /images/edits as multipart form data. `files` are { filename, mime, bytes }. */
         async edit({ model, prompt, files, size, format, background, complexity, resolution, signal } = {}) {
@@ -727,8 +752,7 @@ export function createClient({
                         frame.engine = 'magick';
                         frame.exe = exe;
                     }
-                    prepared.push({
-                        file: frame.padded ? { ...file, filename: `${path.parse(file.filename || 'image.png').name}.png`, mime: 'image/png', bytes: frame.bytes } : file,
+                    prepared.push({                        file: frame.padded ? { ...file, filename: `${path.parse(file.filename || 'image.png').name}.png`, mime: 'image/png', bytes: frame.bytes } : file,
                         frame,
                     });
                 }
@@ -785,14 +809,21 @@ export function createClient({
                 }
             }
             const payloads = await payloadList(result, signal, 'images/edits');
-            if (!padding) return payloads;
-            return Promise.all(payloads.map(async (payload) => {
+            if (!padding) return fitPayloadsToFrame(payloads, size);
+            const restored = await Promise.all(payloads.map(async (payload) => {
                 const bytes = Buffer.from(payload, 'base64');
-                const restored = padding.engine === 'magick'
+                const cut = padding.engine === 'magick'
                     ? await magickRemoveImagePadding({ ...padding, bytes, signal })
                     : await rasterRemoveImagePadding({ ...padding, bytes, engine: padding.engine });
-                return restored.toString('base64');
+                return cut.toString('base64');
             }));
+            // The padded frame was the wire size; the picture belongs at the source frame. When the
+            // model handed back a frame the padding cut could not match (it grew the canvas), the
+            // whole reply is downscaled to the original box so the edit keeps the input's own size.
+            const target = parseImageSize(String(size ?? '').trim())
+                ? size
+                : `${padding.originalWidth}x${padding.originalHeight}`;
+            return fitPayloadsToFrame(restored, target);
         },
         /**
          * Vectorize one raster into SVG with a vector model. The source goes through the edit

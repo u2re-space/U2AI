@@ -851,6 +851,81 @@ export async function rasterCrop({ input, output, x = 0, y = 0, width, height, c
 }
 
 /**
+ * Cover the target frame from the reply's pixels and center-crop the 16-grid rounding
+ * residual. This is the correction for a model that returns a larger frame than requested
+ * (its own pipeline upscales and rounds to a 16-pixel grid): the entire picture is scaled
+ * uniformly so the target box is covered, and the small remainder is cropped from the
+ * centre. When the reply's aspect already matches the target the crop is zero.
+ * When the aspect mismatch is too large (more than 1/16 of either side) the function falls
+ * back to `inside` so no content is destroyed.
+ * @param {{ bytes: Buffer, width: number, height: number, engine?: 'auto'|'sharp'|'canvas'|'magick' }} options
+ * @returns {Promise<Buffer|null>} the rescaled PNG, or null when no engine is available
+ * @exports
+ * @ai.hint io
+ */
+export async function rasterFitToSourceFrame({ bytes, width, height, engine = 'auto' }) {
+    const active = await getEngine(engine);
+    if (!active) return null;
+    if (active.name === 'sharp') {
+        const info = await active.lib(bytes).metadata();
+        if (!info.width || !info.height) return null;
+        // Cover scale: max of per-side ratios.  Compute the crop fraction so we can fall back
+        // to inside when the two frames differ in aspect beyond a small rounding residual.
+        const scale = Math.max(width / info.width, height / info.height);
+        const cropX = (info.width * scale - width) / (info.width * scale);
+        const cropY = (info.height * scale - height) / (info.height * scale);
+        const badCrop = cropX > 1 / 16 || cropY > 1 / 16;
+        return await active.lib(bytes).rotate()
+            .resize(width, height, badCrop
+                ? { fit: 'inside', kernel: 'lanczos3' }
+                : { fit: 'cover', position: 'centre', kernel: 'lanczos3' })
+            .png().toBuffer();
+    }
+    const source = await decodeRgba(bytes, active.name);
+    if (!source.width || !source.height) return null;
+    const scale = Math.max(width / source.width, height / source.height);
+    const scaledW = Math.round(source.width * scale);
+    const scaledH = Math.round(source.height * scale);
+    const cropX = (scaledW - width) / scaledW;
+    const cropY = (scaledH - height) / scaledH;
+    const badCrop = cropX > 1 / 16 || cropY > 1 / 16;
+    if (badCrop) {
+        const s = Math.min(width / source.width, height / source.height);
+        const outW = Math.max(1, Math.round(source.width * s));
+        const outH = Math.max(1, Math.round(source.height * s));
+        const out = { width: outW, height: outH, channels: 4, data: Buffer.alloc(outW * outH * 4) };
+        for (let row = 0; row < outH; row++) {
+            const srcRow = Math.min(source.height - 1, Math.floor(row / s));
+            for (let col = 0; col < outW; col++) {
+                const srcCol = Math.min(source.width - 1, Math.floor(col / s));
+                const from = (srcRow * source.width + srcCol) * 4;
+                const to = (row * outW + col) * 4;
+                out.data[to] = source.data[from];
+                out.data[to + 1] = source.data[from + 1];
+                out.data[to + 2] = source.data[from + 2];
+                out.data[to + 3] = source.data[from + 3];
+            }
+        }
+        return await encodePng(out, active.name);
+    }
+    // Cover + center-crop via canvas drawImage.
+    const offsetX = Math.round((width - scaledW) / 2);
+    const offsetY = Math.round((height - scaledH) / 2);
+    const surface = active.lib.createCanvas(width, height);
+    const ctx = surface.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    const srcSurface = active.lib.createCanvas(source.width, source.height);
+    const srcCtx = srcSurface.getContext('2d');
+    const srcImage = srcCtx.createImageData(source.width, source.height);
+    srcImage.data.set(source.data);
+    srcCtx.putImageData(srcImage, 0, 0);
+    ctx.drawImage(srcSurface, offsetX, offsetY, scaledW, scaledH);
+    const image = ctx.getImageData(0, 0, width, height);
+    return await encodePng({ width, height, channels: 4, data: Buffer.from(image.data.buffer, image.data.byteOffset, image.data.length) }, active.name);
+}
+
+/**
  * Cut uniform or transparent padding off all four edges.
  * @param {{ input: string, output?: string, cwd: string, signal?: AbortSignal, fuzz?: number|null }} options
  * @returns {Promise<{ changed: boolean, reason: string, before?: {width:number,height:number}, after?: {width:number,height:number} }>}

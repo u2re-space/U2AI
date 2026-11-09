@@ -12,6 +12,7 @@ import {
     rasterCrop,
     rasterDetectFakeTransparency,
     rasterEngine,
+    rasterFitToSourceFrame,
     rasterInfo,
     rasterIsOpaque,
     rasterPadImageBytes,
@@ -153,6 +154,47 @@ test('divide-16 padding is transparent, does not scale pixels, and restores the 
         assert.deepEqual([...(await rasterInfo('restored.png', { cwd: root })).width ? [19, 17] : []], [19, 17]);
         assert.deepEqual(await pixel(path.join(root, 'restored.png'), 18, 16), [204, 34, 34, 255]);
         assert.equal(padded.engine, 'sharp');
+    } finally {
+        await rm(root, { recursive: true, force: true });
+    }
+});
+
+test('a grown reply is fitted to the source frame by uniform scale plus a residual crop', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'ai-raster-fit-'));
+    try {
+        // A 1512×912 reply over a 1000×600 target: the shapes differ only by the 16-grid rounding,
+        // so the whole picture is scaled down and just the leftover strip is cropped away.
+        const grown = await png(1512, 912, (ctx) => {
+            ctx.fillStyle = '#cc2222';
+            ctx.fillRect(0, 0, 1512, 912);
+            ctx.fillStyle = '#22cc22';
+            ctx.fillRect(378, 228, 756, 456);
+        });
+        const fitted = await rasterFitToSourceFrame({ bytes: grown, width: 1000, height: 600, engine: 'sharp' });
+        await writeFile(path.join(root, 'fitted.png'), fitted);
+        const info = await rasterInfo('fitted.png', { cwd: root, engine: 'sharp' });
+        assert.deepEqual([info.width, info.height], [1000, 600]);
+        // The inner block stays centered and keeps its proportions — nothing was stretched.
+        assert.deepEqual(await pixel(path.join(root, 'fitted.png'), 500, 300), [34, 204, 34, 255]);
+        assert.deepEqual(await pixel(path.join(root, 'fitted.png'), 20, 20), [204, 34, 34, 255]);
+    } finally {
+        await rm(root, { recursive: true, force: true });
+    }
+});
+
+test('a reply whose shape cannot be covered without losing content is fitted inside instead', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'ai-raster-fit-inside-'));
+    try {
+        // A square reply against a wide target: covering would cut 70% of the picture, so the whole
+        // square is kept and the frame is left short instead of mangled.
+        const square = await png(960, 960, (ctx) => {
+            ctx.fillStyle = '#cc2222';
+            ctx.fillRect(0, 0, 960, 960);
+        });
+        const fitted = await rasterFitToSourceFrame({ bytes: square, width: 1000, height: 300, engine: 'sharp' });
+        await writeFile(path.join(root, 'fitted.png'), fitted);
+        const info = await rasterInfo('fitted.png', { cwd: root, engine: 'sharp' });
+        assert.deepEqual([info.width, info.height], [300, 300]);
     } finally {
         await rm(root, { recursive: true, force: true });
     }

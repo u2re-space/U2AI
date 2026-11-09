@@ -234,7 +234,7 @@ context=false запускает роль на чистом контексте. 
    padding обрезается. \u0060always\u0060 включает для всех моделей с frame floor, \u0060never\u0060 отключает.
   PNG с настоящей альфой сохраняется; если нужен WebP, используйте локальную конверсию, а не повторную генерацию.
   Инструмент vectorize_image конвертирует плоские PNG/WebP (логотипы, бейджи, иконки) в SVG через
-  recraft/recraft-v4.1-pro-vector: удаляет фон, проверяет палитру, сохраняет .svg вместо .png.
+  gpt-image-2.6-sunburst: удаляет фон, проверяет палитру, сохраняет .svg вместо .png.
 
 Дополнение кода (complete):
   JSON: content и/или prefix+suffix, cursor или selection (line/character с нуля, как в LSP), либо символ | в тексте.

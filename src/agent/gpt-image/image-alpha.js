@@ -20,7 +20,7 @@ export { ALPHA_MASK_PROMPT, BACKGROUND_PAINT_PROMPT } from '../shared/constants.
 import { readFile, writeFile, unlink } from 'node:fs/promises';
 import { detectMagick, ensureTransparentBackground, magickApplyAlphaMask, magickContourAlphaMask, magickDetectFakeTransparency, magickIdentify, magickIsOpaque, magickSaturationAlphaMask } from '../shared/image-magick.js';
 import { rasterApplyAlphaMask, rasterDetectFakeTransparency, rasterEngine, rasterInfo, rasterIsOpaque, rasterLocalAlphaMatte } from '../shared/image-raster.js';
-import { isVectorModel, PROXY_IMAGE_EDIT_MODEL, sniffImage } from '../../openai/images.js';
+import { sniffImage } from '../../openai/images.js';
 import { hasRealAlpha as hasUsableAlpha } from '../riverflow/image-alpha.js';
 import { frameFor, localKeyAlpha, maskPassModel } from '../shared/image-alpha.js';
 

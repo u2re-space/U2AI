@@ -714,7 +714,7 @@ export function createClient({
         },
         /** POST /images/edits as multipart form data. `files` are { filename, mime, bytes }. */
         async edit({ model, prompt, files, size, format, background, complexity, resolution, signal } = {}) {
-            const vector = isVectorModel(model);
+            const vector = isVectorModel(model) && (format == "svg" || model?.includes?.("-vector"));
             let requestFiles = files;
             let padding = null;
             let requestedFrame = size;
@@ -769,7 +769,7 @@ export function createClient({
             for (let index = 0; ; index++) {
                 const attemptSize = index < attempts.length ? attempts[index] : requestedFrame;
                 const fields = { model, prompt };
-                if (isVectorModel(model)) {
+                if (isVectorModel(model) && (format == "svg" || model?.includes?.("-vector"))) {
                     const aspect = normalizeVectorRatio(attemptSize);
                     if (aspect) fields.aspect_ratio = aspect;
                     //if (acceptsResponseFormat(model)) fields.response_format = 'b64_json';

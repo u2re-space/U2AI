@@ -96,7 +96,7 @@ async function askModel({ client, config = null, file, prompt, signal, model = n
     const info = raster
         ? await rasterInfo(abs, { cwd: path.dirname(abs), engine }).catch(() => null)
         : exe ? await magickIdentify({ exe, input: abs, cwd: path.dirname(abs), signal }).catch(() => null) : null;
-    const configured = config?.imageModel && !isVectorModel(config.imageModel) ? config.imageModel : null;
+    const configured = config?.imageModel && !(isVectorModel(config.imageModel) && !config.imageModel?.includes?.("gpt-image-2.6")) ? config.imageModel : null;
     const techModel = model || config?.image?.maskModel || configured || PROXY_IMAGE_EDIT_MODEL;
     try {
         const payloads = await client.images.edit({

@@ -31,7 +31,7 @@ export { RATIO_MAX_TERM, RATIO_CEIL_EPSILON, RATIO_WORDS, STANDARD_RATIOS,
 
 /** True when the model id names a vector (SVG) variant. */
 export function isVectorModel(model) {
-    return /(?:^|[-/])vector\b/i.test(String(model ?? '').trim());
+    return /(?:^|[-/])vector\b/i.test(String(model ?? '').trim()) || model?.endsWith?.("gpt-image-2.6-sunburst") || model?.endsWith?.("gpt-image-2.6-flare");
 }
 
 
@@ -839,7 +839,7 @@ export function generationBody({ model, prompt, size = null, complexity = null, 
     if (Array.isArray(references) && references.length) {
         body.input_references = references.map((url) => ({ type: 'image_url', image_url: { url } }));
     }
-    if (isVectorModel(model)) {
+    if (isVectorModel(model) && (format == "svg" || model?.includes?.("-vector"))) {
         const aspect = normalizeVectorRatio(size);
         if (aspect) body.aspect_ratio = aspect;
         if (Number.isInteger(n) && n > 1) body.n = n;

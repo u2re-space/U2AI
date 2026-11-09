@@ -17,6 +17,7 @@ export const PROXY_IMAGE_EDIT_MODEL = 'openai/gpt-image-2.6-sunburst';
 
 /** Default ProxyAPI vector (SVG) model. See https://proxyapi.ru/models/recraft/recraft-v4.1-pro-vector */
 export const PROXY_VECTOR_MODEL = 'recraft/recraft-v4.1-pro-vector';
+//export const PROXY_VECTOR_MODEL = 'openai/gpt-image-2.6-sunburst';
 
 /**
  * Riverflow V2.6 Pro (Flux-based, https://proxyapi.ru/models/sourceful/riverflow-v2.6-pro). It is

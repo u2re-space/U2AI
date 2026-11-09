@@ -15,7 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { readFile, mkdir } from 'node:fs/promises';
 import { deepMerge, isRecord } from '../util/text.js';
-import { parseAspectToken } from '../openai/shared/aspect-ratio.js';
+import { parseAspectToken } from '../shared/aspect-ratio.js';
 import { PLATFORMS } from '../generate/platform.js';
 import { normalizeMcpServer } from '../mcp/servers.js';
 import { PRESET_NAMES } from '../channels/questions.js';

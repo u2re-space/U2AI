@@ -10,22 +10,12 @@
  * @changed 2026-11-04 reasoning.mode (gateway reasoning modes, off by default).
  */
 import { MODEL_FALLBACKS } from '../openai/model-map.js';
-import { CONTEXT_LEVELS } from '../openai/model-profiles.js';
-const KiB = 1024;
-const MiB = KiB * KiB;
-
-export const REASONING_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
-export const REASONING_SUMMARIES = ['auto', 'concise', 'detailed', 'none'];
-/**
- * Extra reasoning modes a gateway may serve next to `effort`. `off` sends no `reasoning.mode` field
- * at all, so a host that has never heard of modes sees the same request as before. Unlike effort,
- * modes are not ordered: there is no ceiling or ladder, only whether a model lists the mode.
- */
-export const REASONING_MODES = ['off', 'pro'];
-export const APPROVAL_LEVELS = ['ask', 'read', 'write', 'all'];
-export const IMAGE_DETAILS = ['auto', 'low', 'high', 'original'];
-/** Word levels of a context budget, plus `auto`, which follows the window of the model in use. */
-export const CONTEXT_LEVEL_NAMES = Object.freeze([...Object.keys(CONTEXT_LEVELS), 'auto']);
+import {
+    KiB, MiB,
+    REASONING_EFFORTS, REASONING_SUMMARIES, REASONING_MODES,
+    APPROVAL_LEVELS, IMAGE_DETAILS, CONTEXT_LEVEL_NAMES,
+} from '../shared/constants.js';
+export { REASONING_EFFORTS, REASONING_SUMMARIES, REASONING_MODES, APPROVAL_LEVELS, IMAGE_DETAILS, CONTEXT_LEVEL_NAMES };
 
 /**
  * Base fields of one role entry in `roles`. A helper rather than a literal per role, so a new

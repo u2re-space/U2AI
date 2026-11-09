@@ -7,14 +7,14 @@ import { createCanvas } from 'canvas';
 import {
     dominantColorHex,
     dominantColors,
-    dominantSubjectColorHex,
     dominantSubjectColors,
-    backgroundColor,
+    dominantSubjectColorHex,
+    toHex,
     frameFromFile,
     kmeansPalette,
-    samplePixels,
-    toHex,
-} from '../src/quantizer/kmeans.js';
+    backgroundColor,
+    samplePixels
+} from '../src/shared/kmeans.js';
 import {
     decodeRgba,
     rasterAlphaShare,

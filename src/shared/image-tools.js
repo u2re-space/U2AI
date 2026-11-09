@@ -16,14 +16,14 @@
 
 import path from 'node:path';
 import { mkdir, readFile, writeFile, stat, unlink, readdir } from 'node:fs/promises';
-import { resolveInside } from '../paths.js';
+import { resolveInside } from '../agent/paths.js';
 import { detectMagick, magickConvert, magickIsOpaque, magickRemoveFlatBackground, assessVectorSuitability, magickTrimImage } from './image-magick.js';
 // The family dispatcher, not the shared pipeline: riverflow and gpt-image cut alpha differently,
 // and the tool has to pick the one that matches the model that drew the picture.
-import { applyGeneratedAlphaMask, hasRealAlpha as sharedHasRealAlpha } from '../image-alpha.js';
-import { imageModelFor, imageModelProfile, pngHasAlphaChannel, sniffImage, supportsTransparentBackground, PROXY_VECTOR_MODEL, imageRequestSize, readImageSize, resolvePurposeModel } from '../../openai/images.js';
+import { applyGeneratedAlphaMask, hasRealAlpha as sharedHasRealAlpha } from './image-alpha.js';
+import { imageModelFor, imageModelProfile, pngHasAlphaChannel, sniffImage, supportsTransparentBackground, PROXY_VECTOR_MODEL, imageRequestSize, readImageSize, resolvePurposeModel } from './images.js';
 import { rasterEngine } from './image-raster.js';
-import { formatBytes } from '../../util/text.js';
+import { formatBytes } from '../util/text.js';
 import { CUT_OUT, DEFAULT_VECTOR_PROMPT, FLAT_PLATE_NOTE, SOURCE_GUARD, VECTOR_HINT, VECTOR_SOURCE_EXT } from './constants.js';
 
 /**

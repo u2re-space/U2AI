@@ -1,16 +1,20 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    EFFORT_ORDER,
-    CONTEXT_LEVELS,
-    DEFAULT_PROFILE,
-    MODEL_PROFILES,
     profileFor,
     effortRank,
     capEffort,
     snapEffort,
     contextBytes,
 } from '../src/openai/model-profiles.js';
+import {
+    EFFORT_ORDER,
+    CONTEXT_LEVELS,
+} from '../src/shared/constants.js';
+import {
+    DEFAULT_PROFILE,
+    MODEL_PROFILES,
+} from '../src/shared/model-profiles.js';
 
 // ── Constants ──────────────────────────────────────────────────────────────
 

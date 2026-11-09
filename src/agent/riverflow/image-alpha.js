@@ -15,7 +15,7 @@ import { readFile, writeFile, unlink } from 'node:fs/promises';
 import { detectMagick, ensureTransparentBackground, magickApplyAlphaMask, magickIdentify, magickIsOpaque } from '../shared/image-magick.js';
 import { rasterApplyAlphaMask, rasterEngine, rasterInfo, rasterIsOpaque } from '../shared/image-raster.js';
 import { PROXY_IMAGE_EDIT_MODEL } from '../../openai/images.js';
-import { dominantSubjectColorFromFile } from '../../quantizer/kmeans.js';
+import { dominantSubjectColorFromFile } from '../shared/kmeans.js';
 import { frameFor, judgeAlphaShares, askModel, isRaster, isFakePlate, localMatte, localKeyAlpha, flatAlphaFallback, maskPassModel } from '../shared/image-alpha.js';
 
 /**

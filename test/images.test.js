@@ -7,7 +7,7 @@ import path from 'node:path';
 import { createCanvas } from 'canvas';
 import { createClient } from '../src/openai/client.js';
 import { TINY_PNG } from './helpers/mock-server.js';
-import { rasterInfo, rasterIsOpaque, rasterPadImageBytes } from '../src/agent/image-raster.js';
+import { rasterInfo, rasterIsOpaque, rasterPadImageBytes } from '../src/shared/image-raster.js';
 import { runProgram } from '../src/agent/shell.js';
 import { imageModelFamily as sharedImageModelFamily, IMAGE_SIZES as SHARED_IMAGE_SIZES, VECTOR_RATIOS as SHARED_VECTOR_RATIOS } from '../src/openai/shared/images.js';
 import { imageModelProfile as agentImageModelProfile, imageSizeAttempts as agentImageSizeAttempts } from '../src/agent/riverflow/images.js';

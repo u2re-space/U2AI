@@ -1,65 +1,8 @@
-/**
- * @file src/openai/model-profiles.js
- * @module openai/model-profiles
- * @purpose Model metadata registry: context window, max output, supported reasoning levels, and the effort ceiling.
- * @usedBy core/config, agent/loop, agent/pace, roles/*
- * @exports EFFORT_ORDER, CONTEXT_LEVELS, DEFAULT_PROFILE, MODEL_PROFILES, profileFor, effortRank, capEffort, snapEffort, modeFor, contextBytes
- * @ai.tags models, profiles, effort, context
- * @ai.hint pure
- * @changed 2026-10-26 Registry for 0.2.0: every model declares its window, output cap, effort ladder and ceiling.
- * @changed 2026-11-04 Gateway reasoning modes (`modes`, modeFor).
- */
+import { QUALIFIED_PREFIXES, EFFORT_ORDER, CONTEXT_LEVELS } from '../shared/constants.js';
+import { MODEL_PROFILES, DEFAULT_PROFILE } from '../shared/model-profiles.js';
 
-/**
- * Reasoning levels from the cheapest to the dearest. The index is the rank used in comparisons.
- * Includes 'none', which the pace ladder leaves out, so a ceiling may name any level.
- */
-export const EFFORT_ORDER = Object.freeze(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
-
-/**
- * Word levels of a context budget, in bytes. `auto` is absent on purpose: it resolves from the model window.
- */
-export const CONTEXT_LEVELS = Object.freeze({
-    small: 16 * 1024,
-    normal: 96 * 1024,
-    large: 512 * 1024,
-    max: 8 * 1024 * 1024,
-});
-
-/**
- * Profile of a model the registry does not list. No ceiling and no ladder, so nothing is restricted.
- */
-export const DEFAULT_PROFILE = Object.freeze({ window: 128 * 1024, maxOutput: 16384, ceiling: null, efforts: null, modes: null });
-
-/**
- * Known models.
- * `window`    — context window in bytes; the `auto` context level and the model choice both read it.
- * `maxOutput` — largest `max_output_tokens` the model accepts; decides how much of a task fits one call.
- * `ceiling`   — hardest stop for reasoning effort: a request above it is lowered to it. Null means no stop.
- * `efforts`   — the ladder this model is configured to tear across. Null means the whole ladder down to the ceiling.
- *               A request snaps to the nearest level of the set, preferring the one below it.
- * `modes`     — gateway reasoning modes this model receives (`reasoning.mode`). Null means the
- *               configuration is sent as asked; an empty array keeps the field away from the model.
- * Override any field for one installation in the `models.<id>` section of the configuration.
- */
-export const MODEL_PROFILES = Object.freeze({
-    'gpt-6.1-sol': { window: 256 * 1024, maxOutput: 32768, ceiling: 'xhigh', efforts: null, modes: null },
-    'gpt-6.1-terra': { window: 256 * 1024, maxOutput: 32768, ceiling: 'max', efforts: null, modes: null },
-    'gpt-6-luna': { window: 256 * 1024, maxOutput: 16384, ceiling: 'max', efforts: null, modes: null },
-    'gpt-6-astra': { window: 200 * 1024, maxOutput: 32768, ceiling: 'xhigh', efforts: null, modes: null },
-    'gpt-6-luna-decisions': { window: 128 * 1024, maxOutput: 256, ceiling: null, efforts: null, modes: [] },
-    
-    'openai/gpt-6.1-sol': { window: 256 * 1024, maxOutput: 32768, ceiling: 'xhigh', efforts: null, modes: null },
-    'openai/gpt-6.1-terra': { window: 256 * 1024, maxOutput: 32768, ceiling: 'max', efforts: null, modes: null },
-    'openai/gpt-6-luna': { window: 256 * 1024, maxOutput: 16384, ceiling: 'max', efforts: null, modes: null },
-    'openai/gpt-6-astra': { window: 200 * 1024, maxOutput: 32768, ceiling: 'xhigh', efforts: null, modes: null },
-    'openai/gpt-6-luna-decisions': { window: 128 * 1024, maxOutput: 256, ceiling: null, efforts: null, modes: [] },
-
-    'moonshotai/kimi-k3.1-pro': { window: 256 * 1024, maxOutput: 32768, ceiling: 'max', efforts: null, modes: null },
-});
-
-/** Vendor prefixes, so a qualified id resolves to the same profile as the bare one. */
-const QUALIFIED_PREFIXES = Object.freeze(['openai/', 'anthropic/', 'moonshotai/']);
+// The registries live in src/shared; they are re-exported here so the openai layer keeps one entry point.
+export { EFFORT_ORDER, CONTEXT_LEVELS, MODEL_PROFILES, DEFAULT_PROFILE };
 
 /**
  * Strip a known vendor prefix: `openai/gpt-6.1-sol` finds the `gpt-6.1-sol` profile.

@@ -8,7 +8,7 @@
  */
 
 import { readFile } from 'node:fs/promises';
-import { decodeRgba } from '../agent/shared/image-raster.js';
+import { decodeRgba } from './image-raster.js';
 
 // ---------------------------------------------------------------------------
 // Seeded PRNG (Mulberry32) — deterministic k-means++ initialisation.

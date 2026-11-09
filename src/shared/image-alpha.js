@@ -21,8 +21,8 @@ import { readFile, writeFile, unlink } from 'node:fs/promises';
 import { ALPHA_MASK_PROMPT, BACKGROUND_PAINT_PROMPT, MASK_EXT, MAX_SOFT_SHARE, MIN_CLEARED_SHARE, MIN_SOFT_PIXELS, MODEL_MATES, RGB_SOURCE_EXT } from './constants.js';
 import { detectMagick, ensureTransparentBackground, magickAlphaShare, magickAlphaSoftShare, magickApplyAlphaMask, magickContourAlphaMask, magickDetectFakeTransparency, magickIdentify, magickIsOpaque, magickSaturationAlphaMask } from './image-magick.js';
 import { rasterAlphaShare, rasterAlphaSoftShare, rasterApplyAlphaMask, rasterColorKeyAlpha, rasterDetectFakeTransparency, rasterEngine, rasterInfo, rasterIsOpaque, rasterLocalAlphaMatte } from './image-raster.js';
-import { isVectorModel, PROXY_IMAGE_EDIT_MODEL, imageModelProfile, sniffImage, normalizeImageSize } from '../../openai/images.js';
-import { backgroundColor, frameFromFile } from '../../quantizer/kmeans.js';
+import { isVectorModel, PROXY_IMAGE_EDIT_MODEL, imageModelProfile, sniffImage, normalizeImageSize } from './images.js';
+import { backgroundColor, frameFromFile } from './kmeans.js';
 
 /**
  * Cut a flat background locally, by the color the frame is resting on, with no model call at all.

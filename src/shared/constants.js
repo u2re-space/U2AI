@@ -1,6 +1,7 @@
 
 
 import { STANDARD_RATIOS, aspectFrame } from './aspect-ratio.js';
+import { IMAGE_CAPABILITIES, IMAGE_MODEL_PROFILES } from './model-profiles.js';
 
 /** Names that choose a common frame instead of a literal WIDTHxHEIGHT. */
 export const NAMED_FRAMES = { square: 1, landscape: 16 / 10, portrait: 10 / 16 };
@@ -141,83 +142,6 @@ export const HEADER_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
  */
 export const RESERVED_BODY = new Set(['model', 'input', 'messages', 'instructions', 'stream', 'tools', 'tool_choice',
     'parallel_tool_calls', 'previous_response_id', 'store', 'background', 'include']);
-
-    
-/** OpenAI gpt-image-2.5 family (sunburst, flare, …). */
-export const GPT_IMAGE_25 = /^(?:openai\/)?gpt-image-2\.5(?:-|$)/i;
-export const GPT_IMAGE_26 = /^(?:openai\/)?gpt-image-2\.6(?:-|$)/i;
-/** ByteDance Seedream 5.5 family — accepts free WIDTHxHEIGHT, padded to 16px. */
-export const SEEDREAM_5_5 = /seedream[-_.]5[-_.]5/i;
-/** Sourceful Riverflow family — a Flux-based id such as sourceful/riverflow-v2.6-pro. */
-export const RIVERFLOW = /(?:^|\/)riverflow-/i;
-
-/** Default ProxyAPI text-to-image model when imageModel is unset. See https://proxyapi.ru/models/browse/image */
-export const PROXY_IMAGE_MODEL = 'openai/gpt-image-2.6-sunburst';
-
-/**
- * Default ProxyAPI model for edits and image-conditioned generation. Same gpt-image-2.5 family as
- * the generation default; both ids accept a source image and are interchangeable through --image-model.
- */
-export const PROXY_IMAGE_EDIT_MODEL = 'openai/gpt-image-2.6-sunburst';
-
-/** Default ProxyAPI vector (SVG) model. See https://proxyapi.ru/models/recraft/recraft-v4.1-pro-vector */
-export const PROXY_VECTOR_MODEL = 'recraft/recraft-v4.1-pro-vector';
-
-/**
- * Riverflow V2.6 Pro (Flux-based, https://proxyapi.ru/models/sourceful/riverflow-v2.6-pro). It is
- * an opt-in id rather than a default: not every gateway serves it, so `--image-model` or
- * `imageModel` in the config is what selects it.
- */
-export const PROXY_RIVERFLOW_MODEL = 'sourceful/riverflow-v2.6-pro';
-
-/**
- * What an image model is known to accept. A model absent from `IMAGE_MODEL_PROFILES` gets these
- * values, which is the plain `/images/generations` behaviour the vendor presets describe.
- *   `customSizes`             — an arbitrary WIDTHxHEIGHT goes into `size` instead of an IMAGE_SIZES preset;
- *   `div16Padding`            — /images/edits inputs must be padded to a 16-pixel multiple first;
- *   `keepProSuffix`           — the `-pro` suffix survives a small frame (the Recraft tier swap is not for it);
- *   `omitSizeOnReject`        — when the host rejects the frame, retry once with `size` left out entirely;
- *   `complexity`              — complexity tier the model understands (e.g. 'high' for riverflow);
- *   `routeEditsThroughGeneration` — /images/edits drops the size and tuning fields for this
- *                     family; send the source as `input_references` on /images/generations instead.
- *   `minPixels`/`maxPixels`   — the accepted frame area in pixels; a frame outside the range is
- *                     rescaled to the nearest same-ratio size that fits;
- *   `maxEdge`                 — longest side the model accepts;
- *   `maxRatio`                — widest aspect ratio (longest side over shortest).
- * The defaults are the OpenAI gpt-image numbers, which is what a model nobody described gets.
- */
-export const IMAGE_CAPABILITIES = Object.freeze({
-    customSizes: false, div16Padding: false, keepProSuffix: false, omitSizeOnReject: false,
-    complexity: null, routeEditsThroughGeneration: false, resolutionTiers: false,
-    /** The gateway answers `background: transparent` with a painted plate instead of an alpha channel. */
-    paintsFakeTransparency: false,
-    minPixels: 655_360, maxPixels: 8_294_400, maxEdge: 3840, maxRatio: 3,
-});
-
-/**
- * Rules in match order; the first match wins, so a narrow family comes before a broad one.
- * Riverflow keeps its `-pro` suffix at any frame — the suffix is the model, not a size tier — and
- * takes no 16-pixel padding. Its frame support differs between gateways, so a refused frame costs
- * one retry without the field rather than the whole request.
- * Riverflow also supports complexity (`complexity: 'high'`); it accepts
- * aspect ratios via `aspect_ratio` and resolution tiers via `resolution` instead of pixel presets.
- * `routeEditsThroughGeneration` — the multipart /images/edits route silently drops the size,
- * resolution, aspect_ratio, quality and reasoning fields for this family and answers with the
- * gateway default square. The source picture travels as `input_references` on /images/generations
- * instead, where every field is honored.
- * Riverflow takes a far smaller frame than gpt-image (128x128 is already legal) and a much wider
- * ratio, so its limits are spelled out here rather than guessed from the model id.
- * Seedream 5.5 (`bytedance-seed/seedream-5-5`) draws free frames on a 16-pixel grid like
- * gpt-image-2.6, but its floor is a megapixel-class canvas — 960x960 (921 600 px) is the smallest
- * frame it answers. The model does the upscaling itself and keeps the subject's own aspect ratio,
- * so a small source is sent as is and only the reply is brought back down to the requested frame.
- */
-export const IMAGE_MODEL_PROFILES = Object.freeze([
-    Object.freeze({ match: GPT_IMAGE_26, customSizes: true, div16Padding: true, complexity: 'high', minPixels: 655_360, maxPixels: 8_294_400, maxEdge: 3840, maxRatio: 3 }),
-    Object.freeze({ match: SEEDREAM_5_5, customSizes: true, div16Padding: true, keepProSuffix: true, complexity: 'high', minPixels: 921_600, maxPixels: 8_294_400, maxEdge: 3840, maxRatio: 3 }),
-    Object.freeze({ match: GPT_IMAGE_25, customSizes: true, div16Padding: true }),
-    Object.freeze({ match: RIVERFLOW, customSizes: true, keepProSuffix: true, omitSizeOnReject: true, complexity: 'high', routeEditsThroughGeneration: true, resolutionTiers: true, paintsFakeTransparency: true, minPixels: 16_384, maxPixels: 16_777_216, maxEdge: 4096, maxRatio: 16 }),
-]);
 
 /**
  * Capabilities of one image model id, merged over the defaults.
@@ -463,3 +387,51 @@ function tierCatalogue(key) {
 export const IMAGE_SIZES_BY_RESOLUTION = Object.freeze(Object.fromEntries(
     Object.keys(IMAGE_TIER_LIMITS).map((key) => [key, tierCatalogue(key)]),
 ));
+
+/**
+ * @file src/openai/model-profiles.js
+ * @module openai/model-profiles
+ * @purpose Model metadata registry: context window, max output, supported reasoning levels, and the effort ceiling.
+ * @usedBy core/config, agent/loop, agent/pace, roles/*
+ * @exports EFFORT_ORDER, CONTEXT_LEVELS, DEFAULT_PROFILE, MODEL_PROFILES, profileFor, effortRank, capEffort, snapEffort, modeFor, contextBytes
+ * @ai.tags models, profiles, effort, context
+ * @ai.hint pure
+ * @changed 2026-10-26 Registry for 0.2.0: every model declares its window, output cap, effort ladder and ceiling.
+ * @changed 2026-11-04 Gateway reasoning modes (`modes`, modeFor).
+ */
+
+/**
+ * Reasoning levels from the cheapest to the dearest. The index is the rank used in comparisons.
+ * Includes 'none', which the pace ladder leaves out, so a ceiling may name any level.
+ */
+export const EFFORT_ORDER = Object.freeze(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+
+/**
+ * Word levels of a context budget, in bytes. `auto` is absent on purpose: it resolves from the model window.
+ */
+export const CONTEXT_LEVELS = Object.freeze({
+    small: 16 * 1024,
+    normal: 96 * 1024,
+    large: 512 * 1024,
+    max: 8 * 1024 * 1024,
+});
+
+
+/** Vendor prefixes, so a qualified id resolves to the same profile as the bare one. */
+export const QUALIFIED_PREFIXES = Object.freeze(['openai/', 'anthropic/', 'moonshotai/']);
+
+export const KiB = 1024;
+export const MiB = KiB * KiB;
+
+export const REASONING_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+export const REASONING_SUMMARIES = ['auto', 'concise', 'detailed', 'none'];
+/**
+ * Extra reasoning modes a gateway may serve next to `effort`. `off` sends no `reasoning.mode` field
+ * at all, so a host that has never heard of modes sees the same request as before. Unlike effort,
+ * modes are not ordered: there is no ceiling or ladder, only whether a model lists the mode.
+ */
+export const REASONING_MODES = ['off', 'pro'];
+export const APPROVAL_LEVELS = ['ask', 'read', 'write', 'all'];
+export const IMAGE_DETAILS = ['auto', 'low', 'high', 'original'];
+/** Word levels of a context budget, plus `auto`, which follows the window of the model in use. */
+export const CONTEXT_LEVEL_NAMES = Object.freeze([...Object.keys(CONTEXT_LEVELS), 'auto']);

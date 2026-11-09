@@ -60,6 +60,7 @@ const OPTIONS = {
     'image-resolution': { type: 'string' },
     'image-complexity': { type: 'string' },
      'image-div16': { type: 'string' },
+     'image-pad-to-min': { type: 'string' },
     'image-size-hint': { type: 'string' },
     partials: { type: 'string' }, 'image-model': { type: 'string' }, count: { type: 'string', short: 'n' }, schema: { type: 'string' },
     follow: { type: 'boolean', default: false }, help: { type: 'boolean', short: 'h', default: false }, version: { type: 'boolean', short: 'V', default: false },

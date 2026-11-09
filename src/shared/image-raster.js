@@ -998,20 +998,23 @@ export async function rasterSplit({ input, outputDir, rows, cols, cwd, signal, b
 
 /**
  * Pad an image with transparent pixels on the right and bottom edges until both sides are multiples
- * of 16, without scaling. Providers that reject other sizes get a valid frame and the original box is
- * restored from the returned padding.
- * @param {{ bytes: Buffer, engine?: 'auto'|'sharp'|'canvas'|'magick' }} options
+ * of 16, without scaling the source pixels. Providers that reject other sizes get a valid frame and
+ * the original box is restored from the returned padding.
+ * `targetWidth`/`targetHeight` raise that floor to a frame the model requires — the smallest canvas
+ * a megapixel-class model accepts, for instance. The source pixels stay put in the top-left corner,
+ * only empty space is added, so the same restore cuts the padding back off the reply.
+ * @param {{ bytes: Buffer, engine?: 'auto'|'sharp'|'canvas'|'magick', targetWidth?: number|null, targetHeight?: number|null }} options
  * @returns {Promise<{ bytes: Buffer, width: number, height: number, originalWidth: number, originalHeight: number, padded: boolean, engine: string }|null>}
  * @exports
  * @ai.hint io
  */
-export async function rasterPadImageBytes({ bytes, engine = 'auto' }) {
+export async function rasterPadImageBytes({ bytes, engine = 'auto', targetWidth = null, targetHeight = null }) {
     const active = await getEngine(engine);
     if (!active) return null;
     const info = await rasterInfoFromBytes(bytes, active);
     if (!info.width || !info.height) throw new Error('Не удалось определить размеры входного изображения.');
-    const width = Math.ceil(info.width / 16) * 16;
-    const height = Math.ceil(info.height / 16) * 16;
+    const width = Math.max(Math.ceil(info.width / 16) * 16, Math.ceil(Math.max(1, Number(targetWidth) || 1) / 16) * 16);
+    const height = Math.max(Math.ceil(info.height / 16) * 16, Math.ceil(Math.max(1, Number(targetHeight) || 1) / 16) * 16);
     const padded = width !== info.width || height !== info.height;
     const frame = await decodeRgba(bytes, active.name);
     if (!padded) return { bytes, width, height, originalWidth: frame.width, originalHeight: frame.height, padded: false, engine: active.name };

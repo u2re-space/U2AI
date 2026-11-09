@@ -177,6 +177,54 @@ export function needsDiv16Padding(model, setting = 'auto') {
     return imageModelProfile(model).div16Padding;
 }
 
+/**
+ * Whether a source smaller than the model's floor should be padded up to that floor instead of being
+ * sent at its own size for the model to upscale. `auto` follows the model profile; `always` and
+ * `never` are the operator override for a gateway whose behaviour the profile does not describe.
+ * Padding is the fallback path for a model that answers a bigger frame by keeping the object at its
+ * own scale in the corner rather than drawing it larger.
+ * @param {string | null | undefined} model
+ * @param {'auto' | 'always' | 'never' | null | undefined} setting
+ * @returns {boolean}
+ * @exports
+ * @ai.hint pure
+ */
+export function needsMinPixelsPadding(model, setting = 'auto') {
+    if (setting === 'always') return true;
+    if (setting === 'never') return false;
+    return imageModelProfile(model).padToMinPixels;
+}
+
+/**
+ * The frame a source has to sit in for a model whose floor is `minPixels`: both sides grow by the
+ * same factor — so the source ratio survives and the object keeps its own scale — and each side is
+ * rounded up to the 16-pixel grid the model draws on. The empty space is added on the right and at
+ * the bottom, which is where the padding is cut off again after the answer comes back.
+ * Null means nothing to do (the frame already clears the floor) and null also means the padding
+ * would not fit the model limits (edge, ratio, pixel ceiling): the caller keeps the upscale path.
+ * @param {string|{width:number,height:number}|null|undefined} size the source frame
+ * @param {string|null|undefined} model
+ * @returns {{width:number,height:number,originalWidth:number,originalHeight:number}|null}
+ * @exports
+ * @ai.hint pure
+ */
+export function paddedSizeToMinPixels(size, model = null) {
+    const source = typeof size === 'object' && size ? { width: Number(size.width), height: Number(size.height) }
+        : parseImageSize(String(size ?? '').trim().replace(/\s+/g, ''));
+    if (!source || !Number.isSafeInteger(source.width) || !Number.isSafeInteger(source.height)
+        || !source.width || !source.height) return null;
+    const caps = imageModelProfile(model);
+    const area = source.width * source.height;
+    if (!Number.isFinite(caps.minPixels) || caps.minPixels <= 0 || area >= caps.minPixels) return null;
+    const ratio = Math.sqrt(caps.minPixels / area);
+    const width = Math.ceil(source.width * ratio / 16) * 16;
+    const height = Math.ceil(source.height * ratio / 16) * 16;
+    if (Math.max(width, height) > caps.maxEdge
+        || Math.max(width, height) / Math.min(width, height) > caps.maxRatio
+        || width * height > caps.maxPixels) return null;
+    return { width, height, originalWidth: source.width, originalHeight: source.height };
+}
+
 export function parseImageSize(value) {
     const match = /^(\d+)\s*x\s*(\d+)$/.exec(value);
     if (!match) return null;

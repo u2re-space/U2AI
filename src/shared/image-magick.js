@@ -158,8 +158,12 @@ export async function magickIdentify({ exe, input, cwd, signal }) {
     return { width: Number(parts[0]) || 0, height: Number(parts[1]) || 0, format: parts[2] ?? '', bytes: Number(parts[3]) || 0 };
 }
 
-/** Add transparent pixels to the right and bottom without resizing the source pixels. */
-export async function magickPadImageBytes({ exe, bytes, signal }) {
+/**
+ * Add transparent pixels to the right and bottom without resizing the source pixels. `targetWidth`
+ * and `targetHeight` raise the frame above the 16-pixel grid — up to the smallest canvas a model
+ * accepts — and the source still sits in the top-left corner, so the reply is cut back the same way.
+ */
+export async function magickPadImageBytes({ exe, bytes, signal, targetWidth = null, targetHeight = null }) {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-image-pad-'));
     const input = path.join(dir, 'input');
     const output = path.join(dir, 'padded.png');
@@ -167,8 +171,8 @@ export async function magickPadImageBytes({ exe, bytes, signal }) {
         await writeFile(input, bytes);
         const info = await magickIdentify({ exe, input, cwd: dir, signal });
         if (!info.width || !info.height) throw new Error('Не удалось определить размеры входного изображения.');
-        const width = Math.ceil(info.width / 16) * 16;
-        const height = Math.ceil(info.height / 16) * 16;
+        const width = Math.max(Math.ceil(info.width / 16) * 16, Math.ceil(Math.max(1, Number(targetWidth) || 1) / 16) * 16);
+        const height = Math.max(Math.ceil(info.height / 16) * 16, Math.ceil(Math.max(1, Number(targetHeight) || 1) / 16) * 16);
         if (width === info.width && height === info.height) return { bytes, width, height, originalWidth: width, originalHeight: height, padded: false };
         await magickRun(exe, [input, '-background', 'none', '-gravity', 'northwest', '-extent', `${width}x${height}`, output], { cwd: dir, signal });
         return { bytes: await readFile(output), width, height, originalWidth: info.width, originalHeight: info.height, padded: true };

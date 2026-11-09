@@ -11,7 +11,7 @@ import { rasterInfo, rasterIsOpaque, rasterPadImageBytes } from '../src/shared/i
 import { runProgram } from '../src/agent/shell.js';
 import { imageModelFamily as sharedImageModelFamily, IMAGE_SIZES as SHARED_IMAGE_SIZES, VECTOR_RATIOS as SHARED_VECTOR_RATIOS } from '../src/openai/shared/images.js';
 import { imageModelProfile as agentImageModelProfile, imageSizeAttempts as agentImageSizeAttempts } from '../src/agent/riverflow/images.js';
-import { backgroundValue, encodeMultipart, generationBody, imageFormatField, imageModelFamily, imageModelFor, imageModelProfile, imagePayloads, imageComplexityValue, imageRequestSize, imageSizeAttempts, imageSizeFields, imageTransport, normalizeImageFormat, normalizeImageSize, normalizeVectorRatio, sameAspectImageSize, isImageSizeError, isVectorModel, pngHasAlphaChannel, sniffImage, supportsTransparentBackground, PROXY_RIVERFLOW_MODEL, PROXY_VECTOR_MODEL, VECTOR_RATIOS, RIVERFLOW_RATIOS, readImageSize, MIN_IMAGE_PIXELS, MAX_IMAGE_PIXELS, MAX_IMAGE_EDGE, MAX_IMAGE_RATIO, aspectRatioToken, aspectFrame, ceilAspect, nearestAspect, parseAspectToken, rationalAspect, supportedAspectRatios, tierFromToken } from '../src/openai/images.js';
+import { backgroundValue, encodeMultipart, generationBody, imageFormatField, imageModelFamily, imageModelFor, imageModelProfile, imagePayloads, imageComplexityValue, imageRequestSize, imageSizeAttempts, imageSizeFields, imageTransport, normalizeImageFormat, normalizeImageSize, normalizeVectorRatio, sameAspectImageSize, isImageSizeError, isVectorModel, needsMinPixelsPadding, paddedSizeToMinPixels, pngHasAlphaChannel, sniffImage, supportsTransparentBackground, PROXY_RIVERFLOW_MODEL, PROXY_VECTOR_MODEL, VECTOR_RATIOS, RIVERFLOW_RATIOS, readImageSize, MIN_IMAGE_PIXELS, MAX_IMAGE_PIXELS, MAX_IMAGE_EDGE, MAX_IMAGE_RATIO, aspectRatioToken, aspectFrame, ceilAspect, nearestAspect, parseAspectToken, rationalAspect, supportedAspectRatios, tierFromToken } from '../src/openai/images.js';
 import { builtinTools } from '../src/agent/loop.js';
 import { enabledToolNames } from '../src/agent/tool-specs.js';
 import { createToolset } from '../src/agent/tools.js';
@@ -1025,4 +1025,174 @@ test('Seedream 5.5 profile: a megapixel floor, free-frame on the 16px grid', () 
     // No background for seedream (does not support transparent).
     assert.equal(supportsTransparentBackground(SEED), false);
     assert.equal(backgroundValue({ model: SEED, format: 'png', background: 'transparent' }), null);
+});
+
+const SEEDREAM = 'bytedance-seed/seedream-5-5';
+
+test('the model floor becomes a same-ratio padded frame', () => {
+    // Both sides grow by one factor and land on the 16-pixel grid, so the source ratio survives and
+    // the object keeps its own scale: only empty space is added, on the right and at the bottom.
+    assert.deepEqual(paddedSizeToMinPixels('300x400', SEEDREAM), { width: 832, height: 1120, originalWidth: 300, originalHeight: 400 });
+    assert.deepEqual(paddedSizeToMinPixels('500x500', SEEDREAM), { width: 960, height: 960, originalWidth: 500, originalHeight: 500 });
+    assert.ok(832 * 1120 >= MIN_IMAGE_PIXELS(SEEDREAM));
+    // A frame that already clears the floor needs no padding at all.
+    assert.equal(paddedSizeToMinPixels('960x960', SEEDREAM), null);
+    assert.equal(paddedSizeToMinPixels('1024x1024', SEEDREAM), null);
+    // A shape whose padded frame would leave the model limits stays on the upscale path.
+    assert.equal(paddedSizeToMinPixels('1600x100', SEEDREAM), null);
+    // A token naming no pixels cannot be padded.
+    assert.equal(paddedSizeToMinPixels('auto', SEEDREAM), null);
+    assert.equal(paddedSizeToMinPixels('2.39:1', SEEDREAM), null);
+    // The same rule reads the floor of another family.
+    assert.deepEqual(paddedSizeToMinPixels('300x400', 'openai/gpt-image-2.6-sunburst'),
+        { width: 704, height: 944, originalWidth: 300, originalHeight: 400 });
+});
+
+test('padding to the model floor follows the profile and the operator override', () => {
+    // Seedream answers a bigger frame by keeping the object in the corner, so it gets the padding.
+    assert.equal(imageModelProfile(SEEDREAM).padToMinPixels, true);
+    assert.equal(needsMinPixelsPadding(SEEDREAM), true);
+    // gpt-image-2.6 upscales on its own and keeps the downscale path it already had.
+    assert.equal(imageModelProfile('openai/gpt-image-2.6-sunburst').padToMinPixels, false);
+    assert.equal(needsMinPixelsPadding('openai/gpt-image-2.6-sunburst'), false);
+    assert.equal(needsMinPixelsPadding('sourceful/riverflow-v2.6-pro', 'always'), true);
+    assert.equal(needsMinPixelsPadding(SEEDREAM, 'never'), false);
+});
+
+test('raster padding reaches a target frame above the 16-pixel grid', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'ai-image-pad-floor-'));
+    try {
+        const canvas = createCanvas(100, 120);
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#2266cc';
+        ctx.fillRect(0, 0, 100, 120);
+        const bytes = canvas.toBuffer('image/png');
+        const padded = await rasterPadImageBytes({ bytes, engine: 'sharp', targetWidth: 960, targetHeight: 960 });
+        assert.equal(padded.width, 960);
+        assert.equal(padded.height, 960);
+        assert.equal(padded.originalWidth, 100);
+        assert.equal(padded.originalHeight, 120);
+        assert.equal(padded.padded, true);
+        const file = path.join(root, 'padded.png');
+        await writeFile(file, padded.bytes);
+        const sharp = (await import('sharp')).default;
+        const { data, info } = await sharp(file).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+        assert.equal(info.width, 960);
+        assert.equal(info.height, 960);
+        const at = (x, y) => [...data.subarray((y * info.width + x) * 4, (y * info.width + x) * 4 + 4)];
+        assert.deepEqual(at(10, 10), [34, 102, 204, 255]);
+        assert.deepEqual(at(99, 119), [34, 102, 204, 255]);
+        assert.deepEqual(at(100, 120), [0, 0, 0, 0]);
+        assert.deepEqual(at(950, 950), [0, 0, 0, 0]);
+        // Without a target the frame is only rounded up to the 16-pixel grid, as before.
+        const rounded = await rasterPadImageBytes({ bytes, engine: 'sharp' });
+        assert.equal(rounded.width, 112);
+        assert.equal(rounded.height, 128);
+    } finally {
+        await rm(root, { recursive: true, force: true });
+    }
+});
+
+test('a source below the model floor is padded up to it and the padding is cut off the reply', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'ai-image-pad-min-'));
+    try {
+        // A 300×400 source sits far below seedream-5.5's 921 600 px floor. The model is not asked to
+        // upscale it: the picture is padded to the smallest legal frame, and the model answers inside
+        // that frame with the object kept at its own scale in the top-left corner.
+        const canvas = createCanvas(300, 400);
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#2266cc';
+        ctx.fillRect(0, 0, 300, 400);
+        const sourceBytes = canvas.toBuffer('image/png');
+        const sent = [];
+        const server = http.createServer(async (req, res) => {
+            const chunks = [];
+            for await (const chunk of req) chunks.push(chunk);
+            const raw = Buffer.concat(chunks).toString('latin1');
+            const imagePart = /name="image"; filename="source\.png"\r\nContent-Type: image\/png\r\n\r\n([\s\S]*?)\r\n--/.exec(raw);
+            const bytes = Buffer.from(imagePart?.[1] ?? '', 'latin1');
+            sent.push({ size: /name="size"\r\n\r\n([^\r]+)/.exec(raw)?.[1], bytes });
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ data: [{ b64_json: bytes.toString('base64') }] }));
+        });
+        await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+        const { port } = server.address();
+        const client = createClient({ apiKey: 'sk-test', baseURL: `http://127.0.0.1:${port}/v1/`, retries: 0, rasterEngine: 'sharp' });
+        try {
+            const payloads = await client.images.edit({
+                model: SEEDREAM, prompt: 'keep', format: 'png',
+                files: [{ filename: 'source.png', mime: 'image/png', bytes: sourceBytes }],
+            });
+            const floor = paddedSizeToMinPixels('300x400', SEEDREAM);
+            assert.equal(sent.length, 1);
+            assert.equal(sent[0].size, `${floor.width}x${floor.height}`);
+            const sentPath = path.join(root, 'sent.png');
+            await writeFile(sentPath, sent[0].bytes);
+            const sentInfo = await rasterInfo(sentPath, { cwd: root, engine: 'sharp' });
+            assert.deepEqual([sentInfo.width, sentInfo.height], [floor.width, floor.height]);
+            const sharp = (await import('sharp')).default;
+            const { data } = await sharp(sentPath).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+            const at = (x, y) => [...data.subarray((y * sentInfo.width + x) * 4, (y * sentInfo.width + x) * 4 + 4)];
+            // The object is neither moved nor resampled; the added area is empty space.
+            assert.deepEqual(at(10, 10), [34, 102, 204, 255]);
+            assert.deepEqual(at(299, 399), [34, 102, 204, 255]);
+            assert.deepEqual(at(300, 400), [0, 0, 0, 0]);
+            // The answer comes back at the source frame, padding cut off, nothing downscaled.
+            const resultPath = path.join(root, 'result.png');
+            await writeFile(resultPath, Buffer.from(payloads[0], 'base64'));
+            const info = await rasterInfo(resultPath, { cwd: root, engine: 'sharp' });
+            assert.deepEqual([info.width, info.height], [300, 400]);
+            const result = await sharp(resultPath).ensureAlpha().raw().toBuffer();
+            assert.deepEqual([...result.subarray((399 * 300 + 299) * 4, (399 * 300 + 299) * 4 + 4)], [34, 102, 204, 255]);
+        } finally {
+            client.close();
+            await new Promise((resolve) => server.close(resolve));
+        }
+    } finally {
+        await rm(root, { recursive: true, force: true });
+    }
+});
+
+test('image.padToMin never leaves the small source at its own padded frame', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'ai-image-pad-off-'));
+    try {
+        const canvas = createCanvas(300, 400);
+        canvas.getContext('2d').fillRect(0, 0, 300, 400);
+        const sourceBytes = canvas.toBuffer('image/png');
+        const sent = [];
+        const server = http.createServer(async (req, res) => {
+            const chunks = [];
+            for await (const chunk of req) chunks.push(chunk);
+            const raw = Buffer.concat(chunks).toString('latin1');
+            const imagePart = /name="image"; filename="source\.png"\r\nContent-Type: image\/png\r\n\r\n([\s\S]*?)\r\n--/.exec(raw);
+            const bytes = Buffer.from(imagePart?.[1] ?? '', 'latin1');
+            sent.push({ size: /name="size"\r\n\r\n([^\r]+)/.exec(raw)?.[1], bytes });
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ data: [{ b64_json: bytes.toString('base64') }] }));
+        });
+        await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+        const { port } = server.address();
+        const client = createClient({ apiKey: 'sk-test', baseURL: `http://127.0.0.1:${port}/v1/`, retries: 0, rasterEngine: 'sharp', imagePadToMin: 'never' });
+        try {
+            const payloads = await client.images.edit({
+                model: SEEDREAM, prompt: 'keep', format: 'png',
+                files: [{ filename: 'source.png', mime: 'image/png', bytes: sourceBytes }],
+            });
+            // Only the 16-pixel grid is added; the frame floor is left to the model's own upscale.
+            const sentPath = path.join(root, 'sent.png');
+            await writeFile(sentPath, sent[0].bytes);
+            const sentInfo = await rasterInfo(sentPath, { cwd: root, engine: 'sharp' });
+            assert.deepEqual([sentInfo.width, sentInfo.height], [304, 400]);
+            assert.equal(sent[0].size, '304x400');
+            const resultPath = path.join(root, 'result.png');
+            await writeFile(resultPath, Buffer.from(payloads[0], 'base64'));
+            const info = await rasterInfo(resultPath, { cwd: root, engine: 'sharp' });
+            assert.deepEqual([info.width, info.height], [300, 400]);
+        } finally {
+            client.close();
+            await new Promise((resolve) => server.close(resolve));
+        }
+    } finally {
+        await rm(root, { recursive: true, force: true });
+    }
 });

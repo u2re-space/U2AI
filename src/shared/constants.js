@@ -146,7 +146,7 @@ export const RESERVED_BODY = new Set(['model', 'input', 'messages', 'instruction
 /**
  * Capabilities of one image model id, merged over the defaults.
  * @param {string | null | undefined} model
- * @returns {{ customSizes: boolean, div16Padding: boolean, keepProSuffix: boolean, omitSizeOnReject: boolean, complexity: string|null, routeEditsThroughGeneration: boolean, resolutionTiers: boolean, paintsFakeTransparency: boolean, minPixels: number, maxPixels: number, maxEdge: number, maxRatio: number }}
+ * @returns {{ customSizes: boolean, div16Padding: boolean, padToMinPixels: boolean, keepProSuffix: boolean, omitSizeOnReject: boolean, complexity: string|null, routeEditsThroughGeneration: boolean, resolutionTiers: boolean, paintsFakeTransparency: boolean, minPixels: number, maxPixels: number, maxEdge: number, maxRatio: number }}
  * @exports
  * @ai.hint pure
  */

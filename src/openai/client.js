@@ -20,7 +20,7 @@ import { CHAT_PATH, chatGaps, createChatStreamReducer, droppedTools, normalizeCh
 import { envValue } from '../core/runtime-env.js';
 import { detectMagick, magickPadImageBytes, magickRemoveImagePadding } from '../agent/image-magick.js';
 import { rasterPadImageBytes, rasterRemoveImagePadding } from '../agent/image-raster.js';
-import { acceptsResponseFormat, backgroundValue, encodeMultipart, generationBody, imageFormatField, imageModelProfile, imageRequestSize, imageSizeAttempts, imageSizeFields, readImageSize, imageComplexityValue, imageSources, isImageSizeError, isVectorModel, needsDiv16Padding, normalizeVectorRatio, parseImageSize, resolveImageFormat, withSizeHint } from './images.js';
+import { acceptsResponseFormat, backgroundValue, encodeMultipart, generationBody, imageFormatField, imageModelProfile, imageRequestSize, imageSizeAttempts, imageSizeFields, readImageSize, imageComplexityValue, imageSources, isImageSizeError, isVectorModel, needsDiv16Padding, needsMinPixelsPadding, paddedSizeToMinPixels, normalizeVectorRatio, parseImageSize, resolveImageFormat, withSizeHint } from './images.js';
 import { rasterFitToSourceFrame } from '../agent/image-raster.js';
 
 export { ApiError };
@@ -138,7 +138,7 @@ export function createClient({
     headers = null, body: bodySetting = null,
     http, retries = defaults.retries, idleTimeoutMs, connectTimeoutMs, maxErrorBytes = defaults.maxErrorBytes,
     maxResponseBytes = defaults.maxResponseBytes, maxEventBytes = defaults.maxEventBytes,
-    magickPath = null, rasterEngine = 'auto', imageDiv16 = null, imageSizeHint = 'auto',
+    magickPath = null, rasterEngine = 'auto', imageDiv16 = null, imagePadToMin = null, imageSizeHint = 'auto',
     chat: chatSetting = null,
     onEvent: globalOnEvent,
 } = {}) {
@@ -739,16 +739,23 @@ export function createClient({
                 const references = files.map((file) => `data:${file.mime || 'image/png'};base64,${Buffer.from(file.bytes).toString('base64')}`);
                 return images.generate({ model, prompt, size: frame, complexity, format, background, references, resolution, signal });
             }
-             if (!vector && needsDiv16Padding(model, imageDiv16) && files?.length) {
+             if (!vector && (needsDiv16Padding(model, imageDiv16) || needsMinPixelsPadding(model, imagePadToMin)) && files?.length) {
+                const toFloor = needsMinPixelsPadding(model, imagePadToMin);
                 const prepared = [];
                 for (const file of files) {
+                    // A model whose floor is a megapixel canvas is given a frame that clears it up
+                    // front: the source keeps its own scale in the top-left corner and the rest of
+                    // the canvas is empty space, cut off the reply again below. Without this the
+                    // model is asked to upscale a small source, and some of them answer by leaving
+                    // the object at its original size in the corner of a canvas it then paints.
+                    const floor = toFloor ? paddedSizeToMinPixels(readImageSize(file.bytes), model) : null;
                     let frame = null;
-                    try { frame = await rasterPadImageBytes({ bytes: file.bytes, engine: rasterEngine }); }
+                    try { frame = await rasterPadImageBytes({ bytes: file.bytes, engine: rasterEngine, targetWidth: floor?.width, targetHeight: floor?.height }); }
                     catch { frame = null; }
                     if (!frame) {
                         const exe = await detectMagick({ magickPath });
                         if (!exe) throw new ApiError('Для добавления прозрачного padding к входному изображению требуется sharp, canvas или ImageMagick.', { code: 'IMAGE_PADDING_UNAVAILABLE' });
-                        frame = await magickPadImageBytes({ exe, bytes: file.bytes, signal });
+                        frame = await magickPadImageBytes({ exe, bytes: file.bytes, signal, targetWidth: floor?.width, targetHeight: floor?.height });
                         frame.engine = 'magick';
                         frame.exe = exe;
                     }

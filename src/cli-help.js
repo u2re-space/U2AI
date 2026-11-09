@@ -218,7 +218,7 @@ context=false запускает роль на чистом контексте. 
   (square, portrait, landscape, wide, ultrawide, cinemascope, golden, story, a4). Модель со свободным кадром
   получает из формы настоящий кадр, модель с полем aspect_ratio — ближайшее отношение из своего списка.
   --image-complexity задаёт уровень планирования модели (заменяет бывшее 'quality'); целое --quality относится к pace работы.
-  --image-background transparent|opaque|auto  --image-div16 auto|always|never  --partials 0..3  --image-model <id>  --count, -n <n>
+   --image-background transparent|opaque|auto  --image-div16 auto|always|never  --image-pad-to-min auto|always|never  --partials 0..3  --image-model <id>  --count, -n <n>
   Для api.proxyapi.ru картинки идут через /images/generations и /images/edits (openai/gpt-image-2.6-sunburst для генерации по тексту,
   openai/gpt-image-2.6-sunburst для правки и генерации по картинке, если не задана --image-model).
    --image-model можно использовать для выбора любой модели-посредника, например \u0060sourceful/riverflow-v2.6-pro\u0060.
@@ -229,6 +229,9 @@ context=false запускает роль на чистом контексте. 
    GPT Image 2.6 дополняет входной растр прозрачными пикселями справа/снизу до кратности 16 без масштабирования,
    а после правки снимает padding тем же движком, что и добавлял (image.div16: auto — только для моделей, которые требуют padding;
    \u0060always\u0060 включает padding для любой модели, \u0060never\u0060 отключает).
+   При image.padToMin: auto для моделей с большим минимальным кадром (seedream-5.5 — 960×960) исходник дополняется
+   пустым пространством до этого размера до отправки: объект сохраняет масштаб в левом верхнем углу, а после генерации
+   padding обрезается. \u0060always\u0060 включает для всех моделей с frame floor, \u0060never\u0060 отключает.
   PNG с настоящей альфой сохраняется; если нужен WebP, используйте локальную конверсию, а не повторную генерацию.
   Инструмент vectorize_image конвертирует плоские PNG/WebP (логотипы, бейджи, иконки) в SVG через
   recraft/recraft-v4.1-pro-vector: удаляет фон, проверяет палитру, сохраняет .svg вместо .png.

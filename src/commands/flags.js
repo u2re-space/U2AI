@@ -243,9 +243,13 @@ export function overridesFrom(values, { command = null } = {}) {
         o.image.resolution = r;
     }
      if (values['image-div16']) {
-        if (!['auto', 'always', 'never'].includes(values['image-div16'])) throw new UsageError('--image-div16: auto | always | never');
-        o.image.div16 = values['image-div16'];
-    }
+         if (!['auto', 'always', 'never'].includes(values['image-div16'])) throw new UsageError('--image-div16: auto | always | never');
+         o.image.div16 = values['image-div16'];
+     }
+     if (values['image-pad-to-min']) {
+         if (!['auto', 'always', 'never'].includes(values['image-pad-to-min'])) throw new UsageError('--image-pad-to-min: auto | always | never');
+         o.image.padToMin = values['image-pad-to-min'];
+     }
     if (values['image-size-hint']) {
         if (!['auto', 'always', 'never'].includes(values['image-size-hint'])) throw new UsageError('--image-size-hint: auto | always | never');
         o.image.sizeHint = values['image-size-hint'];

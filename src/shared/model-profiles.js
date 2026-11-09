@@ -38,11 +38,14 @@ export const PROXY_RIVERFLOW_MODEL = 'sourceful/riverflow-v2.6-pro';
  *   `minPixels`/`maxPixels`   — the accepted frame area in pixels; a frame outside the range is
  *                     rescaled to the nearest same-ratio size that fits;
  *   `maxEdge`                 — longest side the model accepts;
- *   `maxRatio`                — widest aspect ratio (longest side over shortest).
- * The defaults are the OpenAI gpt-image numbers, which is what a model nobody described gets.
+ *   `maxRatio`                — widest aspect ratio (longest side over shortest);
+ *   `padToMinPixels`          — a source smaller than `minPixels` is padded with empty space up to
+ *                     the smallest frame the model accepts, and the padding is cut off the reply
+ *                     again, instead of asking the model to upscale the source itself.
  */
 export const IMAGE_CAPABILITIES = Object.freeze({
     customSizes: false, div16Padding: false, keepProSuffix: false, omitSizeOnReject: false,
+    padToMinPixels: false,
     complexity: null, routeEditsThroughGeneration: false, resolutionTiers: false,
     /** The gateway answers `background: transparent` with a painted plate instead of an alpha channel. */
     paintsFakeTransparency: false,
@@ -64,12 +67,14 @@ export const IMAGE_CAPABILITIES = Object.freeze({
  * ratio, so its limits are spelled out here rather than guessed from the model id.
  * Seedream 5.5 (`bytedance-seed/seedream-5-5`) draws free frames on a 16-pixel grid like
  * gpt-image-2.6, but its floor is a megapixel-class canvas — 960x960 (921 600 px) is the smallest
- * frame it answers. The model does the upscaling itself and keeps the subject's own aspect ratio,
- * so a small source is sent as is and only the reply is brought back down to the requested frame.
+ * frame it answers. It does not reliably upscale a small source: asked for a bigger frame than the
+ * picture it was given, it can leave the object at its own size in the top-left corner and fill the
+ * rest of the canvas. So the source is padded to the smallest legal frame up front and the padding
+ * is cut off the reply again — the object keeps its scale, nothing is resampled.
  */
 export const IMAGE_MODEL_PROFILES = Object.freeze([
     Object.freeze({ match: GPT_IMAGE_26, customSizes: true, div16Padding: true, complexity: 'high', minPixels: 655_360, maxPixels: 8_294_400, maxEdge: 3840, maxRatio: 3 }),
-    Object.freeze({ match: SEEDREAM_5_5, customSizes: true, div16Padding: true, keepProSuffix: true, complexity: 'high', minPixels: 921_600, maxPixels: 8_294_400, maxEdge: 3840, maxRatio: 3 }),
+    Object.freeze({ match: SEEDREAM_5_5, customSizes: true, div16Padding: true, padToMinPixels: true, keepProSuffix: true, complexity: 'high', minPixels: 921_600, maxPixels: 8_294_400, maxEdge: 3840, maxRatio: 3 }),
     Object.freeze({ match: GPT_IMAGE_25, customSizes: true, div16Padding: true }),
     Object.freeze({ match: RIVERFLOW, customSizes: true, keepProSuffix: true, omitSizeOnReject: true, complexity: 'high', routeEditsThroughGeneration: true, resolutionTiers: true, paintsFakeTransparency: true, minPixels: 16_384, maxPixels: 16_777_216, maxEdge: 4096, maxRatio: 16 }),
 ]);

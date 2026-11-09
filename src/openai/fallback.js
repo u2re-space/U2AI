@@ -15,7 +15,7 @@ import { createClient } from './client.js';
 import { ApiError } from './errors.js';
 import { isReasoningModel, supportsVerbosity } from '../core/config.js';
 import { envValue, liveEnv } from '../core/runtime-env.js';
-import { MODEL_FALLBACKS } from './model-map.js';
+import { MODEL_FALLBACKS } from './shared/model-profiles.js';
 
 /** Default stand-ins. Keys may be bare or prefixed with openai/. */
 export { MODEL_FALLBACKS };

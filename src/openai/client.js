@@ -20,7 +20,7 @@ import { CHAT_PATH, chatGaps, createChatStreamReducer, droppedTools, normalizeCh
 import { envValue } from '../core/runtime-env.js';
 import { detectMagick, magickPadImageBytes, magickRemoveImagePadding } from '../agent/image-magick.js';
 import { rasterPadImageBytes, rasterRemoveImagePadding } from '../agent/image-raster.js';
-import { acceptsResponseFormat, backgroundValue, encodeMultipart, generationBody, imageFormatField, imageModelProfile, imageRequestSize, imageSizeAttempts, imageSizeFields, readImageSize, imageComplexityValue, imageSources, isImageSizeError, isVectorModel, needsDiv16Padding, needsMinPixelsPadding, paddedSizeToMinPixels, normalizeVectorRatio, parseImageSize, resolveImageFormat, withSizeHint } from './images.js';
+import { backgroundValue, encodeMultipart, generationBody, imageFormatField, imageModelProfile, imageSizeAttempts, imageSizeFields, readImageSize, imageComplexityValue, imageSources, isImageSizeError, isVectorModel, needsDiv16Padding, needsMinPixelsPadding, paddedSizeToMinPixels, normalizeVectorRatio, parseImageSize, resolveImageFormat, withSizeHint } from './images.js';
 import { rasterFitToSourceFrame } from '../agent/image-raster.js';
 
 export { ApiError };

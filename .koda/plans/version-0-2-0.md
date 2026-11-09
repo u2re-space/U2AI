@@ -12,9 +12,6 @@ reasoning effort, символьные уровни контекста, поль
 
 ## 1. [x] Реестр профилей моделей
 
-Метаданных о моделях нет: `src/openai/model-map.js` содержит только замены
-моделей (`MODEL_FALLBACKS`). Ни окна, ни max output, ни поддерживаемых effort.
-
 - Навыки: koda-coder
 - Файлы:
   - `src/openai/model-profiles.js` (новый) — `MODEL_PROFILES`, `profileFor(model)`,

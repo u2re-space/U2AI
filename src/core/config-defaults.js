@@ -9,7 +9,7 @@
  * @changed 2026-10-31 tester, vision, extractor, summarizer, and writer merged into reviewer, encoder, and orchestrator.
  * @changed 2026-11-04 reasoning.mode (gateway reasoning modes, off by default).
  */
-import { MODEL_FALLBACKS } from '../openai/model-map.js';
+import { MODEL_FALLBACKS } from '../shared/model-profiles.js';
 import {
     KiB, MiB,
     REASONING_EFFORTS, REASONING_SUMMARIES, REASONING_MODES,

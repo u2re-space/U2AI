@@ -111,3 +111,40 @@ export const MODEL_PROFILES = Object.freeze({
 
     'moonshotai/kimi-k3.1-pro': { window: 256 * 1024, maxOutput: 32768, ceiling: 'max', efforts: null, modes: null },
 });
+
+/** Default stand-ins. Keys may be bare or prefixed with openai/. */
+export const MODEL_FALLBACKS = Object.freeze({
+    // non-prefixed to prefixed
+    'gpt-6-luna'          : 'openai/gpt-6-luna',
+    'gpt-6.1-terra'       : 'openai/gpt-6.1-terra',
+    'gpt-6.1-sol'         : 'openai/gpt-6.1-sol',
+    'gpt-6-luna-decisions': 'openai/gpt-6-luna-decisions',
+    'gpt-6-astra'         : 'openai/gpt-6-astra',
+
+    // non-prefixed to prefixed image API
+    'gpt-image-2.5'         : 'openai/gpt-image-2.5',
+    'gpt-image-2.5-flare'   : 'openai/gpt-image-2.5-flare',
+    'gpt-image-2.5-sunburst': 'openai/gpt-image-2.5-sunburst',
+
+    // non-prefixed to prefixed image API
+    'gpt-image-2.6'         : 'openai/gpt-image-2.6',
+    'gpt-image-2.6-flare'   : 'openai/gpt-image-2.6-flare',
+    'gpt-image-2.6-sunburst': 'openai/gpt-image-2.6-sunburst',
+
+    // non-prefixed to prefixed image API (ByteDance Seed)
+    'seedream-5-5'          : 'bytedance-seed/seedream-5-5',
+    'seedream-5-5-pro'      : 'bytedance-seed/seedream-5-5-pro',
+    'seedream-5-5-lite'     : 'bytedance-seed/seedream-5-5-lite',
+
+    // non-prefixed to prefixed other models
+    'claude-haiku-5-5'        : 'anthropic/claude-haiku-5-5',
+    'claude-sonnet-5-5'       : 'anthropic/claude-sonnet-5-5',
+    'claude-opus-5.5'         : 'anthropic/claude-opus-5.5',
+
+    // prefixed fallback to another
+    'openai/gpt-6-luna-decisions': 'typesafe/jev-1.14',
+    'openai/gpt-6-luna'          : 'anthropic/claude-haiku-5-5',
+    'openai/gpt-6.1-terra'       : 'anthropic/claude-sonnet-5-5',
+    'openai/gpt-6.1-sol'         : 'anthropic/claude-opus-5.5',
+    'openai/gpt-6-astra'         : 'anthropic/claude-opus-5.5'
+});

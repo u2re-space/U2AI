@@ -55,17 +55,6 @@ const RESERVED_HEADERS = new Set(['authorization', 'content-type', 'accept', 'x-
 const HEADER_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 
 /**
- * Copy the extra body fields of one backend. Values keep their JSON type — a gateway flag such as
- * `useWalletBalance` has to arrive as `true`, not as the string `"true"`. What the request already
- * sets is decided by `withBackendBody`, which never overwrites a field the call itself produced.
- * @param {object|null|undefined} body
- * @returns {Record<string, unknown>}
- * @ai.hint pure
- */
-const RESERVED_BODY = new Set(['model', 'input', 'messages', 'instructions', 'stream', 'tools', 'tool_choice',
-    'parallel_tool_calls', 'previous_response_id', 'store', 'background', 'include']);
-
-/**
  * Stringify and check per-backend headers. Reserved names are ignored, because auth and content
  * headers belong to the client.
  * @param {object|null|undefined} headers

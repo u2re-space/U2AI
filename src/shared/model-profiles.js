@@ -46,7 +46,8 @@ export const PROXY_RIVERFLOW_MODEL = 'sourceful/riverflow-v2.6-pro';
  */
 export const IMAGE_CAPABILITIES = Object.freeze({
     customSizes: false, div16Padding: false, keepProSuffix: false, omitSizeOnReject: false,
-    padToMinPixels: false,
+    // I asked for image-processor - do not upscale source/input image...
+    padToMinPixels: true,//false,
     complexity: null, routeEditsThroughGeneration: false, resolutionTiers: false,
     /** The gateway answers `background: transparent` with a painted plate instead of an alpha channel. */
     paintsFakeTransparency: false,

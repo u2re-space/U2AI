@@ -40,6 +40,8 @@ export const ALPHA_MASK_PROMPT = 'Return an A-mask (matte) for the attached imag
  * silhouette is what keeps the cut free of stair-stepping, while a wide soft gradient would make
  * the rim milky and eat into the artwork.
  */
+
+/*
     + 'Return an A-mask (matte) for the attached image that will be composited onto an RGB background to produce the final RGBA image. '
     + 'This is the alpha channel of a two-part composition: RGB + A-mask = RGBA. '
     + 'White (255) marks the subject that must stay visible — the artwork, logo, product, or person. '
@@ -50,7 +52,7 @@ export const ALPHA_MASK_PROMPT = 'Return an A-mask (matte) for the attached imag
     + 'Do not widen the transition into a soft glow — that makes the rim milky and eats into the artwork. Do not make alpha edges too blurry! '
     + 'The interior of the subject must be pure white; the transparent area must be pure black. '
     + 'Output the matte/mask only: grayscale, no colors, no text, no border, no shadow.';
-
+*/
 
 /**
  * Prompt for the background paint pass. The background becomes the dominant color of the subject,

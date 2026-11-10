@@ -20,7 +20,7 @@ import { CHAT_PATH, chatGaps, createChatStreamReducer, droppedTools, normalizeCh
 import { envValue } from '../core/runtime-env.js';
 import { detectMagick, magickPadImageBytes, magickRemoveImagePadding } from '../agent/image-magick.js';
 import { rasterPadImageBytes, rasterRemoveImagePadding } from '../agent/image-raster.js';
-import { backgroundValue, encodeMultipart, generationBody, imageFormatField, imageModelProfile, imageSizeAttempts, imageSizeFields, readImageSize, imageComplexityValue, imageSources, isImageSizeError, isVectorModel, needsDiv16Padding, needsMinPixelsPadding, paddedSizeToMinPixels, normalizeVectorRatio, parseImageSize, resolveImageFormat, withSizeHint } from './images.js';
+import { backgroundValue, encodeMultipart, generationBody, imageFormatField, imageModelProfile, imageSizeAttempts, imageSizeFields, readImageSize, imageComplexityValue, imageSources, isImageSizeError, isSvgRequest, needsDiv16Padding, needsMinPixelsPadding, paddedSizeToMinPixels, normalizeVectorRatio, parseImageSize, resolveImageFormat, withSizeHint } from './images.js';
 import { rasterFitToSourceFrame } from '../agent/image-raster.js';
 
 export { ApiError };
@@ -697,7 +697,10 @@ export function createClient({
     const images = {
          /** POST /images/generations. Returns base64 payloads from data[].b64_json or data[].url. */
         async generate({ model, prompt, size, complexity, n, format, background, references, resolution, signal } = {}) {
-            const attempts = imageSizeAttempts(size, model, resolution);
+            // A vector call answers its frame through `size`/`aspect_ratio` of the vector branch, so
+            // the raster size ladder has nothing to retry there.
+            const vector = isSvgRequest({ model, format });
+            const attempts = vector ? [] : imageSizeAttempts(size, model, resolution);
             let result;
             for (let index = 0; ; index++) {
                 const requestedSize = index < attempts.length ? attempts[index] : size;
@@ -710,11 +713,13 @@ export function createClient({
                     if (index >= attempts.length - 1 || !isImageSizeError(error)) throw error;
                 }
             }
-            return await fitPayloadsToFrame(await payloadList(result, signal, 'images/generations'), size);
+            const payloads = await payloadList(result, signal, 'images/generations');
+            // A reply is a document, not a raster: an SVG is never resampled to the asked frame.
+            return vector ? payloads : fitPayloadsToFrame(payloads, size);
         },
         /** POST /images/edits as multipart form data. `files` are { filename, mime, bytes }. */
         async edit({ model, prompt, files, size, format, background, complexity, resolution, signal } = {}) {
-            const vector = isVectorModel(model) && (format == "svg" || model?.includes?.("-vector"));
+            const vector = isSvgRequest({ model, format });
             let requestFiles = files;
             let padding = null;
             let requestedFrame = size;
@@ -767,7 +772,11 @@ export function createClient({
             // picture, so an edit keeps the input image's own size and aspect instead of the
             // gateway default square. The header is read straight from the bytes, so no raster
             // engine has to be present for this to work in a bundled build.
-            if (!vector && files?.length && !Object.keys(imageSizeFields(requestedFrame, model, resolution)).length) {
+            // A vector call of a free-frame family needs the same: the SVG is drawn on the frame it
+            // is handed, and only the frame the source names keeps the artwork undistorted. A
+            // ratio-only vector model has no frame field at all, so it stays out of this.
+            const takesFrame = vector ? imageModelProfile(model).customSizes : !vector;
+            if (takesFrame && files?.length && !Object.keys(imageSizeFields(requestedFrame, model, resolution)).length) {
                 const source = readImageSize(files[0]?.bytes);
                 if (source) requestedFrame = `${source.width}x${source.height}`;
             }
@@ -776,10 +785,17 @@ export function createClient({
             for (let index = 0; ; index++) {
                 const attemptSize = index < attempts.length ? attempts[index] : requestedFrame;
                 const fields = { model, prompt };
-                if (isVectorModel(model) && (format == "svg" || model?.includes?.("-vector"))) {
-                    const aspect = normalizeVectorRatio(attemptSize);
-                    if (aspect) fields.aspect_ratio = aspect;
-                    //if (acceptsResponseFormat(model)) fields.response_format = 'b64_json';
+                if (vector) {
+                    // The frame of a vector call travels verbatim: neither the 16-pixel grid nor the
+                    // model frame floor applies, because there is no raster to pad — the document the
+                    // model returns is cut by its own geometry, not by a pixel box.
+                    const asked = String(attemptSize ?? '').trim();
+                    if (imageModelProfile(model).customSizes && /^\d+\s*x\s*\d+$/.test(asked)) {
+                        fields.size = asked.replace(/\s+/g, '');
+                    } else {
+                        const aspect = normalizeVectorRatio(attemptSize);
+                        if (aspect) fields.aspect_ratio = aspect;
+                    }
                     fields[imageFormatField(model)] = 'svg';
                 } else {
                     const sizeFields = imageSizeFields(attemptSize, model, resolution);
@@ -812,6 +828,9 @@ export function createClient({
                 }
             }
             const payloads = await payloadList(result, signal, 'images/edits');
+            // A vector reply is the document the model drew: no padding to cut and no frame to scale
+            // it back into — both corrections belong to a raster.
+            if (vector) return payloads;
             if (!padding) return fitPayloadsToFrame(payloads, size);
             const restored = await Promise.all(payloads.map(async (payload) => {
                 const bytes = Buffer.from(payload, 'base64');

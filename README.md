@@ -15,7 +15,7 @@
 | Чат с историей | `ai chat --session work` (сессии сохраняются между запусками) |
 | Код, документы, тексты | `ai "напиши README для проекта" --out README.md`, структурированный вывод `--schema` |
  | Картинки | `ai image "кот-космонавт" --size 1024x1024 --image-complexity high` (инструмент `image_generation`, черновики пишутся по мере генерации) |
-| Векторизация логотипов и бейджей | `ai run "конвертируй логотипы PNG/WebP в SVG"` — инструмент `vectorize_image` (`recraft/recraft-v4.1-pro-vector`) с локальным удалением фона; источник — кроп из `.tmp/<id>/crops/` |
+| Векторизация логотипов и бейджей | `ai run "конвертируй логотипы PNG/WebP в SVG"` — инструмент `vectorize_image` (`image.vectorModel`: по умолчанию `openai/gpt-image-2.6-sunburst` с `output_format: svg`, либо `recraft/recraft-v4.1-pro-vector`) с локальным удалением фона; источник — кроп из `.tmp/<id>/crops/` |
 | Изображения и файлы во входе | `ai --image screenshot.png "что не так на экране?"`, `ai -f spec.pdf "сделай план"` |
 | Автономные задачи | `ai run "добавь тесты для src/utils.js и прогони их"` — инструменты: файлы, команды, URL, web-поиск, картинки |
 | Браузер агента | `ai run --browser "проверь страницу http://localhost:3000"` — Ego Lite (если установлен) открывает страницу, выдаёт accessibility snapshot и позволяет кликать/вводить; без Ego — headless Chrome/Edge для чтения и снимков |

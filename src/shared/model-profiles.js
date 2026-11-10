@@ -15,9 +15,16 @@ export const PROXY_IMAGE_MODEL = 'openai/gpt-image-2.6-sunburst';
  */
 export const PROXY_IMAGE_EDIT_MODEL = 'openai/gpt-image-2.6-sunburst';
 
-/** Default ProxyAPI vector (SVG) model. See https://proxyapi.ru/models/recraft/recraft-v4.1-pro-vector */
-export const PROXY_VECTOR_MODEL = 'recraft/recraft-v4.1-pro-vector';
-//export const PROXY_VECTOR_MODEL = 'openai/gpt-image-2.6-sunburst';
+/**
+ * Default ProxyAPI vector (SVG) model. gpt-image-2.6 answers `output_format: svg`, so the same family
+ * that draws the raster also returns the document, and the frame it is given travels in `size` — the
+ * artwork keeps the shape of its source. The recraft vector family (https://proxyapi.ru/models/recraft/recraft-v4.1-pro-vector)
+ * is the ratio-tuned alternative: it answers `image_format: svg` and knows `aspect_ratio` but no pixel
+ * frame, and stays one `image.vectorModel` away.
+ */
+export const PROXY_VECTOR_MODEL = 'openai/gpt-image-2.6-sunburst';
+//export const PROXY_VECTOR_MODEL = 'recraft/recraft-v4.1-pro-vector';
+
 
 /**
  * Riverflow V2.6 Pro (Flux-based, https://proxyapi.ru/models/sourceful/riverflow-v2.6-pro). It is

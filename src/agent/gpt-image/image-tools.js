@@ -411,7 +411,8 @@ export function createImageHandlers({ root, client, config, signal, describeImag
         const svg = Buffer.from(payload[0], 'base64');
         const out = sniffImage(svg);
         if (out.ext !== 'svg') {
-            throw new Error(`Модель ${vectorModel} вернула не SVG (${out.ext}); файл не сохранён.`);
+            throw new Error(`Модель ${vectorModel} вернула не SVG (${out.ext}); файл не сохранён. `
+                + 'Экспорт в SVG у этой модели недоступен — задайте image.vectorModel, например recraft/recraft-v4.1-pro-vector.');
         }
 
         let requestedPath = String(args.path ?? '').trim();

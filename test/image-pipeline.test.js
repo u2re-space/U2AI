@@ -9,6 +9,7 @@ import { createToolset } from '../src/agent/tools.js';
 import { runProgram } from '../src/agent/shell.js';
 import { detectMagick, magickIsOpaque } from '../src/agent/image-magick.js';
 import { ALPHA_MASK_PROMPT, BACKGROUND_PAINT_PROMPT, applyGeneratedAlphaMask } from '../src/agent/image-alpha.js';
+import { PROXY_VECTOR_MODEL } from '../src/openai/images.js';
 
 /**
  * Run ImageMagick inside a temporary directory.
@@ -74,8 +75,8 @@ test('end-to-end: native alpha, paint + matte, RGBA composition, and SVG', async
         const model = /name="model"\r\n\r\n([^\r]+)\r\n/.exec(raw)?.[1] ?? '';
         seen.push({ model, prompt, raw });
 
-        // Stage 4: the vector model answers with SVG markup.
-        if (/name="image_format"\r\n\r\nsvg\r\n/.test(raw)) {
+        // Stage 4: the vector model answers with SVG markup (the field name is the family's own).
+        if (/name="(?:image_format|output_format)"\r\n\r\nsvg\r\n/.test(raw)) {
             res.end(JSON.stringify({ data: [{ b64_json: svgB64 }] }));
             return;
         }
@@ -183,9 +184,12 @@ test('end-to-end: native alpha, paint + matte, RGBA composition, and SVG', async
         assert.equal(vectored.ok, true, vectored.output);
         assert.match(vectored.output, /Векторизовано assets\/badge\.png → assets\/badge\.svg/);
         assert.equal(await readFile(path.join(dir, 'assets', 'badge.svg'), 'utf8'), svg);
-        const vectorRequest = seen.findLast((item) => /name="image_format"\r\n\r\nsvg\r\n/.test(item.raw));
-        assert.equal(vectorRequest.model, 'recraft/recraft-v4.1-pro-vector');
+        const vectorRequest = seen.findLast((item) => /name="(?:image_format|output_format)"\r\n\r\nsvg\r\n/.test(item.raw));
+        assert.equal(vectorRequest.model, PROXY_VECTOR_MODEL);
         assert.match(vectorRequest.raw, /name="image"; filename="badge\.png"/);
+        // The vector keeps the frame of its source verbatim: a document is not padded to the
+        // 16-pixel grid and never resampled back.
+        assert.match(vectorRequest.raw, /name="size"\r\n\r\n160x120\r\n/);
         assert.equal((await stat(path.join(dir, 'assets', 'badge.svg'))).isFile(), true);
     } finally {
         client.close();

@@ -1,7 +1,7 @@
 /**
  * Shared model-independent image API constants and payload utilities.
  * @module openai/shared/images
- * @exports IMAGE_SIZES, VECTOR_RATIOS, isVectorModel, normalizeVectorRatio, normalizeImageFormat,
+ * @exports IMAGE_SIZES, VECTOR_RATIOS, isVectorModel, isSvgRequest, normalizeVectorRatio, normalizeImageFormat,
  *   encodeMultipart, imagePayloads, imageSources, pngHasAlphaChannel, readImageSize, sniffImage,
  *   aspectImageSize, aspectRatioToken, supportedAspectRatios
  */
@@ -29,9 +29,9 @@ export { IMAGE_SIZES, VECTOR_RATIOS, RIVERFLOW_RATIOS, RIVERFLOW_RESOLUTIONS, im
 export { RATIO_MAX_TERM, RATIO_CEIL_EPSILON, RATIO_WORDS, STANDARD_RATIOS,
     aspectOf, aspectFrame, ceilAspect, nearestAspect, parseAspectToken, rationalAspect };
 
-/** True when the model id names a vector (SVG) variant. */
+/** True when the model id names a vector (SVG) variant of its family. */
 export function isVectorModel(model) {
-    return /(?:^|[-/])vector\b/i.test(String(model ?? '').trim()) || model?.endsWith?.("gpt-image-2.6-sunburst") || model?.endsWith?.("gpt-image-2.6-flare");
+    return /(?:^|[-/])vector\b/i.test(String(model ?? '').trim());
 }
 
 
@@ -41,6 +41,23 @@ export function normalizeImageFormat(format) {
     if (!value || value === 'auto') return null;
     if (value === 'jpg') return 'jpeg';
     return value;
+}
+
+/**
+ * Whether one request is a vector (SVG) call rather than a raster one: the caller asked for `svg`,
+ * or the model is a vector variant that answers nothing else.
+ *
+ * This is the switch that keeps the raster-only corrections away from a vector reply. A document has
+ * no pixels to pad or resample, so the 16-pixel grid, the frame-floor padding and the downscale of a
+ * grown reply — all of them raster corrections — do not apply; the frame only travels to the model so
+ * the artwork keeps the shape it was given.
+ * @param {{ model?: string|null, format?: string|null }} request
+ * @returns {boolean}
+ * @exports
+ * @ai.hint pure
+ */
+export function isSvgRequest({ model = null, format = null } = {}) {
+    return normalizeImageFormat(format) === 'svg' || isVectorModel(model);
 }
 
 /** Encode the fields and files for POST /images/edits as multipart form data. */
@@ -839,9 +856,20 @@ export function generationBody({ model, prompt, size = null, complexity = null, 
     if (Array.isArray(references) && references.length) {
         body.input_references = references.map((url) => ({ type: 'image_url', image_url: { url } }));
     }
-    if (isVectorModel(model) && (format == "svg" || model?.includes?.("-vector"))) {
-        const aspect = normalizeVectorRatio(size);
-        if (aspect) body.aspect_ratio = aspect;
+    if (isSvgRequest({ model, format })) {
+        // A free-frame family draws the vector on the frame it is handed, so a pixel frame stays a
+        // pixel frame. A ratio-only vector model (recraft) knows no such field and is tuned by
+        // `aspect_ratio` alone; collapsing a frame into a ratio there would drop information it has
+        // no field for, and inventing a `size` it rejects costs the whole request.
+        const asked = String(size ?? '').trim();
+        const frame = /^\d+\s*x\s*\d+$/.test(asked) && imageModelProfile(model).customSizes
+            ? asked.replace(/\s+/g, '')
+            : null;
+        if (frame) body.size = frame;
+        else {
+            const aspect = normalizeVectorRatio(size);
+            if (aspect) body.aspect_ratio = aspect;
+        }
         if (Number.isInteger(n) && n > 1) body.n = n;
         body[imageFormatField(model)] = 'svg';
         body.prompt = withSizeHint(prompt, body, model, sizeHint);

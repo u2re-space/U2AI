@@ -11,7 +11,7 @@ import { rasterInfo, rasterIsOpaque, rasterPadImageBytes } from '../src/shared/i
 import { runProgram } from '../src/agent/shell.js';
 import { imageModelFamily as sharedImageModelFamily, IMAGE_SIZES as SHARED_IMAGE_SIZES, VECTOR_RATIOS as SHARED_VECTOR_RATIOS } from '../src/openai/shared/images.js';
 import { imageModelProfile as agentImageModelProfile, imageSizeAttempts as agentImageSizeAttempts } from '../src/agent/riverflow/images.js';
-import { backgroundValue, encodeMultipart, generationBody, imageFormatField, imageModelFamily, imageModelFor, imageModelProfile, imagePayloads, imageComplexityValue, imageRequestSize, imageSizeAttempts, imageSizeFields, imageTransport, normalizeImageFormat, normalizeImageSize, normalizeVectorRatio, sameAspectImageSize, isImageSizeError, isVectorModel, needsMinPixelsPadding, paddedSizeToMinPixels, pngHasAlphaChannel, sniffImage, supportsTransparentBackground, PROXY_RIVERFLOW_MODEL, PROXY_VECTOR_MODEL, VECTOR_RATIOS, RIVERFLOW_RATIOS, readImageSize, MIN_IMAGE_PIXELS, MAX_IMAGE_PIXELS, MAX_IMAGE_EDGE, MAX_IMAGE_RATIO, aspectRatioToken, aspectFrame, ceilAspect, nearestAspect, parseAspectToken, rationalAspect, supportedAspectRatios, tierFromToken } from '../src/openai/images.js';
+import { backgroundValue, encodeMultipart, generationBody, imageFormatField, imageModelFamily, imageModelFor, imageModelProfile, imagePayloads, imageComplexityValue, imageRequestSize, imageSizeAttempts, imageSizeFields, imageTransport, normalizeImageFormat, normalizeImageSize, normalizeVectorRatio, sameAspectImageSize, isImageSizeError, isVectorModel, isSvgRequest, needsMinPixelsPadding, paddedSizeToMinPixels, pngHasAlphaChannel, sniffImage, supportsTransparentBackground, PROXY_RIVERFLOW_MODEL, PROXY_VECTOR_MODEL, VECTOR_RATIOS, RIVERFLOW_RATIOS, readImageSize, MIN_IMAGE_PIXELS, MAX_IMAGE_PIXELS, MAX_IMAGE_EDGE, MAX_IMAGE_RATIO, aspectRatioToken, aspectFrame, ceilAspect, nearestAspect, parseAspectToken, rationalAspect, supportedAspectRatios, tierFromToken } from '../src/openai/images.js';
 import { builtinTools } from '../src/agent/loop.js';
 import { enabledToolNames } from '../src/agent/tool-specs.js';
 import { createToolset } from '../src/agent/tools.js';
@@ -388,11 +388,20 @@ test('any shape token reaches each family as a frame or a ratio it accepts', () 
 });
 
 test('vector model uses aspect_ratio and svg output', () => {
-    assert.equal(PROXY_VECTOR_MODEL, 'recraft/recraft-v4.1-pro-vector');
+    // The vector default is a model the gateway answers in SVG; the recraft vector family stays one
+    // `image.vectorModel` line away.
+    assert.equal(PROXY_VECTOR_MODEL, 'openai/gpt-image-2.6-sunburst');
     assert.equal(isVectorModel('recraft/recraft-v4.1-vector'), true);
     assert.equal(isVectorModel('recraft/recraft-v4-styles-pro-vector'), true);
     assert.equal(isVectorModel('recraft/recraft-v4.1-utility'), false);
     assert.equal(isVectorModel(''), false);
+    // A raster family becomes a vector call when the caller asks for `svg`; its id alone stays raster.
+    assert.equal(isVectorModel('openai/gpt-image-2.6-sunburst'), false);
+    assert.equal(isSvgRequest({ model: 'openai/gpt-image-2.6-sunburst', format: 'svg' }), true);
+    assert.equal(isSvgRequest({ model: 'openai/gpt-image-2.6-sunburst', format: 'SVG' }), true);
+    assert.equal(isSvgRequest({ model: 'openai/gpt-image-2.6-sunburst', format: 'png' }), false);
+    assert.equal(isSvgRequest({ model: 'openai/gpt-image-2.6-sunburst' }), false);
+    assert.equal(isSvgRequest({ model: 'recraft/recraft-v4.1-pro-vector' }), true);
     assert.deepEqual([...VECTOR_RATIOS], ['1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16', 'auto']);
     assert.equal(normalizeVectorRatio(''), null);
     assert.equal(normalizeVectorRatio('auto'), null);
@@ -415,6 +424,17 @@ test('vector model uses aspect_ratio and svg output', () => {
     assert.equal('quality' in vectorBody, false);
     assert.equal('background' in vectorBody, false);
     assert.equal('input_references' in vectorBody, false);
+    // A free-frame family answers `size`, so a frame it is given stays a frame — no ratio collapse,
+    // no 16-pixel rounding, and none of the raster tuning fields.
+    assert.deepEqual(
+        generationBody({ model: 'openai/gpt-image-2.6-sunburst', prompt: 'логотип', size: '160x120', format: 'svg', complexity: 'high', background: 'transparent' }),
+        { model: 'openai/gpt-image-2.6-sunburst', prompt: 'логотип', size: '160x120', output_format: 'svg' },
+    );
+    // A shape that names no pixels reaches the same family as the ratio it names.
+    assert.deepEqual(
+        generationBody({ model: 'openai/gpt-image-2.6-sunburst', prompt: 'логотип', size: '16:9', format: 'svg' }),
+        { model: 'openai/gpt-image-2.6-sunburst', prompt: 'логотип', aspect_ratio: '16:9', output_format: 'svg' },
+    );
     assert.equal(sniffImage(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>')).mime, 'image/svg+xml');
     assert.equal(sniffImage(Buffer.from('<?xml version="1.0"?><svg></svg>')).ext, 'svg');
     assert.equal(sniffImage(Buffer.from('<svg')).ext, 'svg');
@@ -437,11 +457,14 @@ test('images client vectorize posts the source as a multipart edit and the tool 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         if (req.url === '/v1/images/edits') {
             const form = raw.toString('latin1');
-            assert.match(form, /name="model"\r\n\r\nrecraft\/recraft-v4\.1-pro-vector\r\n/);
-            assert.match(form, /name="image_format"\r\n\r\nsvg\r\n/);
+            assert.match(form, /name="model"\r\n\r\nopenai\/gpt-image-2\.6-sunburst\r\n/);
+            assert.match(form, /name="output_format"\r\n\r\nsvg\r\n/);
             assert.match(form, /name="image"; filename="logo\.png"/);
-            assert.doesNotMatch(form, /name="size"/);
+            // The source frame goes verbatim: a document is not put on the 16-pixel grid, so a 1x1
+            // source asks for 1x1 rather than the 16x16 a raster edit would get.
+            assert.match(form, /name="size"\r\n\r\n1x1\r\n/);
             assert.doesNotMatch(form, /name="aspect_ratio"/);
+            assert.doesNotMatch(form, /name="background"/);
             res.end(JSON.stringify({ data: [{ b64_json: svgB64 }] }));
             return;
         }
@@ -465,6 +488,74 @@ test('images client vectorize posts the source as a multipart edit and the tool 
     } finally {
         client.close();
         await rm(root, { recursive: true, force: true });
+        await new Promise((resolve) => server.close(resolve));
+    }
+});
+
+test('a ratio-only vector model is still asked by aspect_ratio and takes no pixel frame', async () => {
+    const png = Buffer.from(TINY_PNG, 'base64');
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="#000"/></svg>';
+    const svgB64 = Buffer.from(svg).toString('base64');
+    const seen = [];
+    const server = http.createServer(async (req, res) => {
+        const chunks = [];
+        for await (const chunk of req) chunks.push(chunk);
+        const raw = Buffer.concat(chunks).toString('latin1');
+        seen.push(raw);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ data: [{ b64_json: svgB64 }] }));
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address();
+    const client = createClient({ apiKey: 'sk-test', baseURL: `http://127.0.0.1:${port}/v1/`, retries: 0 });
+    try {
+        const payloads = await client.images.vectorize({
+            model: 'recraft/recraft-v4.1-pro-vector', prompt: 'trace',
+            image: { mime: 'image/png', bytes: png, filename: 'logo.png' },
+        });
+        assert.equal(payloads[0], svgB64);
+        assert.equal(seen.length, 1);
+        assert.match(seen[0], /name="model"\r\n\r\nrecraft\/recraft-v4\.1-pro-vector\r\n/);
+        assert.match(seen[0], /name="image_format"\r\n\r\nsvg\r\n/);
+        assert.doesNotMatch(seen[0], /name="size"/);
+        assert.doesNotMatch(seen[0], /name="aspect_ratio"/);
+    } finally {
+        client.close();
+        await new Promise((resolve) => server.close(resolve));
+    }
+});
+
+test('an SVG reply is never padded or downscaled on the way back', async () => {
+    const png = Buffer.from(TINY_PNG, 'base64');
+    // The document is drawn on a 9x7 frame: neither the 16-pixel grid nor the model frame floor
+    // applies to a vector, and a reply bigger than the ask stays untouched.
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="9" height="7"><rect width="9" height="7" fill="#000"/></svg>';
+    const svgB64 = Buffer.from(svg).toString('base64');
+    const seen = [];
+    const server = http.createServer(async (req, res) => {
+        const chunks = [];
+        for await (const chunk of req) chunks.push(chunk);
+        seen.push(Buffer.concat(chunks).toString('latin1'));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ data: [{ b64_json: svgB64 }] }));
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address();
+    const client = createClient({ apiKey: 'sk-test', baseURL: `http://127.0.0.1:${port}/v1/`, retries: 0, rasterEngine: 'sharp' });
+    try {
+        const payloads = await client.images.edit({
+            model: 'openai/gpt-image-2.6-sunburst', prompt: 'trace', size: '9x7', format: 'svg',
+            files: [{ filename: 'logo.png', mime: 'image/png', bytes: png }],
+        });
+        assert.equal(payloads[0], svgB64);
+        assert.deepEqual(Buffer.from(payloads[0], 'base64').toString('utf8'), svg);
+        assert.equal(seen.length, 1);
+        assert.match(seen[0], /name="size"\r\n\r\n9x7\r\n/);
+        // The source goes untouched as well: no transparent padding was added to feed a raster frame.
+        assert.match(seen[0], /name="image"; filename="logo\.png"\r\nContent-Type: image\/png\r\n\r\n/);
+        assert.ok(seen[0].includes(png.toString('base64')) || Buffer.from(seen[0].split('\r\n\r\n').at(-2) ?? '', 'latin1').length >= png.length);
+    } finally {
+        client.close();
         await new Promise((resolve) => server.close(resolve));
     }
 });

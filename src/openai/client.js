@@ -730,6 +730,10 @@ export function createClient({
             }
              if (!vector && (needsDiv16Padding(model, imageDiv16) || needsMinPixelsPadding(model, imagePadToMin)) && files?.length) {
                 const toFloor = needsMinPixelsPadding(model, imagePadToMin);
+                // The frame the request names in pixels, when it names one. Padding raises that frame to
+                // the model floor and grows the canvas around the source; it never answers the caller's
+                // frame with the smaller frame of the source.
+                const asked = parseImageSize(String(size ?? '').trim());
                 const prepared = [];
                 for (const file of files) {
                     // A model whose floor is a megapixel canvas is given a frame that clears it up
@@ -737,14 +741,17 @@ export function createClient({
                     // the canvas is empty space, cut off the reply again below. Without this the
                     // model is asked to upscale a small source, and some of them answer by leaving
                     // the object at its original size in the corner of a canvas it then paints.
-                    const floor = toFloor ? paddedSizeToMinPixels(readImageSize(file.bytes), model) : null;
+                    // `padToMin: never` leaves the floor alone — that is the upscale-and-downscale path.
+                    const floor = toFloor ? paddedSizeToMinPixels(asked ?? readImageSize(file.bytes), model) : null;
+                    const targetWidth = toFloor ? (floor?.width ?? asked?.width ?? null) : null;
+                    const targetHeight = toFloor ? (floor?.height ?? asked?.height ?? null) : null;
                     let frame = null;
-                    try { frame = await rasterPadImageBytes({ bytes: file.bytes, engine: rasterEngine, targetWidth: floor?.width, targetHeight: floor?.height }); }
+                    try { frame = await rasterPadImageBytes({ bytes: file.bytes, engine: rasterEngine, targetWidth, targetHeight }); }
                     catch { frame = null; }
                     if (!frame) {
                         const exe = await detectMagick({ magickPath });
                         if (!exe) throw new ApiError('Для добавления прозрачного padding к входному изображению требуется sharp, canvas или ImageMagick.', { code: 'IMAGE_PADDING_UNAVAILABLE' });
-                        frame = await magickPadImageBytes({ exe, bytes: file.bytes, signal, targetWidth: floor?.width, targetHeight: floor?.height });
+                        frame = await magickPadImageBytes({ exe, bytes: file.bytes, signal, targetWidth, targetHeight });
                         frame.engine = 'magick';
                         frame.exe = exe;
                     }

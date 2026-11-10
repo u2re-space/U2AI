@@ -266,10 +266,11 @@ export const defaults = Object.freeze({
           * Padding up to the model's own frame floor (its `minPixels`) instead of asking the model to
           * upscale a smaller source. The empty space is added on the right and at the bottom, the
           * object keeps its scale in the top-left corner, and the padding is cut off the reply again.
-          *   auto    → only for families that do not upscale reliably (seedream-5.5); the ones that do
-          *             (gpt-image-2.6) keep the upscale-and-downscale path they already have
+          *   auto    → every family whose profile carries a frame floor: the canvas grows around the
+          *             source instead of the model being asked to upscale the source itself
           *   always  → pad every model that has a frame floor, whatever the profile says
-          *   never   → send the source at its own size and let the model answer with a bigger frame
+          *   never   → the upscale-and-downscale path: send the source at its own size, let the model
+          *             answer with a bigger frame, then scale the reply back to the source frame
           */
          padToMin: 'auto',            // auto | always | never
          /**

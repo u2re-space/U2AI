@@ -550,7 +550,7 @@ test('GPT Image 2.6 retries invalid dimensions in order and does not retry other
         } else {
             const form = raw.toString('latin1');
             editSizes.push(/name="size"\r\n\r\n([^\r]+)/.exec(form)?.[1]);
-            if (editSizes.length < 3) return fail(422, 'Unsupported dimensions');
+            if (editSizes.length < 2) return fail(422, 'Unsupported dimensions');
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ data: [{ b64_json: TINY_PNG }] }));
@@ -566,7 +566,9 @@ test('GPT Image 2.6 retries invalid dimensions in order and does not retry other
             model: 'gpt-image-2.6-sunburst', prompt: 'edit', size: '100x100',
             files: [{ filename: 'shot.png', mime: 'image/png', bytes: png }],
         });
-        assert.deepEqual(editSizes, ['16x16', '816x816', '1024x1024']);
+        // A 100x100 request sits below the model floor, so the source is padded up to the smallest
+        // frame the model answers (816x816) and the retry ladder starts from that padded frame.
+        assert.deepEqual(editSizes, ['816x816', '1024x1024']);
         await assert.rejects(() => client.images.generate({ model: 'gpt-image-2.6-sunburst', prompt: 'auth', size: '100x100' }), { status: 401 });
         assert.equal(authAttempts, 1);
     } finally {
@@ -575,7 +577,7 @@ test('GPT Image 2.6 retries invalid dimensions in order and does not retry other
     }
 });
 
-test('GPT Image 2.6 pads non-multiple input edges without scaling and removes returned padding', async () => {
+test('GPT Image 2.6 pads input edges up to the model floor without scaling and removes returned padding', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'ai-image-pad-'));
     const source = path.join(root, 'source.png');
     const paddedReply = path.join(root, 'reply.png');
@@ -594,7 +596,9 @@ test('GPT Image 2.6 pads non-multiple input edges without scaling and removes re
     };
     try {
         await generatePng(source, 1000, 600);
-        await generatePng(paddedReply, 1008, 608);
+        // The wire frame is 1056x640: the 16-pixel grid alone would give 1008x608, which sits below
+        // the gpt-image-2.6 floor of 655 360 px, so the canvas grows to the smallest frame on grid.
+        await generatePng(paddedReply, 1056, 640);
         const sourceBytes = await readFile(source);
         const seen = [];
         const server = http.createServer(async (req, res) => {
@@ -616,7 +620,8 @@ test('GPT Image 2.6 pads non-multiple input edges without scaling and removes re
                 files: [{ filename: 'source.png', mime: 'image/png', bytes: sourceBytes }],
             });
             const original = await rasterPadImageBytes({ bytes: sourceBytes, engine: 'sharp' });
-            assert.deepEqual(seen.map(({ size, file }) => ({ size, file })), [{ size: '1008x608', file: true }]);
+            assert.deepEqual(seen.map(({ size, file }) => ({ size, file })), [{ size: '1056x640', file: true }]);
+            // Without a floor target the same helper only rounds up to the 16-pixel grid.
             assert.equal(original.width, 1008);
             assert.equal(original.height, 608);
             assert.equal(original.originalWidth, 1000);
@@ -625,8 +630,8 @@ test('GPT Image 2.6 pads non-multiple input edges without scaling and removes re
             const sentPath = path.join(root, 'sent.png');
             await writeFile(sentPath, Buffer.from(seen[0].image, 'latin1'));
             const sentInfo = await rasterInfo(sentPath, { cwd: root, engine: 'sharp' });
-            assert.equal(sentInfo.width, 1008);
-            assert.equal(sentInfo.height, 608);
+            assert.equal(sentInfo.width, 1056);
+            assert.equal(sentInfo.height, 640);
             assert.deepEqual(await pixelAt(sentPath, 20, 20), await pixelAt(source, 20, 20));
             assert.deepEqual(await pixelAt(sentPath, 1004, 604), [0, 0, 0, 0]);
             const resultPath = path.join(root, 'result.png');
@@ -868,7 +873,7 @@ test('GPT Image edits surfaces gateway error objects returned with HTTP 200', as
     }
 });
 
-test('GPT Image 2.6 retries HTTP 200 minimum-pixel errors with a same-ratio size', async () => {
+test('GPT Image 2.6 retries HTTP 200 minimum-pixel errors with the next frame of the ladder', async () => {
     const png = Buffer.from(TINY_PNG, 'base64');
     const sizes = [];
     const server = http.createServer(async (req, res) => {
@@ -878,7 +883,7 @@ test('GPT Image 2.6 retries HTTP 200 minimum-pixel errors with a same-ratio size
         sizes.push(/name=.{1}size.{1}\r\n\r\n([^\r]+)/.exec(form)?.[1]);
         if (sizes.length === 1) {
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: { message: "Invalid size '288x336'. Requested resolution is below the current minimum pixel budget." } }));
+            res.end(JSON.stringify({ error: { message: "Invalid size '752x880'. Requested resolution is below the current minimum pixel budget." } }));
             return;
         }
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -892,7 +897,9 @@ test('GPT Image 2.6 retries HTTP 200 minimum-pixel errors with a same-ratio size
             model: 'gpt-image-2.6-sunburst', prompt: 'edit', size: '288x336',
             files: [{ filename: 'source.png', mime: 'image/png', bytes: png }],
         });
-        assert.deepEqual(sizes, ['288x336', '768x896']);
+        // 288x336 sits below the model floor, so the source is padded to the same-ratio frame that
+        // clears it (752x880) and the ladder answers a refusal with the portrait preset of the tier.
+        assert.deepEqual(sizes, ['752x880', '768x1024']);
         assert.equal(payloads[0], TINY_PNG);
     } finally {
         client.close();
@@ -1049,12 +1056,16 @@ test('the model floor becomes a same-ratio padded frame', () => {
 });
 
 test('padding to the model floor follows the profile and the operator override', () => {
-    // Seedream answers a bigger frame by keeping the object in the corner, so it gets the padding.
+    // Every family is padded up to its own floor by default: the source is never handed to the model
+    // to upscale, the canvas grows around it and the padding is cut off the reply again.
     assert.equal(imageModelProfile(SEEDREAM).padToMinPixels, true);
     assert.equal(needsMinPixelsPadding(SEEDREAM), true);
-    // gpt-image-2.6 upscales on its own and keeps the downscale path it already had.
-    assert.equal(imageModelProfile('openai/gpt-image-2.6-sunburst').padToMinPixels, false);
-    assert.equal(needsMinPixelsPadding('openai/gpt-image-2.6-sunburst'), false);
+    assert.equal(imageModelProfile('openai/gpt-image-2.6-sunburst').padToMinPixels, true);
+    assert.equal(needsMinPixelsPadding('openai/gpt-image-2.6-sunburst'), true);
+    assert.equal(imageModelProfile('sourceful/riverflow-v2.6-pro').padToMinPixels, true);
+    // `image.padToMin: never` is the override that keeps the upscale-and-downscale path: the source
+    // goes at its own size, the model answers a bigger frame, the reply is scaled back to the source.
+    assert.equal(needsMinPixelsPadding('openai/gpt-image-2.6-sunburst', 'never'), false);
     assert.equal(needsMinPixelsPadding('sourceful/riverflow-v2.6-pro', 'always'), true);
     assert.equal(needsMinPixelsPadding(SEEDREAM, 'never'), false);
 });

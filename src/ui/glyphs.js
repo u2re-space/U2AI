@@ -10,8 +10,8 @@
  */
 const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const ASCII_FRAMES = ['-', '\\', '|', '/'];
-const SYMBOLS = { action: '▸', ok: '✓', fail: '✗', warn: '⚠', reasoning: '∙', image: '▣', usage: '≡', info: '·', question: '?' };
-const ASCII_SYMBOLS = { action: '>', ok: '+', fail: 'x', warn: '!', reasoning: '~', image: '#', usage: '=', info: '-', question: '?' };
+const SYMBOLS = { action: '▸', ok: '✓', fail: '✗', warn: '⚠', danger: '⚠', reasoning: '∙', image: '▣', usage: '≡', info: '·', question: '?' };
+const ASCII_SYMBOLS = { action: '>', ok: '+', fail: 'x', warn: '!', danger: '!', reasoning: '~', image: '#', usage: '=', info: '-', question: '?' };
 
 export { FRAMES, ASCII_FRAMES, SYMBOLS, ASCII_SYMBOLS };
 

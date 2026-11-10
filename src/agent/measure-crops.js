@@ -17,7 +17,7 @@ import { stat } from 'node:fs/promises';
 import { resolveInside } from './paths.js';
 import { detectMagick, magickCrop, magickIdentify } from './image-magick.js';
 
-/** Upper bound on automatic crops for one measurement sheet. */
+/** Upper bound on automatic crops for one measurement sheet. `maxCrops: 0` lifts the cap. */
 const MAX_CROPS = 192;
 
 /**
@@ -146,12 +146,12 @@ function namedSubReference(item, subReferences) {
  * resolved in this order: the item's own `source` field, a sub-reference named in its notes,
  * the sheet source — with `measureSource: 'subrefs'` forcing derived sub-references over the
  * named original.
- * @param {{ root: string, workId: string, sheet: object, referencePaths?: string[], subReferences?: object[], measureSource?: string, config?: object, signal?: AbortSignal, reuse?: Array<{ crop?: string, box?: object }> }} options
+ * @param {{ root: string, workId: string, sheet: object, referencePaths?: string[], subReferences?: object[], measureSource?: string, config?: object, signal?: AbortSignal, reuse?: Array<{ crop?: string, box?: object }>, maxCrops?: number }} options
  * @returns {Promise<{ crops: Array<{ kind: string, name: string, crop: string, bytes?: number, box?: object }>, warnings: string[] }>}
  * @exports
  * @ai.hint io
  */
-export async function stageMeasurementCrops({ root, workId, sheet, referencePaths = [], subReferences = [], measureSource = 'auto', config = {}, signal, reuse = [] }) {
+export async function stageMeasurementCrops({ root, workId, sheet, referencePaths = [], subReferences = [], measureSource = 'auto', config = {}, signal, reuse = [], maxCrops = MAX_CROPS }) {
     const regions = Array.isArray(sheet?.regions) ? sheet.regions : [];
     const elements = Array.isArray(sheet?.elements) ? sheet.elements : [];
     if (!regions.length && elements.length === 0) return { crops: [], warnings: [] };
@@ -205,6 +205,9 @@ export async function stageMeasurementCrops({ root, workId, sheet, referencePath
     const cropPrefix = `.tmp/${workId}/crops/`;
     const isCropPath = (rel) => path.normalize(rel).startsWith(path.normalize(cropPrefix));
     let capped = false;
+    // A sheet may name more fragments than the ceiling allows; advanced mode lifts it entirely
+    // (`maxCrops: 0`), because there the layers arrive already cut by the decomposition model.
+    const cap = Number.isSafeInteger(maxCrops) && maxCrops > 0 ? maxCrops : null;
 
     // Reuse fragments cut after the overview pass when their box survived the second pass.
     for (const item of reuse) {
@@ -251,8 +254,8 @@ export async function stageMeasurementCrops({ root, workId, sheet, referencePath
             }
             return;
         }
-        if (reserved.size >= MAX_CROPS) {
-            if (!capped) warnings.push(`Кропы ограничены ${MAX_CROPS} фрагментами.`);
+        if (cap && reserved.size >= cap) {
+            if (!capped) warnings.push(`Кропы ограничены ${cap} фрагментами.`);
             capped = true;
             return;
         }

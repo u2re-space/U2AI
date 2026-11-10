@@ -349,6 +349,35 @@ test('measurer passes, turns, and context budget are validated', async () => {
     }
 });
 
+test('measurer mode and the advanced caps are validated', async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), 'ai-measurer-mode-'));
+    const env = { AI_AGENT_HOME: home };
+    try {
+        const config = await loadConfig({ env, ensureHome: false });
+        assert.equal(config.agent.measurerMode, 'standard');
+        assert.equal(config.agent.advancedMaxLayers, 16);
+        assert.equal(config.agent.advancedCropLimit, 0, 'advanced mode cuts crops without a ceiling by default');
+        await writeFile(path.join(home, 'config.json'), JSON.stringify({ agent: { measurerMode: 'advanced' } }));
+        assert.equal((await loadConfig({ env, ensureHome: false })).agent.measurerMode, 'advanced');
+        await writeFile(path.join(home, 'config.json'), JSON.stringify({ agent: { measurerMode: 'turbo' } }));
+        await assert.rejects(loadConfig({ env, ensureHome: false }), /agent\.measurerMode: standard \| advanced/);
+        await writeFile(path.join(home, 'config.json'), JSON.stringify({ agent: { advancedMaxLayers: 17 } }));
+        await assert.rejects(loadConfig({ env, ensureHome: false }), /agent\.advancedMaxLayers: 1\.\.16/);
+        await writeFile(path.join(home, 'config.json'), JSON.stringify({ agent: { advancedCropLimit: -1 } }));
+        await assert.rejects(loadConfig({ env, ensureHome: false }), /agent\.advancedCropLimit: >= 0/);
+    } finally {
+        await rm(home, { recursive: true, force: true });
+    }
+});
+
+test('--measurer-mode writes agent.measurerMode and turns the images route on', () => {
+    assert.deepEqual(overridesFrom({ 'measurer-mode': 'standard' }).agent, { measurerMode: 'standard' });
+    const advanced = overridesFrom({ 'measurer-mode': 'advanced' });
+    assert.equal(advanced.agent.measurerMode, 'advanced');
+    assert.equal(advanced.tools.images, true, 'decomposition is an image route, so the flag enables it');
+    assert.throws(() => overridesFrom({ 'measurer-mode': 'turbo' }), /--measurer-mode: standard \| advanced/);
+});
+
 test('decorator mode and turn cap are validated', async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), 'ai-decorator-cfg-'));
     const env = { AI_AGENT_HOME: home };

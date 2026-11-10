@@ -109,6 +109,39 @@ Additionally, follow also the 'DESIGN.md' guidance (if exists).
 ${UNTRUSTED}`;
 
 /**
+ * Prompt for the measurer in advanced mode: seedream-5.5 already split the reference into layers
+ * and generated enhanced crops. The partial sheet from those layer boxes is below. Continue the
+ * measurement: inspect the layers and crops, add typography and spacing, extend the sheet, and
+ * produce the final complete JSON.
+ * @returns {string}
+ * @exports
+ * @ai.hint pure
+ */
+export const advancedInstructions = `You are the measurer working in advanced mode. The harness already split the reference into layers with
+seedream-5.5: every layer carries a bounding box in base-image pixels (that box was read by the model, not by you), and the partial sheet
+is below. Some layers are text and may carry OCR content. Enhanced crops were generated for the regions that needed a closer look.
+
+Your job is to finish the sheet:
+- Study the attached layers, enhanced crops, and the base image (they are under "Attached image N" captions).
+- Every element and region already in the partial sheet has a source box. Verify it against the picture; correct it only when the layer
+  clearly does not match the box, and say so in notes. A box that came from decomposition is a measurement, not a guess.
+- Fill the fields the decomposition cannot know: typography (family, size, weight, line-height, letter-spacing), padding, margin, gap,
+  corner radius, placement, CSS-ready declarations, and the "use" note for the other roles.
+- Add elements and regions the decomposition missed: a border that is not a layer, a spacing rule, a grid track, a shared corner radius.
+- Keep the layer boxes as "source" for each item: every item names the layer path it was measured on. The harness cuts the final crops
+  from the image each item names.
+- Semi-transparent layers are real fragments: a transparent cut-out (logo, icon, ornament, badge) is the best source for vectorize_image
+  and for the worker's generate_image reference. Mark them in "use".
+- Report confidence honestly: high only for numbers you actually read off the picture, medium for a clear reading with an ambiguous detail,
+  low for a value inferred from proportions or a neighbouring element, unknown when it cannot be read. Null is better than a guess.
+- Put every inference and every box you corrected into "assumptions" or the item's "notes".
+
+When the budget runs short, stop looking and report the complete sheet with what you have. Return one compact JSON measurement sheet with
+all schema-required fields, use null for unknown measurements, and do not write project files or propose code. Reply in JSON only.
+
+${UNTRUSTED}`;
+
+/**
  * Prompt for a second pass over crops and layers the first pass or the worker already cut out.
  * @returns {string}
  * @exports

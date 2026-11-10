@@ -14,8 +14,11 @@ import { randomUUID } from 'node:crypto';
  * chatScript(body, index) then serves POST /chat/completions with a chat scenario:
  *   { content?, reasoningContent?, refusal?, toolCalls?: [{ id?, name, arguments }],
  *     finishReason?, usage?, httpStatus?, httpBody? }
+ *
+ * `taskScript({ taskId, polls })` serves GET /tasks/{id} — the asynchronous image routes
+ * (seedream-5.5 layer decomposition) answer a task id first and the picture only afterwards.
  */
-export async function startMockServer({ script, chatScript = null, imageScript, backgroundPolls = 2, decisions = null, noResponses = false } = {}) {
+export async function startMockServer({ script, chatScript = null, imageScript, taskScript = null, backgroundPolls = 2, decisions = null, noResponses = false } = {}) {
     const requests = [];
     const responses = new Map();   // id -> { body, scenario, polls }
     let counter = 0;
@@ -187,6 +190,17 @@ export async function startMockServer({ script, chatScript = null, imageScript, 
         }
         if (req.method === 'POST' && url.pathname === '/v1/images/edits') {
             return json(200, { created: Math.floor(Date.now() / 1000), data: [{ b64_json: TINY_PNG }] });
+        }
+        // Asynchronous image routes answer a task id first; the picture arrives on this poll.
+        const taskMatch = /^\/v1\/tasks\/([^/]+)$/.exec(url.pathname);
+        if (req.method === 'GET' && taskMatch) {
+            if (typeof taskScript !== 'function') {
+                return json(404, { error: { message: 'no task route', type: 'invalid_request_error', code: 'not_found' } });
+            }
+            const polls = requests.filter((r) => r.method === 'GET' && r.path.startsWith('/v1/tasks/')).length;
+            const answer = await taskScript({ taskId: decodeURIComponent(taskMatch[1]), polls });
+            if (answer?.httpStatus) return json(answer.httpStatus, answer.httpBody ?? { error: { message: 'mock task error', type: 'server_error' } });
+            return json(200, answer);
         }
         if (req.method === 'POST' && url.pathname === '/v1/decisions') {
             const answer = typeof decisions === 'function' ? await decisions(body) : decisions;

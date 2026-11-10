@@ -137,13 +137,14 @@ export function createRenderer({
         state.textStreaming = true;
         out(stdout, clean);
     }
-    /** Log line on stderr. kind: action | ok | fail | warn | reasoning | image | usage | info */
-    function line(kind, message, { dim = false } = {}) {
+    /** Log line on stderr. kind: action | ok | fail | warn | danger | reasoning | image | usage | info */
+    function line(kind, message, { dim = false, keepColor = false } = {}) {
         if (mode === 'json') { emitJson({ type: 'log', kind, message }); return; }
-        if (mode === 'quiet' && !['fail', 'warn'].includes(kind)) return;
-        const clean = sanitizeTerminal(message);
+        if (mode === 'quiet' && !['fail', 'warn', 'danger'].includes(kind)) return;
+        // keepColor: the caller already sanitized every piece and inserted its own colors.
+        const clean = keepColor ? message : sanitizeTerminal(message);
         const symbol = symbols[kind] ?? symbols.info;
-        const colors = { action: 'cyan', ok: 'green', fail: 'red', warn: 'yellow', reasoning: 'gray', image: 'magenta', usage: 'gray', info: 'gray', question: 'yellow' };
+        const colors = { action: 'cyan', ok: 'green', fail: 'red', warn: 'yellow', danger: 'red', reasoning: 'gray', image: 'magenta', usage: 'gray', info: 'gray', question: 'yellow' };
         const prefix = color(colors[kind] ?? 'gray', symbol);
         const body = dim || kind === 'reasoning' || kind === 'usage' ? color('gray', clean) : clean;
         if (state.textStreaming) { ensureNewline(); state.textStreaming = false; }
@@ -243,7 +244,7 @@ export function createRenderer({
     function handle(event) {
         return handleRendererEvent(event, {
             mode, verbose, line, setStatus, text, state, showReasoning, emitJson,
-            STAGES, ensureNewline, drawStatus,
+            STAGES, ensureNewline, drawStatus, color,
         });
     }
 

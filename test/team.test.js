@@ -24,6 +24,8 @@ let extractModel = null;
 let decision = null;
 let detectCoder = false;
 let root;
+let taskScript = null;
+let imageScript = null;
 before(async () => {
     server = await startMockServer({
         script: (body, index) => {
@@ -36,11 +38,13 @@ before(async () => {
             }
             return script(body, index);
         },
+        taskScript: (info) => (taskScript ? taskScript(info) : { data: { status: 'completed', result: { images: [] } } }),
+        imageScript: (body) => (imageScript ? imageScript(body) : null),
         decisions: () => decision,
     });
     root = await mkdtemp(path.join(os.tmpdir(), 'ai-agent-team-'));
 });
-beforeEach(() => { server.reset(); decision = null; extractScript = null; extractModel = null; detectCoder = false; });
+beforeEach(() => { server.reset(); decision = null; extractScript = null; extractModel = null; detectCoder = false; taskScript = null; imageScript = null; });
 after(async () => { await server.close(); await rm(root, { recursive: true, force: true }); });
 
 const baseConfig = () => structuredClone({
@@ -150,7 +154,9 @@ test('iconifier runs after changed HTML markup and skips ordinary JavaScript', a
         const events = [];
         try {
             const result = await runTeam({ client: client(), config, ledger: createLedger(), task: 'создать страницу', root: dir, approvalLevel: 'all', emit: (event) => events.push(event) });
-            assert.equal(result.status, 'completed', result.error?.message);
+        assert.equal(result.status, 'completed', result.error?.message);
+        const warnings = events.filter((event) => event.type === 'warning').map((event) => event.message);
+        assert.equal(warnings.filter((text) => /Слой разложения не приложен|не скачан/.test(text)).length, 0, warnings.join(' | '));
             assert.equal(Boolean(iconifierRequest), scenario.expectedIconifier);
             assert.equal(seen.includes('iconifier'), scenario.expectedIconifier);
             if (scenario.expectedIconifier) {
@@ -2512,6 +2518,208 @@ test('the fragment pass replaces the overview sheet and reuses its crops', async
             await assert.rejects(readFile(path.join(dir, '.tmp', result.workId, name), 'utf8'), { code: 'ENOENT' });
         }
         assert.ok(events.some((event) => event.type === 'measure.crops' && event.count === 1));
+    } finally {
+        await rm(dir, { recursive: true, force: true });
+    }
+});
+
+test('advanced measurer mode decomposes the reference first and verifies the sheet with reasoning pro', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-measure-advanced-'));
+    const events = [];
+    const measureBodies = [];
+    const imageBodies = [];
+    const picture = Buffer.from(TINY_PNG, 'base64');
+    await writeFile(path.join(dir, 'mockup.png'), picture);
+    // Layers travel as data URIs, so the test does not need a CDN to download them from.
+    const layerUrl = `data:image/png;base64,${TINY_PNG}`;
+    imageScript = (body) => {
+        imageBodies.push(body);
+        if (body.layer_decomposition) {
+            assert.equal('background' in body, false, 'decomposition rejects any background field');
+            assert.equal(body.image_urls.length, 1, 'exactly one picture is decomposed');
+            return { data: [{ task_id: 'task-adv' }] };
+        }
+        return { data: [{ b64_json: TINY_PNG }] };
+    };
+    taskScript = ({ taskId }) => {
+        assert.equal(taskId, 'task-adv');
+        return {
+            data: { status: 'completed', result: { images: [{
+                url: [layerUrl, layerUrl, layerUrl],
+                sizes: ['1000x800', '400x100', '200x200'],
+                layers: [
+                    { z_index: 0, name: 'base', background: 'opaque' },
+                    { z_index: 1, name: 'headline', background: 'transparent', bounding_box: { absolute: [40, 20, 440, 120] }, text_recognition: { text: 'Big headline', lines: [] } },
+                    { z_index: 2, name: 'badge', background: 'transparent', bounding_box: { absolute: [500, 400, 700, 600] } },
+                ],
+            }] } },
+        };
+    };
+    detectCoder = true;
+    script = (body) => {
+        const role = roleOf(body);
+        if (role === 'answer') return { text: 'Нужен план.\nroute: plan' };
+        if (role === 'classifier') return { text: JSON.stringify({ label: 'normal' }) };
+        if (role === 'planner') {
+            return { text: JSON.stringify({ summary: 'стили по референсу', complexity: 'normal', steps: [{ goal: 'Создать styles.scss', details: 'Собрать grid по измеренному макету', verify: 'прочитать styles.scss' }], filesOfInterest: [], searchQueries: [], questionsForCollector: [], acceptanceCriteria: [], needsReview: false, imageNotes: null, risks: [] }) };
+        }
+        if (role === 'measurer') {
+            // The mock must not assert: a thrown check becomes an HTTP 500 and the client retries
+            // the same request five times. The assertions below run on the recorded bodies.
+            measureBodies.push(body);
+            return { text: JSON.stringify({
+                summary: 'Карточка в двухколоночной сетке', source: 'mockup.png', unit: 'px',
+                units: { source: 'px', rootFontSize: 16, scale: null, preferred: ['rem'], notes: '1rem = 16px.' },
+                confidence: 'high', assumptions: ['The layer boxes were verified against the pictures.'],
+                canvas: { x: 0, y: 0, width: 1000, height: 800 },
+                elements: [{
+                    name: 'headline', kind: 'text', box: { x: 40, y: 20, width: 400, height: 100 }, rotation: 0,
+                    borders: '', radius: null,
+                    padding: { top: null, right: null, bottom: null, left: null },
+                    margin: { top: null, right: null, bottom: null, left: null }, gap: null,
+                    spacing: '', placement: 'top of the canvas', css: 'width: 25rem;', use: 'copy text content',
+                    typography: { role: 'heading', family: '', familyConfidence: 'unknown', fontSize: 40, weight: 700, lineHeight: 48, letterSpacing: 0, style: '' },
+                    confidence: 'high', notes: 'Box kept from decomposition.', crop: null,
+                }],
+                regions: [], rules: [], notes: '',
+            }) };
+        }
+        if (role === 'collector') return { text: JSON.stringify({ findings: [], answers: [], conventions: [], notes: '' }) };
+        if (role === 'memory') return { text: JSON.stringify({ taskSummary: 'x', memories: [] }) };
+        return { text: 'ok' };
+    };
+    const config = baseConfig();
+    config.memory = { ...defaults.memory, enabled: false };
+    config.imageModel = 'bytedance-seed/seedream-5-5';
+    config.agent = { ...config.agent, measurerMode: 'advanced', measurerPasses: 1 };
+    config.roles = { ...config.roles, measurer: { ...config.roles.measurer, model: 'gpt-6.1-terra' } };
+    try {
+        const result = await runTeam({
+            client: client(), config, ledger: createLedger(), task: 'стили по референсу',
+            root: dir, approvalLevel: 'read', referencePaths: ['mockup.png'],
+            parts: [{ type: 'input_image', image: { path: 'mockup.png' } }],
+            emit: (event) => events.push(event),
+        });
+        assert.equal(result.status, 'completed', result.error?.message);
+        assert.equal(measureBodies.length, 1, `measurer calls: ${measureBodies.map((b) => (JSON.stringify(b.input).match(/Advanced measurement pass|Measurement pass \d|Turn budget is spent/g) ?? ['?'])[0]).join(' | ')}`);
+        const verify = measureBodies[0];
+        assert.equal(verify.reasoning?.mode, 'pro', 'a GPT measurer in advanced mode reasons in pro mode');
+        assert.match(verify.instructions, /the measurer working in advanced mode/, 'the verification pass uses the advanced instructions');
+        const prompt = JSON.stringify(verify.input);
+        assert.match(prompt, /Advanced measurement pass/);
+        assert.match(prompt, /Decomposed layers \(JSON\)/);
+        assert.match(prompt, /Big headline/, 'the OCR of a layer reaches the measurer');
+        assert.match(prompt, /"input_image"/, 'the cut layers are attached for verification');
+        // Two layers plus, when ImageMagick is installed, the enhanced transparent crops.
+        const attached = verify.input.flatMap((item) => item.content ?? []).filter((part) => part.type === 'input_image').length;
+        assert.ok(attached >= 2, `both decomposed layers travel to the measurer, got ${attached}`);
+        assert.ok(imageBodies.some((body) => body.layer_decomposition === true), 'the reference was decomposed by seedream-5.5');
+        const started = events.find((event) => event.type === 'stage.start' && event.stage === 'measure');
+        assert.equal(started.measurerMode, 'advanced');
+        assert.ok(events.some((event) => event.type === 'measure.pass' && event.phase === 'advanced-decomposition' && event.layers === 2));
+        assert.ok(events.some((event) => event.type === 'measure.pass' && event.phase === 'advanced-verify' && event.reasoningMode === 'pro'));
+        assert.ok(events.some((event) => event.type === 'measure.conclusion' && event.elements === 1));
+        const savedSheet = JSON.parse(await readFile(path.join(dir, '.tmp', result.workId, 'measurements.json'), 'utf8'));
+        assert.equal(savedSheet.elements[0].box.width, 400);
+    } finally {
+        await rm(dir, { recursive: true, force: true });
+    }
+});
+
+test('advanced measurer mode without a seedream picture model warns and stays on the standard passes', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-measure-advanced-off-'));
+    const events = [];
+    const measureBodies = [];
+    await writeFile(path.join(dir, 'mockup.png'), Buffer.from(TINY_PNG, 'base64'));
+    detectCoder = true;
+    script = (body) => {
+        const role = roleOf(body);
+        if (role === 'answer') return { text: 'Нужен план.\nroute: plan' };
+        if (role === 'classifier') return { text: JSON.stringify({ label: 'normal' }) };
+        if (role === 'planner') {
+            return { text: JSON.stringify({ summary: 'стили по референсу', complexity: 'normal', steps: [{ goal: 'Создать styles.scss', details: '', verify: 'прочитать styles.scss' }], filesOfInterest: [], searchQueries: [], questionsForCollector: [], acceptanceCriteria: [], needsReview: false, imageNotes: null, risks: [] }) };
+        }
+        if (role === 'measurer') {
+            measureBodies.push(body);
+            return { text: JSON.stringify({
+                summary: 's', source: 'mockup.png', unit: 'px',
+                units: { source: 'px', rootFontSize: 16, scale: null, preferred: ['rem'], notes: '' },
+                confidence: 'low', assumptions: [], canvas: { x: 0, y: 0, width: 100, height: 100 },
+                elements: [], regions: [], rules: [], notes: '',
+            }) };
+        }
+        if (role === 'collector') return { text: JSON.stringify({ findings: [], answers: [], conventions: [], notes: '' }) };
+        if (role === 'memory') return { text: JSON.stringify({ taskSummary: 'x', memories: [] }) };
+        return { text: 'ok' };
+    };
+    const config = baseConfig();
+    config.memory = { ...defaults.memory, enabled: false };
+    config.imageModel = 'openai/gpt-image-2.6-sunburst';
+    config.agent = { ...config.agent, measurerMode: 'advanced' };
+    try {
+        const result = await runTeam({
+            client: client(), config, ledger: createLedger(), task: 'стили по референсу',
+            root: dir, approvalLevel: 'read', referencePaths: ['mockup.png'],
+            parts: [{ type: 'input_image', image: { path: 'mockup.png' } }],
+            emit: (event) => events.push(event),
+        });
+        assert.equal(result.status, 'completed', result.error?.message);
+        assert.ok(events.some((event) => event.type === 'warning' && /advanced, но image-модель не Seedream 5\.5/.test(event.message)),
+            'the user is told the expensive mode is not available');
+        assert.equal(events.find((event) => event.type === 'stage.start' && event.stage === 'measure').measurerMode, 'standard');
+        assert.ok(events.some((event) => event.type === 'measure.pass' && event.phase === 'overview'), 'the standard overview pass runs instead');
+        assert.equal(measureBodies.length, 1);
+        assert.notEqual(measureBodies[0].reasoning?.mode, 'pro', 'the standard mode does not force pro reasoning');
+    } finally {
+        await rm(dir, { recursive: true, force: true });
+    }
+});
+
+test('advanced measurer mode falls back to the standard passes when decomposition fails', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-measure-advanced-fallback-'));
+    const events = [];
+    const measureBodies = [];
+    await writeFile(path.join(dir, 'mockup.png'), Buffer.from(TINY_PNG, 'base64'));
+    imageScript = () => ({ data: [{ task_id: 'task-bad' }] });
+    taskScript = () => ({ data: { status: 'failed', error: 'content policy' } });
+    detectCoder = true;
+    script = (body) => {
+        const role = roleOf(body);
+        if (role === 'answer') return { text: 'Нужен план.\nroute: plan' };
+        if (role === 'classifier') return { text: JSON.stringify({ label: 'normal' }) };
+        if (role === 'planner') {
+            return { text: JSON.stringify({ summary: 'стили по референсу', complexity: 'normal', steps: [{ goal: 'Создать styles.scss', details: '', verify: 'прочитать styles.scss' }], filesOfInterest: [], searchQueries: [], questionsForCollector: [], acceptanceCriteria: [], needsReview: false, imageNotes: null, risks: [] }) };
+        }
+        if (role === 'measurer') {
+            measureBodies.push(body);
+            assert.equal(roleOf(body) === 'measurer' && body.instructions.includes('advanced mode'), false, 'the fallback uses the ordinary measurer prompt');
+            return { text: JSON.stringify({
+                summary: 's', source: 'mockup.png', unit: 'px',
+                units: { source: 'px', rootFontSize: 16, scale: null, preferred: ['rem'], notes: '' },
+                confidence: 'low', assumptions: [], canvas: { x: 0, y: 0, width: 100, height: 100 },
+                elements: [], regions: [], rules: [], notes: '',
+            }) };
+        }
+        if (role === 'collector') return { text: JSON.stringify({ findings: [], answers: [], conventions: [], notes: '' }) };
+        if (role === 'memory') return { text: JSON.stringify({ taskSummary: 'x', memories: [] }) };
+        return { text: 'ok' };
+    };
+    const config = baseConfig();
+    config.memory = { ...defaults.memory, enabled: false };
+    config.imageModel = 'bytedance-seed/seedream-5-5';
+    config.agent = { ...config.agent, measurerMode: 'advanced' };
+    try {
+        const result = await runTeam({
+            client: client(), config, ledger: createLedger(), task: 'стили по референсу',
+            root: dir, approvalLevel: 'read', referencePaths: ['mockup.png'],
+            parts: [{ type: 'input_image', image: { path: 'mockup.png' } }],
+            emit: (event) => events.push(event),
+        });
+        assert.equal(result.status, 'completed', result.error?.message);
+        assert.ok(events.some((event) => event.type === 'warning' && /Разложение слоёв не удалось/.test(event.message)));
+        assert.ok(events.some((event) => event.type === 'warning' && /перехожу на обычные проходы/.test(event.message)));
+        assert.ok(events.some((event) => event.type === 'measure.pass' && event.phase === 'overview'), 'the standard pass still measures the reference');
+        assert.equal(measureBodies.length, 1);
     } finally {
         await rm(dir, { recursive: true, force: true });
     }

@@ -3,7 +3,7 @@
  * @module cli-help
  * @purpose Help text printed by `ai --help`. Wording is user-facing; keep the spacing inside the template.
  * @usedBy cli
- * @exports HELP
+ * @exports HELP, paintHelp
  * @ai.tags cli
  * @ai.hint pure
  * @changed 2026-10-26 0.2.0: --max-effort, --context, role ceilings, delegate_role, and the stage pipeline.
@@ -140,7 +140,16 @@ context=false запускает роль на чистом контексте. 
                           оригинал, у которого есть ровно один суб-референс, кропы режутся из суб-референса;
                           subrefs — оригиналы не прикладываются к замеру вовсе, measurer видит только
                           суб-референсы, и каждый кроп режется из суб-референса, даже если роль называет
-                          источником оригинал; original — источник листа принимается буквально (прежнее поведение).
+                           источником оригинал; original — источник листа принимается буквально (прежнее поведение).
+    --measurer-mode standard|<red>advanced</red>  как работает measurer (по умолчанию standard).
+                          standard — роль читает референс и возвращает лист, а кропы режет harness;
+                          <red>advanced</red> — сначала seedream-5.5 раскладывает референс на слои с bounding box
+                          и полупрозрачными кропами, затем роль сверяет лист по ним: числа первого этапа
+                          засчитываются, потолок кропов снимается (agent.advancedCropLimit: 0), а GPT-модели роли
+                          получают reasoning <red>pro</red>. Режим медленный и дорогой (плата за каждый слой),
+                          требует image-модели seedream-5.5 — без неё прогон остаётся в standard и предупреждает.
+                          Конфиг: agent.measurerMode, agent.advancedMaxLayers, agent.advancedCropLimit.
+
     --stop-after <этап>  cleanly завершить прогон после указанного этапа (answer, classify, plan, design, decompose,
                           measure, architect, collect, images, decor, work, iconify, review). Работа сохраняется
                           как незавершённая; продолжение: ai resume — уже с другими флагами и другими --image.
@@ -366,4 +375,20 @@ AI_AGENT_HOME (по умолчанию ~/.ai-agent), AI_ASCII=1 (без Unicode-
 На Windows ключ и адрес из разных областей (пользователь и система) не смешиваются: берётся пара из той области, где заданы оба.
 Коды выхода: 0 — успех, 1 — задача не завершена/ошибка API, 2 — ошибка аргументов/конфигурации, 130 — отменено.
 `;
+
+/**
+ * Paint the `<red>` markers of HELP. Modes the user switches on by hand are slow or paid per call,
+ * so they print red; a pipe, a file, and `--help | cat` must never see the markup, hence stripping.
+ * The escape is written directly: `styleText` would also honor NO_COLOR and silently return the
+ * plain text, while this function is only called when the caller already asked for a colored stream.
+ * @param {string} text HELP template.
+ * @param {boolean} [tty] Whether the target stream colors its output.
+ * @returns {string}
+ * @exports
+ * @ai.hint pure
+ */
+export function paintHelp(text, tty = Boolean(process.stdout.isTTY)) {
+    if (!tty) return text.replace(/<\/?red>/g, '');
+    return text.replace(/<red>([\s\S]*?)<\/red>/g, (_match, inner) => `\u001b[31m${inner}\u001b[0m`);
+}
 

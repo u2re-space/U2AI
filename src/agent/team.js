@@ -18,6 +18,7 @@
 import path from 'node:path';
 import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
 import { createSession, loadSession } from '../core/session.js';
+import { loadImageAttachment } from '../core/attachments.js';
 import { createSharedContext } from '../core/context.js';
 import { renderMemories } from '../core/memory.js';
 import { discoverAgents } from '../core/agents-md.js';
@@ -52,6 +53,7 @@ import { CommandBatchError, executeFileCommands, FILE_COMMANDS_SCHEMA } from './
 import { EXTRACT_MAX_BYTES, EXTRACT_MAX_FILES, extractHandoff, hasExtractableArtifacts } from './extract.js';
 import { assessQuality, assessmentImages } from './quality.js';
 import { stageMeasurementCrops, measurementConclusion } from './measure-crops.js';
+import { canRunAdvanced, advancedMeasure, shouldUseReasoningPro } from './advanced.js';
 import { createPipeline } from './pipeline.js';
 import { resolveInside } from './paths.js';
 
@@ -1259,6 +1261,12 @@ export async function runTeam({
                                 ? measurerRole.effort
                                 : stageEffort(measurerRole.effort, baseline, paced.qualities.measurer);
                         const measurePasses = Math.max(1, Math.min(2, config.agent.measurerPasses ?? 1));
+                        // Advanced mode decomposes the reference into Seedream layers first; it needs a
+                        // Seedream 5.5 image model, otherwise the run silently stays on the standard passes.
+                        const measurerMode = config.agent.measurerMode ?? 'standard';
+                        if (measurerMode === 'advanced' && !canRunAdvanced(config)) {
+                            notify({ type: 'warning', message: 'agent.measurerMode: advanced, но image-модель не Seedream 5.5 — замеры идут обычным режимом (standard).' });
+                        }
                         const measureTurns = Math.max(1, config.agent.measurerMaxTurns ?? 8);
                         // One pass spends the whole turn budget on the overview. A second pass splits it
                         // evenly, so the fragment inspection does not starve the overview.
@@ -1358,12 +1366,12 @@ export async function runTeam({
                                     : '')
                             : '';
                         /** One measurement pass, with a tool-less report when the turn budget is spent. */
-                        const measureRun = async ({ pass, text, maxTurns, session }) => {
+                        const measureRun = async ({ pass, text, maxTurns, session, instructions = ROLE_INSTRUCTIONS.measurer, reasoningMode = null, parts = attachments.parts }) => {
                             const result = await roles.run('measurer', {
-                                text, parts: attachments.parts, instructions: withAgents(ROLE_INSTRUCTIONS.measurer),
+                                text, parts, instructions: withAgents(instructions),
                                 toolset: measureToolsFor(pass), builtin: measureBuiltin,
                                 schema: MEASURER_SCHEMA, schemaName: 'measure', maxTurns,
-                                model, effort: measureEffort, onMaxTurns, session,
+                                model, effort: measureEffort, reasoningMode, onMaxTurns, session,
                             });
                             if (HARD_STOP.has(result.status)) return result;
                             if (!result.data && ['max_turns', 'incomplete'].includes(result.status)) {
@@ -1371,69 +1379,156 @@ export async function runTeam({
                                 const report = await roles.run('measurer', {
                                     text: 'Turn budget is spent and no more tools are available. Reply with the complete measurement sheet for everything you already looked at. ' +
                                         'Use CSS units in units/css, null for a number you did not read, confidence for every element, and name the unchecked parts in assumptions and notes. JSON only.',
-                                    instructions: withAgents(ROLE_INSTRUCTIONS.measurer), schema: MEASURER_SCHEMA, schemaName: 'measure',
-                                    maxTurns: 1, model, effort: measureEffort, session,
+                                    instructions: withAgents(instructions), schema: MEASURER_SCHEMA, schemaName: 'measure',
+                                    maxTurns: 1, model, effort: measureEffort, reasoningMode, session,
                                 });
                                 if (report.data) return report;
                             }
                             return result;
                         };
-                        notify({ type: 'stage.start', stage: 'measure', role: 'measurer', model });
-                        notify({ type: 'measure.pass', pass: 1, phase: 'overview' });
-                        let measured = await measureRun({
-                            pass: 1,
-                            text: `${measureContext}\n\n# Measurement pass 1 — whole reference\n${measurePlan}\n\n` +
-                                'Study the whole reference first: the canvas, the global layout, every element, every reusable region, and the spacing rules. ' +
-                                'Do not start from a fragment. Return the complete overview sheet with CSS units, per-item confidence, and explicit assumptions. ' +
-                                'The harness cuts fragments from your boxes on the image each item names in its "source" field after this pass.' +
-                                attachmentBlock + subReferenceBlock,
-                            maxTurns: overviewTurns,
-                            session: createSession({ store: false, model }),
-                        });
-                        if (HARD_STOP.has(measured.status)) return { exit: stop(measured, 'замеры') };
-                        let sheet = measured.data ?? null;
+                        // Advanced measurer: Seedream 5.5 splits the reference into layers with boxes first
+                        // (those numbers are measurements the model read, so phase 1 counts), then the
+                        // measurer verifies and completes the sheet. Any GPT model gets reasoning "pro" here.
+                        // A missing sheet or a failed decomposition falls back to the standard passes.
+                        const advancedMeasureMode = measurerMode === 'advanced' && canRunAdvanced(config);
+                        const advancedCropLimit = Math.max(0, Number(config.agent.advancedCropLimit ?? 0) || 0);
+                        const proReasoning = advancedMeasureMode && shouldUseReasoningPro(model);
+                        let measured = null;
+                        let sheet = null;
                         let stagedCrops = { crops: [], warnings: [] };
-                        if (sheet && measurePasses > 1) {
-                            // Cut the overview regions and reusable elements first, then let the measurer inspect
-                            // the actual fragments instead of guessing from the full-size picture.
-                            const preliminary = await stageMeasurementCrops({
-                                root, workId: work.id, sheet, referencePaths, subReferences: screenReferences.files, measureSource, config, signal,
-                            });
-                            const fragmentList = preliminary.crops.length
-                                ? preliminary.crops.map((crop) => {
-                                    const box = crop.box ?? {};
-                                    return `- ${crop.kind}: ${crop.name} — ${crop.crop} (${box.width ?? '?'}×${box.height ?? '?'} at ${box.x ?? '?'},${box.y ?? '?'})`;
-                                }).join('\n')
-                                : '(no usable boxes yet; add regions or elements with boxes so the harness can cut fragments)';
-                            notify({ type: 'measure.pass', pass: 2, phase: 'fragments' });
-                            const detailed = await measureRun({
-                                pass: 2,
-                                text: `${measureContext}\n\n# Measurement pass 2 — fragments\n${measurePlan}\n\n` +
-                                    'The overview sheet and the fragments cut from it are below. Study the whole sheet first, then inspect the fragments. ' +
-                                    'Cut more small, reusable fragments with crop_image or split_image where a detail is too small to read. ' +
-                                    'Return the complete final sheet, not a delta: keep every region and element, keep its crop path when the box is unchanged, ' +
-                                    'and add new fragments for the worker, architect, and image-processor. Use CSS units with explicit conversions, mark every ' +
-                                    'inferred value in assumptions, and set confidence per element. Do not replace the global layout with a single fragment.\n\n' +
-                                    `# Overview sheet (JSON)\n${JSON.stringify(sheet)}\n\n# Staged fragments\n${fragmentList}` + attachmentBlock + subReferenceBlock,
-                                maxTurns: fragmentTurns,
+                        notify({ type: 'stage.start', stage: 'measure', role: 'measurer', model, effort: measureEffort, measurerMode: advancedMeasureMode ? 'advanced' : 'standard', reasoningMode: proReasoning ? 'pro' : null });
+                        if (advancedMeasureMode) {
+                            const decomposeTarget = screenReferences.files[0]?.rel ?? referencePaths[0] ?? null;
+                            let advanced = null;
+                            if (!decomposeTarget) {
+                                notify({ type: 'warning', message: 'Advanced-режим замеров: нет файла референса для разложения — перехожу на обычные проходы.' });
+                            } else {
+                                try {
+                                    advanced = await advancedMeasure({ root, workId: work.id, referencePath: decomposeTarget, plan: measurePlan, config, client, signal, notify });
+                                } catch (error) {
+                                    notify({ type: 'warning', message: `Advanced-режим замеров не завершился (${errorMessage(error)}); перехожу на обычные проходы.` });
+                                }
+                            }
+                            if (advanced?.sheet) {
+                                sheet = advanced.sheet;
+                                for (const warning of advanced.warnings ?? []) notify({ type: 'warning', message: warning });
+                                // The layer images come first, in the order of the list below: attached
+                                // pictures carry no names, so the sheet can only match them by position.
+                                const layerParts = [];
+                                const layerLines = [];
+                                const unreadable = [];
+                                for (const layer of advanced.layers ?? []) {
+                                    if (!layer?.localPath) continue;
+                                    try {
+                                        layerParts.push((await loadImageAttachment(layer.localPath, { cwd: root, maxBytes: config.limits.maxImageBytes })).part);
+                                    } catch (error) {
+                                        unreadable.push(`${layer.localPath}: ${errorMessage(error)}`);
+                                        continue;
+                                    }
+                                    const box = layer.box ?? {};
+                                    layerLines.push(`- attachment ${layerParts.length}: layer ${layer.index} (z=${layer.z}${layer.name ? `, "${layer.name}"` : ''}) — ${layer.localPath} (${box.width ?? '?'}×${box.height ?? '?'} at ${box.x ?? '?'},${box.y ?? '?'})${layer.text?.text ? `; text: ${String(layer.text.text).slice(0, 80)}` : ''}`);
+                                }
+                                const enhancedLines = [];
+                                for (const crop of advanced.cropPaths ?? []) {
+                                    if (!crop || (advanced.layers ?? []).some((layer) => layer.localPath === crop)) continue;
+                                    try {
+                                        layerParts.push((await loadImageAttachment(crop, { cwd: root, maxBytes: config.limits.maxImageBytes })).part);
+                                        enhancedLines.push(`- attachment ${layerParts.length}: enhanced crop — ${crop}`);
+                                    } catch (error) {
+                                        unreadable.push(`${crop}: ${errorMessage(error)}`);
+                                    }
+                                }
+                                // A layer the harness could not attach is a hole in the verification pass,
+                                // so it is named out loud rather than dropped in silence.
+                                for (const problem of unreadable) notify({ type: 'warning', message: `Слой разложения не приложен замеру: ${problem}` });
+                                const layerBlock = [
+                                            layerLines.length ? `# Decomposed layers (JSON)\n${JSON.stringify(advanced.sheet)}\n\n# Layer images, in attachment order\n${layerLines.join('\n')}` : '',
+                                            enhancedLines.length ? `\n# Enhanced transparent crops\n${enhancedLines.join('\n')}` : '',
+                                        ].filter(Boolean).join('\n');
+                                notify({ type: 'measure.pass', pass: 2, phase: 'advanced-verify', layers: layerLines.length, enhanced: enhancedLines.length, reasoningMode: proReasoning ? 'pro' : null });
+                                measured = await measureRun({
+                                    pass: 2,
+                                    instructions: ROLE_INSTRUCTIONS.measurerAdvanced,
+                                    reasoningMode: proReasoning ? 'pro' : null,
+                                    parts: layerParts.length ? layerParts : attachments.parts,
+                                    text: `${measureContext}\n\n# Advanced measurement pass — verification\n${measurePlan}\n\n` +
+                                        'The reference has already been decomposed into layers by Seedream 5.5; the sheet above carries the boxes it read. ' +
+                                        'Verify every box against the layer image it names, keep the numbers that hold, correct the ones that do not, and fill ' +
+                                        'the fields decomposition cannot know (typography, padding, gaps, radius, CSS). Add the elements the decomposition missed ' +
+                                        'and mark a semi-transparent layer that needs redrawing with crop_image. Return the complete final sheet, not a delta.' +
+                                        attachmentBlock + subReferenceBlock + layerBlock,
+                                    maxTurns: fragmentTurns,
+                                    session: createSession({ store: false, model }),
+                                });
+                                if (HARD_STOP.has(measured.status) && measured.status !== 'failed') return { exit: stop(measured, 'замеры') };
+                                // A failed verification pass must not throw away the decomposition sheet.
+                                if (measured.data) sheet = measured.data;
+                                else if (measured.status !== 'completed') notify({ type: 'warning', message: `Проверка листа разложения не завершена (${measured.status}); остаётся лист seedream-5.5.` });
+                                stagedCrops = await stageMeasurementCrops({
+                                    root, workId: work.id, sheet, referencePaths,
+                                    subReferences: screenReferences.files, measureSource, config,
+                                    maxCrops: advancedCropLimit, signal,
+                                });
+                            } else if (attachments.parts.length) {
+                                notify({ type: 'warning', message: 'Advanced-режим замеров не вернул лист — перехожу на обычные проходы.' });
+                            }
+                        }
+                        if (!sheet) {
+                            notify({ type: 'measure.pass', pass: 1, phase: 'overview' });
+                            measured = await measureRun({
+                                pass: 1,
+                                text: `${measureContext}\n\n# Measurement pass 1 — whole reference\n${measurePlan}\n\n` +
+                                    'Study the whole reference first: the canvas, the global layout, every element, every reusable region, and the spacing rules. ' +
+                                    'Do not start from a fragment. Return the complete overview sheet with CSS units, per-item confidence, and explicit assumptions. ' +
+                                    'The harness cuts fragments from your boxes on the image each item names in its "source" field after this pass.' +
+                                    attachmentBlock + subReferenceBlock,
+                                maxTurns: overviewTurns,
                                 session: createSession({ store: false, model }),
                             });
-                            // A failed fragment pass must not throw away the overview sheet; cancellation and
-                            // budget exhaustion still stop the run.
-                            if (HARD_STOP.has(detailed.status) && detailed.status !== 'failed') return { exit: stop(detailed, 'замеры') };
-                            if (detailed.data) {
-                                sheet = detailed.data;
-                                measured = detailed;
-                            } else if (detailed.status !== 'completed') {
-                                notify({ type: 'warning', message: `Второй проход замеров не завершён (${detailed.status}); остаётся лист обзорного прохода.` });
+                            if (HARD_STOP.has(measured.status)) return { exit: stop(measured, 'замеры') };
+                            sheet = measured.data ?? null;
+                            if (sheet && measurePasses > 1) {
+                                // Cut the overview regions and reusable elements first, then let the measurer inspect
+                                // the actual fragments instead of guessing from the full-size picture.
+                                const preliminary = await stageMeasurementCrops({
+                                    root, workId: work.id, sheet, referencePaths, subReferences: screenReferences.files, measureSource, config, signal,
+                                });
+                                const fragmentList = preliminary.crops.length
+                                    ? preliminary.crops.map((crop) => {
+                                        const box = crop.box ?? {};
+                                        return `- ${crop.kind}: ${crop.name} — ${crop.crop} (${box.width ?? '?'}×${box.height ?? '?'} at ${box.x ?? '?'},${box.y ?? '?'})`;
+                                    }).join('\n')
+                                    : '(no usable boxes yet; add regions or elements with boxes so the harness can cut fragments)';
+                                notify({ type: 'measure.pass', pass: 2, phase: 'fragments' });
+                                const detailed = await measureRun({
+                                    pass: 2,
+                                    text: `${measureContext}\n\n# Measurement pass 2 — fragments\n${measurePlan}\n\n` +
+                                        'The overview sheet and the fragments cut from it are below. Study the whole sheet first, then inspect the fragments. ' +
+                                        'Cut more small, reusable fragments with crop_image or split_image where a detail is too small to read. ' +
+                                        'Return the complete final sheet, not a delta: keep every region and element, keep its crop path when the box is unchanged, ' +
+                                        'and add new fragments for the worker, architect, and image-processor. Use CSS units with explicit conversions, mark every ' +
+                                        'inferred value in assumptions, and set confidence per element. Do not replace the global layout with a single fragment.\n\n' +
+                                        `# Overview sheet (JSON)\n${JSON.stringify(sheet)}\n\n# Staged fragments\n${fragmentList}` + attachmentBlock + subReferenceBlock,
+                                    maxTurns: fragmentTurns,
+                                    session: createSession({ store: false, model }),
+                                });
+                                // A failed fragment pass must not throw away the overview sheet; cancellation and
+                                // budget exhaustion still stop the run.
+                                if (HARD_STOP.has(detailed.status) && detailed.status !== 'failed') return { exit: stop(detailed, 'замеры') };
+                                if (detailed.data) {
+                                    sheet = detailed.data;
+                                    measured = detailed;
+                                } else if (detailed.status !== 'completed') {
+                                    notify({ type: 'warning', message: `Второй проход замеров не завершён (${detailed.status}); остаётся лист обзорного прохода.` });
+                                }
+                                stagedCrops = await stageMeasurementCrops({
+                                    root, workId: work.id, sheet, referencePaths, subReferences: screenReferences.files, measureSource, config, signal, reuse: preliminary.crops,
+                                });
+                            } else if (sheet) {
+                                stagedCrops = await stageMeasurementCrops({
+                                    root, workId: work.id, sheet, referencePaths, subReferences: screenReferences.files, measureSource, config, signal,
+                                });
                             }
-                            stagedCrops = await stageMeasurementCrops({
-                                root, workId: work.id, sheet, referencePaths, subReferences: screenReferences.files, measureSource, config, signal, reuse: preliminary.crops,
-                            });
-                        } else if (sheet) {
-                            stagedCrops = await stageMeasurementCrops({
-                                root, workId: work.id, sheet, referencePaths, subReferences: screenReferences.files, measureSource, config, signal,
-                            });
                         }
                         if (sheet) {
                             for (const warning of stagedCrops.warnings) notify({ type: 'warning', message: warning });

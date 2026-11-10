@@ -20,6 +20,7 @@ import { clipMiddle, extractJson } from '../util/text.js';
 import { ROLE_INSTRUCTIONS } from '../commands/instructions.js';
 import { encodeToon } from '../util/toon.js';
 import { runTurn } from './loop.js';
+import { modeFor, profileFor, snapEffort } from '../openai/model-profiles.js';
 import { SCREEN_SCHEMA } from './schemas.js';
 import { imageLongSide, imageTier } from '../roles/reviewer.js';
 
@@ -66,14 +67,14 @@ export function createRoleRunner({ client, config, ledger, emit = () => {}, sign
     async function run(name, {
         text, parts = [], instructions = '', toolset = null, builtin = [], schema = null, schemaName = 'result',
         maxTurns = 1, imageTarget = config.image.outputDir, session = null, silent = Boolean(schema), instructionsOnly = false,
-        model: modelOverride = null, effort: effortOverride = null, onMaxTurns = null,
+        model: modelOverride = null, effort: effortOverride = null, reasoningMode: modeOverride = null, onMaxTurns = null,
         task: taskOverride = null, delegated = null,
     }) {
         const role = resolve(name);
         const model = modelOverride || role.model;
         const effort = effortOverride || role.effort;
-        const roleConfig = model === role.model && effort === role.effort ? role.config : {
-            ...role.config, model, reasoning: { ...role.config.reasoning, effort },
+        const roleConfig = model === role.model && effort === role.effort && modeOverride === null ? role.config : {
+            ...role.config, model, reasoning: { ...role.config.reasoning, effort, ...(modeOverride !== null ? { mode: modeOverride } : {}) },
         };
         const scope = {
             env: liveEnv(), root, task: taskOverride ?? task ?? '', delegated: delegated ?? '',
@@ -88,7 +89,14 @@ export function createRoleRunner({ client, config, ledger, emit = () => {}, sign
         const fullInstructions = instructionsOnly ? extraInstructions : [extraInstructions, roleInstructions, contextInstructions].filter((part) => part && part.trim()).join('\n\n');
         const previousRole = ledger.role;
         ledger.setRole(name);
-        notify({ type: 'role.start', role: name, model, effort });
+        // The terminal shows what the request will really carry: the effort after the model ceiling
+        // and the reasoning mode after the model's own `modes` list.
+        const roleProfile = profileFor(model, roleConfig.models);
+        notify({
+            type: 'role.start', role: name, model,
+            effort: snapEffort(effort, roleProfile),
+            reasoningMode: modeFor(roleConfig.reasoning?.mode ?? null, roleProfile) ?? null,
+        });
         // Structured (JSON) replies and helper roles are not streamed to the terminal as answer text.
         const roleEmit = silent ? (event) => { if (event.type !== 'text.delta' && event.type !== 'text.done') emit(event); } : emit;
         let result;

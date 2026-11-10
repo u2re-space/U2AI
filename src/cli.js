@@ -39,7 +39,7 @@ import { attachPublisher, splitServeUrl } from './server/publish.js';
 
 const pkg = createRequire(import.meta.url)('../package.json');
 
-import { HELP } from './cli-help.js';
+import { HELP, paintHelp } from './cli-help.js';
 export { HELP };
 
 const OPTIONS = {
@@ -74,7 +74,7 @@ const OPTIONS = {
     decompose: { type: 'string' }, 'no-decompose': { type: 'boolean', default: false },
     design: { type: 'string' }, 'no-design': { type: 'boolean', default: false },
     subrefs: { type: 'string' }, 'no-subrefs': { type: 'boolean', default: false },
-    'measure-source': { type: 'string' }, 'stop-after': { type: 'string' },
+    'measure-source': { type: 'string' }, 'measurer-mode': { type: 'string' }, 'stop-after': { type: 'string' },
     memory: { type: 'boolean', default: true }, global: { type: 'boolean', default: false }, kind: { type: 'string' }, tags: { type: 'string' },
     listen: { type: 'boolean', default: false }, port: { type: 'string' }, line: { type: 'string' }, character: { type: 'string' },
     language: { type: 'string' }, token: { type: 'string' }, serve: { type: 'boolean', default: false },
@@ -143,7 +143,7 @@ export async function main(argvInput = process.argv.slice(2)) {
     const hasCommand = positionals.length && Object.hasOwn(COMMANDS, positionals[0]);
     const commandName = hasCommand ? positionals[0] : positionals[0] === 'help' ? 'help' : 'ask';
     const rest = hasCommand || commandName === 'help' ? positionals.slice(1) : positionals;
-    if (values.help || commandName === 'help') { process.stdout.write(HELP); return 0; }
+    if (values.help || commandName === 'help') { process.stdout.write(paintHelp(HELP)); return 0; }
 
     const mode = detectMode({ json: values.json, quiet: values.quiet });
     const renderer = createRenderer({ mode, showReasoning: values.reasoning !== false, verbose: values.verbose });

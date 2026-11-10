@@ -463,6 +463,18 @@ export const defaults = Object.freeze({
         measurerMaxTurns: 8,            // total tool turns for the measurement passes, split between them
         measurerMaxContextBytes: 'large', // measurement context budget; keep it within limits.maxRequestBytes
         /**
+         * How the measurer works. `standard` = the model reads the reference and the harness cuts the
+         * crops its sheet names (MAX_CROPS applies). `advanced` = the seedream-5.5 pipeline: the
+         * picture is first split into crops and PNG layers by the model itself (layer decomposition,
+         * semi-transparent fragments included), and only then is the JSON sheet built — the numbers
+         * the first phase produced count towards it. Advanced mode is slow, can be expensive, is
+         * capped at no crop limit, and is not always available; when it is not, the run falls back to
+         * `standard` and says so. The word `advanced` is printed red everywhere it appears.
+         */
+        measurerMode: 'standard',       // standard | advanced
+        advancedMaxLayers: 16,          // PNG layers one seedream-5.5 decomposition may return
+        advancedCropLimit: 0,           // 0 = no cap on advanced crops; a number re-applies a ceiling
+        /**
          * Complex decorative elements (ornaments, flourishes, ribbons, dividers, patterns, frames) are
          * built by the `decorator` role after the measurements and the architect, and before the first
          * page markup. auto = only when the plan names decorationTasks; always = also scan the plan for

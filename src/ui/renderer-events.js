@@ -10,6 +10,48 @@
  * @changed 2026-10-15 Split from ui/renderer.js.
  */
 import { formatBytes, formatDuration, formatNumber, formatUsd, truncate } from '../util/text.js';
+import { sanitizeTerminal } from './sanitize.js';
+
+// ---- color vocabulary ---------------------------------------------------------------------
+/**
+ * Effort and complexity levels are cost signals, so the terminal paints them. The palette follows
+ * the ladder: calm colors for cheap settings, warm ones for expensive, and red for the modes the
+ * user pays for by hand (`advanced`, `pro`). Names are styleText colors, so `orange` and `gold`
+ * become their bright ANSI neighbours.
+ */
+const EFFORT_COLORS = { none: 'white', minimal: 'cyan', low: 'blue', medium: 'green', high: 'yellow', xhigh: 'yellowBright', max: 'redBright' };
+const COMPLEXITY_COLORS = { trivial: 'cyan', normal: 'yellow', complex: 'redBright' };
+/** Any mode the user switched on deliberately is printed red. */
+const DANGER_COLOR = 'red';
+
+/**
+ * Sanitize one word and wrap it in a color, so model-supplied names can never smuggle escapes.
+ * @param {Function} color Renderer color wrapper (plain text outside tty mode).
+ * @param {string|null|undefined} format styleText color name.
+ * @param {unknown} value Text to paint.
+ * @returns {string}
+ * @ai.hint pure
+ */
+function paint(color, format, value) {
+    const clean = sanitizeTerminal(String(value ?? ''));
+    if (!clean) return '';
+    return format ? color(format, clean) : clean;
+}
+
+/**
+ * The ` · effort X[ · pro]` tail of a role line, colored by the ladder above.
+ * @param {Function} color Renderer color wrapper.
+ * @param {string|null|undefined} effort Reasoning effort of the role.
+ * @param {string|null|undefined} mode Reasoning mode; only `pro` is called out.
+ * @returns {string}
+ * @ai.hint pure
+ */
+function effortTail(color, effort, mode) {
+    const parts = [];
+    if (effort) parts.push(`effort ${paint(color, EFFORT_COLORS[String(effort)] ?? 'gray', effort)}`);
+    if (String(mode ?? '').trim() === 'pro') parts.push(paint(color, DANGER_COLOR, 'pro'));
+    return parts.length ? ` · ${parts.join(' · ')}` : '';
+}
 
 // ---- event handling ---------------------------------------------------------------------
 /**
@@ -23,7 +65,7 @@ import { formatBytes, formatDuration, formatNumber, formatUsd, truncate } from '
 export function handleRendererEvent(event, api) {
     const {
         mode, verbose, line, setStatus, text, state, showReasoning, emitJson,
-        STAGES, ensureNewline, drawStatus,
+        STAGES, ensureNewline, drawStatus, color,
     } = api;
     if (mode === 'json') {
         // Full event stream; large payloads (base64 images, raw items) are trimmed.
@@ -167,10 +209,13 @@ export function handleRendererEvent(event, api) {
         case 'approval.request':
             break;
         // ---- team / roles / memory ----
-        case 'role.start':
-            state.roles.push({ role: event.role, model: event.model });
+        case 'role.start': {
+            state.roles.push({ role: event.role, model: event.model, effort: event.effort ?? null });
+            const tail = effortTail(color, event.effort, event.reasoningMode);
+            if (tail) line('info', `${sanitizeTerminal(String(event.role ?? 'роль'))}${tail}`, { dim: true, keepColor: true });
             drawStatus();
             break;
+        }
         case 'role.done':
             state.roles.pop();
             if (verbose) line('info', `${event.role}: ${event.status}${event.toolCalls ? ` · инструментов ${event.toolCalls}` : ''}`, { dim: true });
@@ -185,10 +230,23 @@ export function handleRendererEvent(event, api) {
         case 'pace':
             line('info', `Темп: speed ${event.speed} · quality ${event.quality} · политика ${String(event.policy).toUpperCase()} · потолок ${event.model}`, { dim: true });
             break;
-        case 'stage.start':
-            line('action', `этап «${STAGES[event.stage] ?? event.stage}»${event.round ? ` (раунд ${event.round})` : ''} — ${event.role}${event.model ? ` · ${event.model}` : ''}`);
-            setStatus(`${STAGES[event.stage] ?? event.stage}…`);
+        case 'stage.start': {
+            const stageLabel = STAGES[event.stage] ?? event.stage;
+            const flags = [];
+            if (event.measurerMode === 'advanced') flags.push(paint(color, DANGER_COLOR, 'advanced'));
+            // The stage line carries the settings the user pays for: effort, `pro`, `advanced`.
+            const tail = effortTail(color, event.effort, event.reasoningMode);
+            line('action', `этап «${sanitizeTerminal(String(stageLabel))}»${event.round ? ` (раунд ${event.round})` : ''} — `
+                + `${sanitizeTerminal(String(event.role ?? ''))}${event.model ? ` · ${sanitizeTerminal(String(event.model))}` : ''}`
+                + `${flags.length ? ` · ${flags.join(' · ')}` : ''}${tail}`, { keepColor: true });
+            setStatus(`${stageLabel}…`);
+            // Advanced measurer mode is printed red: it is slow, it costs per layer, and the run
+            // can be cheaper on the standard passes, so the line below names the switch back.
+            if (event.measurerMode === 'advanced') {
+                line('danger', 'advanced режим замеров: разложение слоёв seedream-5.5 — долго и дорого; обычный режим: --measurer-mode standard');
+            }
             break;
+        }
         case 'stage.done':
             if (verbose) line('info', `этап «${STAGES[event.stage] ?? event.stage}»: ${event.status}`, { dim: true });
             break;
@@ -198,14 +256,20 @@ export function handleRendererEvent(event, api) {
         case 'plan.resume':
             line('info', `продолжение .tmp/${event.id}: ${event.stage === 'review' || event.stage === 'fix' ? 'ревью' : `шаг ${event.cursor + 1} из ${event.steps}`}${event.phase && event.phase !== 'pending' && event.phase !== 'done' ? `, фаза ${event.phase}` : ''}`, { dim: true });
             break;
-        case 'plan.ready':
-            line('ok', `план (${event.complexity}${event.needsReview ? ', с ревью' : ''}): ${truncate(event.summary, 300)}`);
+        case 'plan.ready': {
+            // Plan complexity is the cost forecast of the whole run, so it travels in its own color.
+            const complexity = paint(color, COMPLEXITY_COLORS[String(event.complexity ?? '')] ?? 'gray', event.complexity);
+            line('ok', `план (${complexity}${event.needsReview ? ', с ревью' : ''}): ${sanitizeTerminal(truncate(event.summary, 300))}`, { keepColor: true });
             event.steps.forEach((goal, index) => line('info', `  ${index + 1}. ${truncate(goal, 160)}`, { dim: true }));
             if (verbose) for (const criterion of event.acceptanceCriteria ?? []) line('info', `  критерий: ${truncate(criterion, 160)}`, { dim: true });
             break;
+        }
         case 'measure.crops':
             line('info', `кропы замеров: ${event.count} готово`, { dim: true });
             if (verbose) for (const item of event.crops ?? []) line('info', `  ${item.crop}`, { dim: true });
+            break;
+        case 'measure.progress':
+            if (verbose) line('info', `разложение: ${event.phase} ${event.status} (опрос ${event.polls})`, { dim: true });
             break;
         case 'step.start':
             line('action', `шаг ${event.index}/${event.total}: ${truncate(event.goal, 160)}`);

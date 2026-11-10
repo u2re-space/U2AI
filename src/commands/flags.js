@@ -317,6 +317,13 @@ export function overridesFrom(values, { command = null } = {}) {
         if (!['auto', 'subrefs', 'original'].includes(values['measure-source'])) throw new UsageError('--measure-source: auto | subrefs | original');
         (o.agent ??= {}).measureSource = values['measure-source'];
     }
+    // How the measurer works. `advanced` splits the reference into Seedream 5.5 layers first: slow,
+    // charged per layer, and it needs the images route, so asking for it turns images on.
+    if (values['measurer-mode']) {
+        if (!['standard', 'advanced'].includes(values['measurer-mode'])) throw new UsageError('--measurer-mode: standard | advanced');
+        (o.agent ??= {}).measurerMode = values['measurer-mode'];
+        if (values['measurer-mode'] === 'advanced') o.tools.images = true;
+    }
     // Optional design stage: produces a visual design direction, layout, and HTML template
     // before the decomposer and measurer. Expensive role (xhigh + image generation).
     if (values['no-design']) (o.agent ??= {}).design = 'off';

@@ -336,7 +336,7 @@ test('measurer passes, turns, and context budget are validated', async () => {
     try {
         const config = await loadConfig({ env, ensureHome: false });
         assert.equal(config.agent.measurerPasses, 1);
-        assert.equal(config.agent.measurerMaxTurns, 8);
+        assert.equal(config.agent.measurerMaxTurns, 32);
         assert.equal(config.agent.measurerMaxContextBytes, 512 * 1024);
         await writeFile(path.join(home, 'config.json'), JSON.stringify({ agent: { measurerPasses: 3 } }));
         await assert.rejects(loadConfig({ env, ensureHome: false }), /agent\.measurerPasses: 1\.\.2/);
@@ -355,14 +355,14 @@ test('measurer mode and the advanced caps are validated', async () => {
     try {
         const config = await loadConfig({ env, ensureHome: false });
         assert.equal(config.agent.measurerMode, 'standard');
-        assert.equal(config.agent.advancedMaxLayers, 16);
+        assert.equal(config.agent.advancedMaxLayers, 32);
         assert.equal(config.agent.advancedCropLimit, 0, 'advanced mode cuts crops without a ceiling by default');
         await writeFile(path.join(home, 'config.json'), JSON.stringify({ agent: { measurerMode: 'advanced' } }));
         assert.equal((await loadConfig({ env, ensureHome: false })).agent.measurerMode, 'advanced');
         await writeFile(path.join(home, 'config.json'), JSON.stringify({ agent: { measurerMode: 'turbo' } }));
         await assert.rejects(loadConfig({ env, ensureHome: false }), /agent\.measurerMode: standard \| advanced/);
-        await writeFile(path.join(home, 'config.json'), JSON.stringify({ agent: { advancedMaxLayers: 17 } }));
-        await assert.rejects(loadConfig({ env, ensureHome: false }), /agent\.advancedMaxLayers: 1\.\.16/);
+        await writeFile(path.join(home, 'config.json'), JSON.stringify({ agent: { advancedMaxLayers: 33 } }));
+        await assert.rejects(loadConfig({ env, ensureHome: false }), /agent\.advancedMaxLayers: 1\.\.32/);
         await writeFile(path.join(home, 'config.json'), JSON.stringify({ agent: { advancedCropLimit: -1 } }));
         await assert.rejects(loadConfig({ env, ensureHome: false }), /agent\.advancedCropLimit: >= 0/);
     } finally {

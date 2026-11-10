@@ -364,7 +364,7 @@ export async function advancedMeasure({ root, workId, referencePath, plan = '', 
         root, workId, client, referencePath,
         prompt: plan || null,
         size: 'auto',
-        maxLayers: config.agent.advancedMaxLayers ?? 16,
+        maxLayers: config.agent.advancedMaxLayers ?? 32,
         config, signal, notify,
     });
 

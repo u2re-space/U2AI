@@ -791,7 +791,7 @@ function validateConfig(c, env = liveEnv() ?? process.env) {
     if (c.agent.measurerPasses > 2) fail('agent.measurerPasses: 1..2');
     if (!['standard', 'advanced'].includes(c.agent.measurerMode)) fail('agent.measurerMode: standard | advanced');
     if (c.agent.measurerMode === 'advanced' && c.agent.measurerPasses > 2) fail('agent.measurerPasses: 1..2 (advanced)');
-    if (!Number.isSafeInteger(c.agent.advancedMaxLayers) || c.agent.advancedMaxLayers < 1 || c.agent.advancedMaxLayers > 16) fail('agent.advancedMaxLayers: 1..16');
+    if (!Number.isSafeInteger(c.agent.advancedMaxLayers) || c.agent.advancedMaxLayers < 1 || c.agent.advancedMaxLayers > 32) fail('agent.advancedMaxLayers: 1..32');
     if (!Number.isSafeInteger(c.agent.advancedCropLimit) || c.agent.advancedCropLimit < 0) fail('agent.advancedCropLimit: >= 0 (0 = unlimited)');
     if (!Number.isSafeInteger(c.agent.measurerMaxContextBytes) || c.agent.measurerMaxContextBytes < 1024) {
         fail('agent.measurerMaxContextBytes ≥ 1024');

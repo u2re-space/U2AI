@@ -405,7 +405,7 @@ export const defaults = Object.freeze({
         maxReviewRounds: 2,             // reviewer → worker fix cycles
         orchestratorMaxTurns: 16,       // tool turns the orchestrator may spend collecting context
         workerMaxTurnsPerStep: 40,
-        reviewerMaxTurns: 12,
+        reviewerMaxTurns: 16,
         maxContextBytes: 'normal',      // small | normal | large | max | auto
         visionDelegate: 'auto',         // auto (when roles.reviewer has its own model) | always | never
         chain: true,                    // first answer, then encoder or planner
@@ -418,7 +418,7 @@ export const defaults = Object.freeze({
          * the orchestrator. The brief goes to the shared context and to `.tmp/<id>/architecture.json`.
          */
         architect: 'auto',              // off | auto | always
-        architectMaxTurns: 8,           // read-only tool turns the architect may spend inspecting the project
+        architectMaxTurns: 16,           // read-only tool turns the architect may spend inspecting the project
         /**
          * The designer works after the plan and before the decomposer and measurer.
          * It produces a visual design direction (layout, colour, typography, spacing),
@@ -460,7 +460,7 @@ export const defaults = Object.freeze({
          */
         measure: 'auto',                // off | auto | always
         measurerPasses: 1,              // 1 = one overview sheet (default); 2 = whole reference, then staged fragments
-        measurerMaxTurns: 8,            // total tool turns for the measurement passes, split between them
+        measurerMaxTurns: 32,            // total tool turns for the measurement passes, split between them
         measurerMaxContextBytes: 'large', // measurement context budget; keep it within limits.maxRequestBytes
         /**
          * How the measurer works. `standard` = the model reads the reference and the harness cuts the
@@ -472,7 +472,7 @@ export const defaults = Object.freeze({
          * `standard` and says so. The word `advanced` is printed red everywhere it appears.
          */
         measurerMode: 'standard',       // standard | advanced
-        advancedMaxLayers: 16,          // PNG layers one seedream-5.5 decomposition may return
+        advancedMaxLayers: 32,          // PNG layers one seedream-5.5 decomposition may return
         advancedCropLimit: 0,           // 0 = no cap on advanced crops; a number re-applies a ceiling
         /**
          * Complex decorative elements (ornaments, flourishes, ribbons, dividers, patterns, frames) are
@@ -497,7 +497,7 @@ export const defaults = Object.freeze({
             maxContextBytes: 4 * MiB,
             diffMaxBytes: 256 * KiB,
             logMaxBytes: 32 * KiB,
-            maxTurns: 6,
+            maxTurns: 12,
             applyPlan: true,
         },
     },

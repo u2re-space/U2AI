@@ -33,7 +33,8 @@ import { ApiError } from './errors.js';
 import { SEEDREAM_5_5 } from '../shared/model-profiles.js';
 
 /** Default model id of the seedream-5.5 route on the proxy gateway. */
-export const SEEDREAM_MODEL = 'bytedance-seed/seedream-5-5';
+//export const SEEDREAM_MODEL = 'bytedance-seed/seedream-5-5';
+export const SEEDREAM_MODEL = 'seedream-5-5';
 
 /** Frames the decomposition mode accepts. Anything else is a synchronous 400. */
 export const SEEDREAM_LAYER_SIZES = Object.freeze(['1K', '1.5K', '2K', 'auto']);

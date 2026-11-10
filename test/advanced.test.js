@@ -32,7 +32,8 @@ function answer(origin) {
 }
 
 test('advanced mode runs only on a seedream-5.5 picture model', () => {
-    assert.equal(canRunAdvanced({ imageModel: 'bytedance-seed/seedream-5-5' }), true);
+    //assert.equal(canRunAdvanced({ imageModel: 'bytedance-seed/seedream-5-5' }), true);
+    assert.equal(canRunAdvanced({ imageModel: 'seedream-5-5' }), true);
     assert.equal(canRunAdvanced({ imageModel: 'openai/gpt-image-2.6-sunburst' }), false);
     assert.equal(canRunAdvanced({}), false, 'without an images transport there is nothing to decompose with');
 });

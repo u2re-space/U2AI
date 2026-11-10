@@ -145,6 +145,11 @@ export const MODEL_FALLBACKS = Object.freeze({
     'seedream-5-5-pro'      : 'bytedance-seed/seedream-5-5-pro',
     'seedream-5-5-lite'     : 'bytedance-seed/seedream-5-5-lite',
 
+    // non-prefixed to prefixed image API (ByteDance Seed)
+    'seedream-5.5'          : 'bytedance-seed/seedream-5.5',
+    'seedream-5.5-pro'      : 'bytedance-seed/seedream-5.5-pro',
+    'seedream-5.5-lite'     : 'bytedance-seed/seedream-5.5-lite',
+
     // non-prefixed to prefixed other models
     'claude-haiku-5-5'        : 'anthropic/claude-haiku-5-5',
     'claude-sonnet-5-5'       : 'anthropic/claude-sonnet-5-5',
@@ -172,23 +177,23 @@ export const MODEL_FALLBACKS = Object.freeze({
  */
 export const PURPOSE_MODEL_MAP = Object.freeze({
     decompose: Object.freeze([
-        'sourceful/riverflow-v2.6-pro',   // fallback if gpt-image-2.6-* refuses
-        'openai/gpt-image-2.6-sunburst',  // default
-        'bytedance-seed/seedream-5-5',    // if available
+        PROXY_RIVERFLOW_MODEL,   // fallback if gpt-image-2.6-* refuses
+        PROXY_IMAGE_MODEL,  // default
+        SEEDREAM_5_5,    // if available
     ]),
     isolate: Object.freeze([
-        'bytedance-seed/seedream-5-5',    // best at subject isolation
-        'openai/gpt-image-2.6-sunburst',  // min 655360 px or seedream unavailable
-        'sourceful/riverflow-v2.6-pro',   // only if explicitly enabled
+        SEEDREAM_5_5,    // best at subject isolation
+        PROXY_IMAGE_MODEL,  // min 655360 px or seedream unavailable
+        PROXY_RIVERFLOW_MODEL,   // only if explicitly enabled
     ]),
     upscale: Object.freeze([
-        'openai/gpt-image-2.6-sunburst',  // when target is 655360+ px or 1K+
-        'bytedance-seed/seedream-5-5',    // around 512×512 or < 655360
-        'sourceful/riverflow-v2.6-pro',   // fallback when opaque + seedream unavailable
+        PROXY_IMAGE_MODEL,  // when target is 655360+ px or 1K+
+        SEEDREAM_5_5,    // around 512×512 or < 655360
+        PROXY_RIVERFLOW_MODEL,   // fallback when opaque + seedream unavailable
     ]),
     generate: Object.freeze([
-        'sourceful/riverflow-v2.6-pro',   // mainly for opaque output
-        'openai/gpt-image-2.6-sunburst',  // from 1K resolution
-        'bytedance-seed/seedream-5-5',    // if available
+        PROXY_RIVERFLOW_MODEL,   // mainly for opaque output
+        PROXY_IMAGE_MODEL,  // from 1K resolution
+        SEEDREAM_5_5,    // if available
     ]),
 });

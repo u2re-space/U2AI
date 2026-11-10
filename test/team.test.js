@@ -2590,7 +2590,8 @@ test('advanced measurer mode decomposes the reference first and verifies the she
     };
     const config = baseConfig();
     config.memory = { ...defaults.memory, enabled: false };
-    config.imageModel = 'bytedance-seed/seedream-5-5';
+    config.imageModel = 'seedream-5-5';
+    //config.imageModel = 'bytedance-seed/seedream-5-5';
     config.agent = { ...config.agent, measurerMode: 'advanced', measurerPasses: 1 };
     config.roles = { ...config.roles, measurer: { ...config.roles.measurer, model: 'gpt-6.1-terra' } };
     try {
@@ -2706,7 +2707,8 @@ test('advanced measurer mode falls back to the standard passes when decompositio
     };
     const config = baseConfig();
     config.memory = { ...defaults.memory, enabled: false };
-    config.imageModel = 'bytedance-seed/seedream-5-5';
+    config.imageModel = 'seedream-5-5';
+    //config.imageModel = 'bytedance-seed/seedream-5-5';
     config.agent = { ...config.agent, measurerMode: 'advanced' };
     try {
         const result = await runTeam({

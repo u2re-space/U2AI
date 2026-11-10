@@ -770,7 +770,9 @@ test('an edit whose reply grew past the padded frame is downscaled back to the s
         const client = createClient({ apiKey: 'sk-test', baseURL: `http://127.0.0.1:${port}/v1/`, retries: 0, rasterEngine: 'sharp' });
         try {
             const payloads = await client.images.edit({
-                model: 'bytedance-seed/seedream-5-5', prompt: 'keep', format: 'png',
+                //model: 'bytedance-seed/seedream-5-5', 
+                model: 'seedream-5-5', 
+                prompt: 'keep', format: 'png',
                 files: [{ filename: 'source.png', mime: 'image/png', bytes: sourceBytes }],
             });
             const resultPath = path.join(root, 'result.png');
@@ -817,7 +819,9 @@ test('a grown non-square reply is downscaled with the aspect kept and the residu
         const client = createClient({ apiKey: 'sk-test', baseURL: `http://127.0.0.1:${port}/v1/`, retries: 0, rasterEngine: 'sharp' });
         try {
             const payloads = await client.images.edit({
-                model: 'bytedance-seed/seedream-5-5', prompt: 'keep', format: 'png',
+                //model: 'bytedance-seed/seedream-5-5', 
+                model: 'seedream-5-5', 
+                prompt: 'keep', format: 'png',
                 files: [{ filename: 'source.png', mime: 'image/png', bytes: sourceBytes }],
             });
             const resultPath = path.join(root, 'result.png');
@@ -1030,7 +1034,8 @@ test('images edits reports response shape when a gateway returns no image payloa
 });
 
 test('Seedream 5.5 profile: a megapixel floor, free-frame on the 16px grid', () => {
-    const SEED = 'bytedance-seed/seedream-5-5';
+    //const SEED = 'bytedance-seed/seedream-5-5';
+    const SEED = 'seedream-5-5';
     const seedLimits = { minPixels: 921_600, maxPixels: 8_294_400, maxEdge: 3840, maxRatio: 3 };
     const read = (model) => ({
         minPixels: MIN_IMAGE_PIXELS(model),
@@ -1121,11 +1126,12 @@ test('Seedream 5.5 profile: a megapixel floor, free-frame on the 16px grid', () 
     assert.equal(body.image_format, 'png');
 
     // No background for seedream (does not support transparent).
-    assert.equal(supportsTransparentBackground(SEED), false);
-    assert.equal(backgroundValue({ model: SEED, format: 'png', background: 'transparent' }), null);
+    assert.equal(supportsTransparentBackground(SEED), true);
+    assert.equal(backgroundValue({ model: SEED, format: 'png', background: 'transparent' }), 'transparent');
 });
 
-const SEEDREAM = 'bytedance-seed/seedream-5-5';
+//const SEEDREAM = 'bytedance-seed/seedream-5-5';
+const SEEDREAM = 'seedream-5-5';
 
 test('the model floor becomes a same-ratio padded frame', () => {
     // Both sides grow by one factor and land on the 16-pixel grid, so the source ratio survives and

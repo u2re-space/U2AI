@@ -157,3 +157,38 @@ export const MODEL_FALLBACKS = Object.freeze({
     'openai/gpt-6.1-sol'         : 'anthropic/claude-opus-5.5',
     'openai/gpt-6-astra'         : 'anthropic/claude-opus-5.5'
 });
+
+/**
+ * Image-generation purpose: tells the tool which model to prefer for a given task.
+ * The key is the purpose name; the value is an ordered list of model IDs — first match wins.
+ *
+ * - `decompose`   — layouts, templates, screen mockups; needs clean geometry and consistent style.
+ * - `isolate`     — cut out a subject from its background (alpha or matte).
+ * - `upscale`     — enlarge an existing image while preserving quality (not yet actively used).
+ * - `generate`    — standard text-to-image or restyle; the general-purpose default.
+ *
+ * A purpose absent from the map is ignored: the call keeps its configured `imageModel`.
+ * When a listed model is null or empty, it is skipped during resolution.
+ */
+export const PURPOSE_MODEL_MAP = Object.freeze({
+    decompose: Object.freeze([
+        'sourceful/riverflow-v2.6-pro',   // fallback if gpt-image-2.6-* refuses
+        'openai/gpt-image-2.6-sunburst',  // default
+        'bytedance-seed/seedream-5-5',    // if available
+    ]),
+    isolate: Object.freeze([
+        'bytedance-seed/seedream-5-5',    // best at subject isolation
+        'openai/gpt-image-2.6-sunburst',  // min 655360 px or seedream unavailable
+        'sourceful/riverflow-v2.6-pro',   // only if explicitly enabled
+    ]),
+    upscale: Object.freeze([
+        'openai/gpt-image-2.6-sunburst',  // when target is 655360+ px or 1K+
+        'bytedance-seed/seedream-5-5',    // around 512×512 or < 655360
+        'sourceful/riverflow-v2.6-pro',   // fallback when opaque + seedream unavailable
+    ]),
+    generate: Object.freeze([
+        'sourceful/riverflow-v2.6-pro',   // mainly for opaque output
+        'openai/gpt-image-2.6-sunburst',  // from 1K resolution
+        'bytedance-seed/seedream-5-5',    // if available
+    ]),
+});

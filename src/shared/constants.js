@@ -1,7 +1,5 @@
-
-
 import { STANDARD_RATIOS, aspectFrame } from './aspect-ratio.js';
-import { IMAGE_CAPABILITIES, IMAGE_MODEL_PROFILES } from './model-profiles.js';
+import { IMAGE_CAPABILITIES, IMAGE_MODEL_PROFILES, PURPOSE_MODEL_MAP } from './model-profiles.js';
 
 /** Names that choose a common frame instead of a literal WIDTHxHEIGHT. */
 export const NAMED_FRAMES = { square: 1, landscape: 16 / 10, portrait: 10 / 16 };
@@ -279,41 +277,6 @@ const NATIVE_TIER_SIZES = Object.freeze({
     '2k': Object.freeze(['1024x1536', '1536x1024', '2048x1536', '1536x2048', '2048x2048']),
     '3k': Object.freeze(['3072x3072', '3072x2048', '2048x3072', '3072x2304', '2304x3072']),
     '4k': Object.freeze(['4096x3072', '3072x4096', '4096x4096']),
-});
-
-/**
- * Image-generation purpose: tells the tool which model to prefer for a given task.
- * The key is the purpose name; the value is an ordered list of model IDs — first match wins.
- *
- * - `decompose`   — layouts, templates, screen mockups; needs clean geometry and consistent style.
- * - `isolate`     — cut out a subject from its background (alpha or matte).
- * - `upscale`     — enlarge an existing image while preserving quality (not yet actively used).
- * - `generate`    — standard text-to-image or restyle; the general-purpose default.
- *
- * A purpose absent from the map is ignored: the call keeps its configured `imageModel`.
- * When a listed model is null or empty, it is skipped during resolution.
- */
-export const PURPOSE_MODEL_MAP = Object.freeze({
-    decompose: Object.freeze([
-        'sourceful/riverflow-v2.6-pro',   // fallback if gpt-image-2.6-* refuses
-        'openai/gpt-image-2.6-sunburst',  // default
-        'bytedance-seed/seedream-5-5',    // if available
-    ]),
-    isolate: Object.freeze([
-        'bytedance-seed/seedream-5-5',    // best at subject isolation
-        'openai/gpt-image-2.6-sunburst',  // min 655360 px or seedream unavailable
-        'sourceful/riverflow-v2.6-pro',   // only if explicitly enabled
-    ]),
-    upscale: Object.freeze([
-        'openai/gpt-image-2.6-sunburst',  // when target is 655360+ px or 1K+
-        'bytedance-seed/seedream-5-5',    // around 512×512 or < 655360
-        'sourceful/riverflow-v2.6-pro',   // fallback when opaque + seedream unavailable
-    ]),
-    generate: Object.freeze([
-        'sourceful/riverflow-v2.6-pro',   // mainly for opaque output
-        'openai/gpt-image-2.6-sunburst',  // from 1K resolution
-        'bytedance-seed/seedream-5-5',    // if available
-    ]),
 });
 
 /**

@@ -27,6 +27,14 @@ export const PROXY_IMAGE_EDIT_MODEL = 'openai/gpt-image-2.6-sunburst';
 export const PROXY_VECTOR_MODEL = 'openai/gpt-image-2.6-sunburst';
 //export const PROXY_VECTOR_MODEL = 'recraft/recraft-v4.1-pro-vector';
 
+/**
+ * The model the gateway runs behind `output_format: svg` for the gpt-image family. The raster model
+ * paints the picture and this one writes the document, so the svg call carries both: without the
+ * `svg.model` field the host refuses the request outright
+ * (`output_format "svg" requires svg.model`).
+ */
+export const PROXY_SVG_MODEL = 'openai/gpt-6.1-terra';
+
 
 /**
  * Riverflow V2.6 Pro (Flux-based, https://proxyapi.ru/models/sourceful/riverflow-v2.6-pro). It is

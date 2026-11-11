@@ -428,12 +428,12 @@ test('vector model uses aspect_ratio and svg output', () => {
     // no 16-pixel rounding, and none of the raster tuning fields.
     assert.deepEqual(
         generationBody({ model: 'openai/gpt-image-2.6-sunburst', prompt: 'логотип', size: '160x120', format: 'svg', complexity: 'high', background: 'transparent' }),
-        { model: 'openai/gpt-image-2.6-sunburst', prompt: 'логотип', size: '160x120', output_format: 'svg' },
+        { model: 'openai/gpt-image-2.6-sunburst', prompt: 'логотип', size: '160x120', output_format: 'svg', svg: { model: 'openai/gpt-6.1-terra' } },
     );
     // A shape that names no pixels reaches the same family as the ratio it names.
     assert.deepEqual(
         generationBody({ model: 'openai/gpt-image-2.6-sunburst', prompt: 'логотип', size: '16:9', format: 'svg' }),
-        { model: 'openai/gpt-image-2.6-sunburst', prompt: 'логотип', aspect_ratio: '16:9', output_format: 'svg' },
+        { model: 'openai/gpt-image-2.6-sunburst', prompt: 'логотип', aspect_ratio: '16:9', output_format: 'svg', svg: { model: 'openai/gpt-6.1-terra' } },
     );
     assert.equal(sniffImage(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>')).mime, 'image/svg+xml');
     assert.equal(sniffImage(Buffer.from('<?xml version="1.0"?><svg></svg>')).ext, 'svg');

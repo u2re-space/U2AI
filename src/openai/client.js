@@ -20,7 +20,7 @@ import { CHAT_PATH, chatGaps, createChatStreamReducer, droppedTools, normalizeCh
 import { envValue } from '../core/runtime-env.js';
 import { detectMagick, magickPadImageBytes, magickRemoveImagePadding } from '../agent/image-magick.js';
 import { rasterPadImageBytes, rasterRemoveImagePadding } from '../agent/image-raster.js';
-import { backgroundValue, encodeMultipart, generationBody, imageFormatField, imageModelProfile, imageSizeAttempts, imageSizeFields, readImageSize, imageComplexityValue, imageSources, isImageSizeError, isSvgRequest, needsDiv16Padding, needsMinPixelsPadding, paddedSizeToMinPixels, normalizeVectorRatio, parseImageSize, resolveImageFormat, withSizeHint } from './images.js';
+import { backgroundValue, encodeMultipart, generationBody, imageFormatField, imageModelProfile, imageSizeAttempts, imageSizeFields, readImageSize, imageComplexityValue, imageSources, isImageSizeError, isSvgRequest, needsDiv16Padding, needsMinPixelsPadding, paddedSizeToMinPixels, normalizeVectorRatio, parseImageSize, resolveImageFormat, withSizeHint, svgConversionModel } from './images.js';
 import { rasterFitToSourceFrame } from '../agent/image-raster.js';
 import { isSeedream55, generateTransparentLayer } from './seedream-5-5.js';
 
@@ -832,6 +832,12 @@ export function createClient({
                         if (aspect) fields.aspect_ratio = aspect;
                     }
                     fields[imageFormatField(model)] = 'svg';
+                    // ProxyAPI demands an `svg` object next to `output_format: svg` for the
+                    // gpt-image family — the raster model paints the picture and this model
+                    // writes the document. Without it the host refuses the whole call.
+                    // For the multipart route it must be JSON-encoded.
+                    const svgModel = svgConversionModel(model);
+                    if (svgModel) fields.svg = JSON.stringify(svgModel);
                 } else {
                     const sizeFields = imageSizeFields(attemptSize, model, resolution);
                     if (sizeFields.size) fields.size = sizeFields.size;

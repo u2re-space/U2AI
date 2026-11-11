@@ -3,7 +3,7 @@
  * @module openai/shared/images
  * @exports IMAGE_SIZES, VECTOR_RATIOS, isVectorModel, isSvgRequest, normalizeVectorRatio, normalizeImageFormat,
  *   encodeMultipart, imagePayloads, imageSources, pngHasAlphaChannel, readImageSize, sniffImage,
- *   aspectImageSize, aspectRatioToken, supportedAspectRatios
+ *   aspectImageSize, aspectRatioToken, supportedAspectRatios, svgConversionModel
  */
 import { randomBytes } from 'node:crypto';
 import {
@@ -14,7 +14,7 @@ import {
 } from './constants.js';
 import {
     RIVERFLOW, GPT_IMAGE_25, GPT_IMAGE_26,
-    PROXY_IMAGE_MODEL, PROXY_IMAGE_EDIT_MODEL, PROXY_VECTOR_MODEL, PROXY_RIVERFLOW_MODEL,
+    PROXY_IMAGE_MODEL, PROXY_IMAGE_EDIT_MODEL, PROXY_VECTOR_MODEL, PROXY_RIVERFLOW_MODEL, PROXY_SVG_MODEL,
 } from './model-profiles.js';
 import {
     RATIO_MAX_TERM, RATIO_CEIL_EPSILON, RATIO_WORDS, STANDARD_RATIOS,
@@ -852,6 +852,20 @@ export function withSizeHint(prompt, fields = {}, model = null, mode = 'auto') {
     return `${text}\n\nRequested output: ${parts.join(', ')}. Keep this exact frame and aspect ratio.`;
 }
 
+/**
+ * The `svg` field the ProxyAPI host demands next to `output_format: svg` for the gpt-image family:
+ * the raster model paints the picture and this model writes the document. Without it the host
+ * refuses the whole call (`output_format "svg" requires svg.model`). A family that answers
+ * `image_format: svg` — recraft — draws the document itself and knows no such field, so it stays out.
+ * @param {string|null|undefined} model
+ * @returns {{model: string}|null}
+ * @exports
+ * @ai.hint pure
+ */
+export function svgConversionModel(model) {
+    return imageFormatField(model) === 'output_format' ? { model: PROXY_SVG_MODEL } : null;
+}
+
 /** Build the JSON body accepted by /images/generations for the selected model family. */
 export function generationBody({ model, prompt, size = null, complexity = null, n = null, format = null,
     background = null, references = null, resolution = null, sizeHint = 'auto' }) {
@@ -875,6 +889,8 @@ export function generationBody({ model, prompt, size = null, complexity = null, 
         }
         if (Number.isInteger(n) && n > 1) body.n = n;
         body[imageFormatField(model)] = 'svg';
+        const svgModel = svgConversionModel(model);
+        if (svgModel) body.svg = svgModel;
         body.prompt = withSizeHint(prompt, body, model, sizeHint);
         return body;
     }

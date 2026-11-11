@@ -5,14 +5,19 @@
  *   async task polling, and the normalized layer geometry the advanced measurer builds on.
  * @depends node:timers/promises, openai/errors, shared/model-profiles, shared/images
  * @usedBy agent/advanced
- * @exports SEEDREAM_MODEL, isSeedream55, seedreamLayerSizes, layerDecompositionBody,
- *   parseLayerDecomposition, normalizeLayerBox, decomposeLayers, generateTransparentLayer,
+ * @exports SEEDREAM_MODEL, isSeedream55, seedreamLayerSizes, seedreamGenerationSize,
+ *   layerDecompositionBody, generationBody, parseLayerDecomposition, normalizeLayerBox,
+ *   taskImageSources, downloadImageBytes, decomposeLayers, generateTransparentLayer,
  *   SEEDREAM_INPUT_MAX_BYTES, SEEDREAM_INPUT_MAX_PIXELS
  * @ai.tags images, seedream, decomposition, layers
  * @ai.hint io
  * @changed 2026-11-10 First extraction of the seedream-5.5 route: decomposition is asynchronous
  *   (POST /images/generations answers a task_id, GET /tasks/{id} carries the results), so the model
  *   needs its own file instead of another flag inside the generic images client.
+ * @changed 2026-11-11 Generation is asynchronous too, and its reference travels in `image_urls`:
+ *   the enhanced-crop pass left the generic images route, which waited for a synchronous
+ *   `b64_json`/`url` and posted `input_references` this model never reads. Both modes now share one
+ *   task runner that walks the `modelsBackends` host chain.
  *
  * Documented API: https://docs.apimart.ai/ru/api-reference/images/seedream-5-5/generation
  *
@@ -39,6 +44,13 @@ export const SEEDREAM_MODEL = 'seedream-5-5';
 
 /** Frames the decomposition mode accepts. Anything else is a synchronous 400. */
 export const SEEDREAM_LAYER_SIZES = Object.freeze(['1K', '1.5K', '2K', 'auto']);
+
+/** Ratios the generation mode accepts (the vendor also reads `16x9` for `16:9`). */
+export const SEEDREAM_RATIOS = Object.freeze(['1:1', '4:3', '3:4', '16:9', '9:16', '3:2', '2:3', '21:9', '2:1', '1:2']);
+
+/** Pixel budget of one generation frame; an exact frame outside it is a synchronous 400. */
+export const SEEDREAM_GENERATION_MIN_PIXELS = 921_600;
+export const SEEDREAM_GENERATION_MAX_PIXELS = 4_624_220;
 
 /** Generation frames (free WIDTHxHEIGHT on the 16-pixel grid); kept here for the enhanced-crop pass. */
 export const SEEDREAM_INPUT_MAX_BYTES = 30 * 1024 * 1024;
@@ -113,6 +125,59 @@ export function layerDecompositionBody({ model = SEEDREAM_MODEL, source, prompt 
     if (Number.isSafeInteger(maxImages) && maxImages >= 2 && maxImages <= 100) body.layer_decomposition_options = { max_images: maxImages };
     if (textRecognition === true) {
         body.layer_decomposition_options = { ...(body.layer_decomposition_options ?? {}), text_recognition: true };
+    }
+    return body;
+}
+
+/**
+ * A frame the generation mode accepts. Unlike decomposition, generation also takes ratios and exact
+ * pixels, but a measurement crop is far below the vendor's minimum pixel budget (921 600), so an
+ * exact frame of a small region is a synchronous HTTP 400. A tier is what a crop can actually ask
+ * for, and `1K` is the cheap one; anything unusable becomes `1K` rather than a rejected frame.
+ * @param {string|null|undefined} value
+ * @returns {string}
+ * @exports
+ * @ai.hint pure
+ */
+export function seedreamGenerationSize(value) {
+    const token = String(value ?? '').trim();
+    if (!token) return '1K';
+    const upper = token.toUpperCase();
+    if (SEEDREAM_LAYER_SIZES.includes(upper)) return upper;
+    const match = /^(\d+)\s*[xх*]\s*(\d+)$/i.exec(token);
+    if (match) {
+        const pixels = Number(match[1]) * Number(match[2]);
+        if (pixels >= SEEDREAM_GENERATION_MIN_PIXELS && pixels <= SEEDREAM_GENERATION_MAX_PIXELS) return `${match[1]}x${match[2]}`;
+    }
+    if (SEEDREAM_RATIOS.includes(token.replace(/x/i, ':'))) return token.replace(/x/i, ':');
+    return '1K';
+}
+
+/**
+ * Body for POST /images/generations in the ordinary generation mode (the enhanced-crop pass).
+ * The reference travels in `image_urls` — this model does not read the `input_references` field the
+ * generic images route uses — transparency needs `output_format: "png"`, and `n` stays out because
+ * the mode answers exactly one task.
+ * @param {{ model?: string, prompt: string, references?: string[]|null, size?: string|null,
+ *   background?: string|null, format?: string|null }} options
+ * @returns {object}
+ * @exports
+ * @ai.hint pure
+ */
+export function generationBody({ model = SEEDREAM_MODEL, prompt, references = null, size = '1K', background = 'transparent', format = 'png' }) {
+    const text = String(prompt ?? '').trim();
+    // Unlike decomposition, generation cannot run without a prompt.
+    if (!text) throw new ApiError('Генерация seedream-5.5 требует prompt.', { code: 'INVALID_REQUEST' });
+    const images = (Array.isArray(references) ? references : []).filter((url) => typeof url === 'string' && url.trim());
+    if (images.length > 10) throw new ApiError('seedream-5.5 принимает не больше 10 референсов.', { code: 'INVALID_REQUEST' });
+    const body = { model, prompt: text, size: seedreamGenerationSize(size) };
+    if (images.length) body.image_urls = images;
+    const imageFormat = String(format ?? '').trim().toLowerCase() === 'jpeg' ? 'jpeg' : 'png';
+    body.output_format = imageFormat;
+    // The vendor refuses transparent output combined with JPEG.
+    const wanted = String(background ?? '').trim().toLowerCase();
+    if (['transparent', 'opaque', 'auto'].includes(wanted) && !(wanted === 'transparent' && imageFormat === 'jpeg')) {
+        body.background = wanted;
     }
     return body;
 }
@@ -263,6 +328,123 @@ async function pollTask(client, taskId, { signal, timeoutMs = DEFAULT_TASK_TIMEO
 }
 
 /**
+ * The channel list to walk: the resolved host chain, or the single client the caller handed over.
+ * @param {{ call: Function }|null} client
+ * @param {Array<{ client: object }>|null} channels
+ * @param {string} what Route name, for the error text.
+ * @returns {Array<{ client: { call: Function }, modelFor?: Function, label?: string }>}
+ * @ai.hint pure
+ */
+function channelChain(client, channels, what) {
+    const chain = (Array.isArray(channels) && channels.length
+        ? channels
+        : (client?.call ? [{ client }] : [])
+    ).filter((channel) => typeof channel?.client?.call === 'function');
+    if (!chain.length) throw new ApiError(`${what}: нужен API-клиент с методом call() или список каналов.`, { code: 'INVALID_REQUEST' });
+    return chain;
+}
+
+/**
+ * Post one seedream-5.5 body and wait for its task, walking the host chain.
+ * Both modes of this model are asynchronous — generation answers a task id exactly like
+ * decomposition does — so the schedule and the host walk belong here rather than in each caller.
+ * A host that answers "model not found" or is down advances to the next one; anything else is the
+ * caller's problem at once. The task is polled on the host that created it, because a task id means
+ * nothing to the other backends.
+ * @param {{ client?: object, channels?: Array<{ client: object, modelFor?: Function, label?: string }>,
+ *   model: string, body: object, signal?: AbortSignal, timeoutMs?: number,
+ *   onPoll?: Function, onWarn?: Function, what: string, noResult: string }} options
+ * @returns {Promise<{ raw: object, taskId: string|null, host: string|null }>}
+ * @ai.hint io
+ */
+async function runSeedreamTask({ client = null, channels = null, model, body, signal, timeoutMs,
+    onPoll = null, onWarn = null, what = 'Задача seedream-5.5', noResult = 'Ответ seedream-5.5 не содержит ни task_id, ни результатов.' }) {
+    const chain = channelChain(client, channels, what);
+    let lastError = null;
+    for (const [index, channel] of chain.entries()) {
+        // Each host names the model its own way: `modelsBackends` may carry a vendor, prefix or suffix.
+        const id = typeof channel.modelFor === 'function' ? channel.modelFor(model) : model;
+        const sent = { ...body, model: id };
+        try {
+            const created = await channel.client.call('images/generations', { body: sent, signal });
+            if (taskData(created)?.status === 'completed') return { raw: created, taskId: null, host: channel.label ?? null };
+            const taskId = String(created?.data?.[0]?.task_id ?? created?.data?.task_id ?? created?.task_id ?? '').trim();
+            if (!taskId) {
+                throw new ApiError(noResult, { code: 'INVALID_RESPONSE', details: { keys: Object.keys(created ?? {}) } });
+            }
+            const settled = await pollTask(channel.client, taskId, { signal, timeoutMs, onPoll });
+            return { raw: settled, taskId, host: channel.label ?? null };
+        } catch (error) {
+            // A missing model or a dead host is this backend's answer, not the route's: try the next one.
+            if (!modelMissing(error) && !providerDown(error)) throw error;
+            lastError = error;
+            if (index < chain.length - 1) {
+                try {
+                    onWarn?.(`${what} на ${channel.label || 'этом бэкенде'} не вышла (${error.message ?? error}); пробую следующий хост.`);
+                } catch { /* observer */ }
+            }
+        }
+    }
+    throw lastError ?? new ApiError(`Ни один бэкенд не выполнил ${what.toLowerCase()}.`, { code: 'NO_PROVIDER' });
+}
+
+/**
+ * Picture sources of a completed answer, in response order.
+ * A task answer keeps them in `data.result.images[].url[]` — an array per row, index-aligned with
+ * `sizes` and `layers` — while a synchronous gateway may answer the OpenAI shape `data[].url` or
+ * `data[].b64_json`, so all three shapes are read.
+ * @param {object} result
+ * @returns {Array<{ kind: 'b64'|'url', value: string }>}
+ * @exports
+ * @ai.hint pure
+ */
+export function taskImageSources(result) {
+    const out = [];
+    const push = (value, kind) => {
+        const text = String(value ?? '').trim();
+        if (text) out.push({ kind, value: text });
+    };
+    const rows = [
+        ...(taskData(result)?.images ?? []),
+        ...(Array.isArray(result?.data) ? result.data : []),
+    ];
+    for (const row of rows) {
+        if (!row || typeof row !== 'object') continue;
+        if (Array.isArray(row.url)) row.url.forEach((item) => push(item, 'url'));
+        else if (typeof row.url === 'string') push(row.url, 'url');
+        if (Array.isArray(row.b64_json)) row.b64_json.forEach((item) => push(item, 'b64'));
+        else if (typeof row.b64_json === 'string') push(row.b64_json, 'b64');
+    }
+    return out;
+}
+
+/**
+ * Bytes of one answer picture. A CDN link is fetched; a data URI is decoded, because `fetch` does
+ * not speak that scheme and a gateway is free to answer inline.
+ * @param {string} url
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<Buffer|null>}
+ * @exports
+ * @ai.hint io
+ */
+export async function downloadImageBytes(url, signal) {
+    try {
+        const text = String(url ?? '').trim();
+        if (/^data:/i.test(text)) {
+            const comma = text.indexOf(',');
+            const header = text.slice(0, comma);
+            if (!/;base64/i.test(header)) return null;
+            return Buffer.from(text.slice(comma + 1), 'base64');
+        }
+        const res = await fetch(text, { signal, redirect: 'follow' });
+        if (!res.ok) return null;
+        return Buffer.from(await res.arrayBuffer());
+    } catch {
+        return null;
+    }
+}
+
+/**
  * Split one picture into a base image and transparent PNG layers with seedream-5.5.
  * Returns normalized records: the base frame, one entry per layer (z-order, name, box in base
  * pixels, optional OCR text), and the raw parsed answer under `raw`.
@@ -285,70 +467,51 @@ export async function decomposeLayers({ client = null, channels = null, source, 
     if (Buffer.byteLength(source?.bytes ?? '') > SEEDREAM_INPUT_MAX_BYTES) {
         throw new ApiError(`Вход разложения больше ${SEEDREAM_INPUT_MAX_BYTES} байт — уменьшите изображение.`, { code: 'IMAGE_TOO_LARGE' });
     }
-    const chain = (Array.isArray(channels) && channels.length
-        ? channels
-        : (client?.call ? [{ client }] : [])
-    ).filter((channel) => typeof channel?.client?.call === 'function');
-    if (!chain.length) throw new ApiError('decomposeLayers: нужен API-клиент с методом call() или список каналов.', { code: 'INVALID_REQUEST' });
-    let lastError = null;
-    for (const channel of chain) {
-        // Each host names the model its own way: `modelsBackends` may carry a vendor, prefix or suffix.
-        const id = typeof channel.modelFor === 'function' ? channel.modelFor(model) : model;
-        const body = layerDecompositionBody({ model: id, source, prompt, size, maxImages, textRecognition });
-        try {
-            const created = await channel.client.call('images/generations', { body, signal });
-            const createdData = taskData(created);
-            if (createdData?.status === 'completed') {
-                const parsed = parseLayerDecomposition(created);
-                return { ...parsed, raw: created, taskId: null, host: channel.label ?? null };
-            }
-            const taskId = String(created?.data?.[0]?.task_id ?? created?.data?.task_id ?? created?.task_id ?? '').trim();
-            if (!taskId) {
-                // No task and no completed data: the gateway answered something this route does not speak.
-                const parsed = parseLayerDecomposition(created);
-                if (parsed.base || parsed.layers.length) return { ...parsed, raw: created, taskId: null, host: channel.label ?? null };
-                throw new ApiError('Ответ seedream-5.5 не содержит ни task_id, ни результатов разложения.', {
-                    code: 'INVALID_RESPONSE', details: { keys: Object.keys(created ?? {}) },
-                });
-            }
-            const settled = await pollTask(channel.client, taskId, { signal, timeoutMs, onPoll });
-            const parsed = parseLayerDecomposition(settled);
-            return { ...parsed, raw: settled, taskId, host: channel.label ?? null };
-        } catch (error) {
-            // A missing model or a dead host is this backend's answer, not the route's: try the next one.
-            if (!modelMissing(error) && !providerDown(error)) throw error;
-            lastError = error;
-            const next = chain.indexOf(channel) < chain.length - 1;
-            if (next) {
-                try {
-                    onWarn?.(`Разложение на ${channel.label || 'этом бэкенде'} не вышло (${error.message ?? error}); пробую следующий хост.`);
-                } catch { /* observer */ }
-            }
-        }
-    }
-    throw lastError ?? new ApiError('Ни один бэкенд не выполнил разложение слоёв.', { code: 'NO_PROVIDER' });
+    const body = layerDecompositionBody({ model, source, prompt, size, maxImages, textRecognition });
+    const { raw, taskId, host } = await runSeedreamTask({
+        client, channels, model, body, signal, timeoutMs, onPoll, onWarn,
+        what: 'Разложение слоёв',
+        noResult: 'Ответ seedream-5.5 не содержит ни task_id, ни результатов разложения.',
+    });
+    return { ...parseLayerDecomposition(raw), raw, taskId, host };
 }
 
 /**
  * Ask seedream-5.5 for one transparent-background cut of a region (the enhanced-crop pass).
- * This is the ordinary generation route, not the decomposition one: `background: transparent` is
- * legal here and the frame travels as a free WIDTHxHEIGHT on the 16-pixel grid.
- * @param {{ client: { images?: object }, model?: string, prompt: string, bytes: Buffer, mime?: string,
- *   size?: string|null, signal?: AbortSignal }} options
- * @returns {Promise<string[]>} base64 payloads
+ *
+ * This is the generation mode, not the decomposition one: `background: transparent` is legal here.
+ * It is still an asynchronous task — the gateway answers `data[0].task_id` for every seedream-5.5
+ * call, generation included, and the picture only appears on `GET /tasks/{id}` under
+ * `data.result.images[].url[]`. Routing this through `client.images.generate` cannot work twice
+ * over: that route waits for a synchronous `b64_json`/`url` it will never get, and it carries the
+ * reference in `input_references` while this model reads `image_urls`.
+ * @param {{ client?: object, channels?: Array<{ client: object, modelFor?: Function, label?: string }>,
+ *   model?: string, prompt: string, bytes?: Buffer|null, mime?: string, references?: string[]|null,
+ *   size?: string|null, background?: string|null, format?: string|null, signal?: AbortSignal,
+ *   timeoutMs?: number, onPoll?: Function, onWarn?: Function }} options
+ * @returns {Promise<string[]>} base64 payloads (a `url` answer is downloaded)
  * @exports
  * @ai.hint io
  */
-export async function generateTransparentLayer({ client, model = SEEDREAM_MODEL, prompt, bytes, mime = 'image/png', size = null, signal }) {
-    const generate = client?.images?.generate;
-    if (!generate) throw new ApiError('generateTransparentLayer: нужен клиент с images.generate().', { code: 'INVALID_REQUEST' });
-    return generate({
-        model,
-        prompt,
-        size,
-        references: bytes?.length ? [toDataUri(bytes, mime)] : null,
-        format: 'png',
-        background: 'transparent',
-        signal,
+export async function generateTransparentLayer({ client = null, channels = null, model = SEEDREAM_MODEL, prompt,
+    bytes = null, mime = 'image/png', references = null, size = '1K', background = 'transparent', format = 'png',
+    signal, timeoutMs, onPoll = null, onWarn = null }) {
+    const urls = Array.isArray(references) && references.length
+        ? references
+        : (bytes?.length ? [toDataUri(bytes, mime)] : []);
+    const body = generationBody({ model, prompt, references: urls, size, background, format });
+    const { raw } = await runSeedreamTask({
+        client, channels, model, body, signal, timeoutMs, onPoll, onWarn,
+        what: 'Генерация прозрачного слоя', noResult: 'Ответ seedream-5.5 не содержит ни task_id, ни результатов генерации.',
     });
+    const payloads = [];
+    for (const source of taskImageSources(raw)) {
+        if (source.kind === 'b64') { payloads.push(source.value); continue; }
+        const image = await downloadImageBytes(source.value, signal);
+        if (image) payloads.push(image.toString('base64'));
+    }
+    if (!payloads.length) {
+        throw new ApiError('Задача seedream-5.5 завершилась без изображения.', { code: 'INVALID_RESPONSE', details: { keys: Object.keys(raw ?? {}) } });
+    }
+    return payloads;
 }

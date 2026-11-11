@@ -8,11 +8,16 @@
  * @depends node:path, node:fs/promises, openai/seedream-5-5, shared/model-profiles,
  *   openai/images, agent/image-magick, agent/paths
  * @usedBy agent/team
- * @exports canRunAdvanced, advancedMeasure, downloadLayerImage
+ * @exports canRunAdvanced, advancedImageModel, advancedMeasure, advancedMeasurePhase1,
+ *   advancedEnhanceCrops, advancedMeasurerProfile, shouldUseReasoningPro
  * @ai.tags measurer, advanced, seedream, decomposition
  * @ai.hint io
  * @changed 2026-11-10 First version: crop-first decomposition, OCR-aware elements, layer boxes as
  *   measurements, enhanced transparent crops, fallback on failure.
+ * @changed 2026-11-11 The seedream model is resolved from `modelsBackends` when `imageModel` names
+ *   another family, and both seedream modes now run as tasks on that host chain — the enhanced crop
+ *   pass left the synchronous images route, which could neither poll a task nor carry the region in
+ *   `image_urls`.
  *
  * How advanced differs from standard:
  *   - standard: the model reads the reference and returns boxes; the harness cuts the crops.
@@ -28,7 +33,7 @@
 import path from 'node:path';
 import { mkdir, writeFile, readFile, stat } from 'node:fs/promises';
 import { resolveInside } from './paths.js';
-import { isSeedream55, decomposeLayers, generateTransparentLayer, SEEDREAM_MODEL, SEEDREAM_INPUT_MAX_BYTES, SEEDREAM_INPUT_MAX_PIXELS } from '../openai/seedream-5-5.js';
+import { isSeedream55, decomposeLayers, generateTransparentLayer, downloadImageBytes, SEEDREAM_MODEL, SEEDREAM_INPUT_MAX_BYTES, SEEDREAM_INPUT_MAX_PIXELS } from '../openai/seedream-5-5.js';
 import { imageModelFor } from '../openai/images.js';
 import { detectMagick, magickCrop } from './image-magick.js';
 import { readImageSize } from '../shared/images.js';
@@ -119,29 +124,15 @@ function measurerModel(config) {
 
 /**
  * Download one layer image. The gateway usually answers CDN URLs, but a data URI is legal in the
- * response too, and `fetch` does not speak that scheme — it is decoded here instead of losing the
- * layer. A failed download still leaves the layer data: the box is the measurement, not the pixels.
+ * response too; both shapes are handled by the shared seedream reader. A failed download still
+ * leaves the layer data: the box is the measurement, not the pixels.
  * @param {string} url
  * @param {AbortSignal} [signal]
  * @returns {Promise<Buffer|null>}
  * @ai.hint io
  */
 async function downloadLayerImage(url, signal) {
-    try {
-        const text = String(url ?? '').trim();
-        if (/^data:/i.test(text)) {
-            const comma = text.indexOf(',');
-            const header = text.slice(0, comma);
-            const payload = text.slice(comma + 1);
-            if (!/;base64/i.test(header)) return null;
-            return Buffer.from(payload, 'base64');
-        }
-        const res = await fetch(text, { signal, redirect: 'follow' });
-        if (!res.ok) return null;
-        return Buffer.from(await res.arrayBuffer());
-    } catch {
-        return null;
-    }
+    return downloadImageBytes(url, signal);
 }
 
 /**
@@ -331,9 +322,10 @@ export async function advancedMeasurePhase1({ root, workId, client, referencePat
 
 /**
  * Generate enhanced crops for specific regions using seedream-5.5 transparent generation.
- * This creates semi-transparent fragments that the measurer can inspect more closely.
+ * This creates semi-transparent fragments that the measurer can inspect more closely. Every crop is
+ * a paid generation (the reference is billed too), so the region count is capped by `maxEnhanced`.
  * @param {{ root: string, client: object, referencePath: string, cropPaths: string[],
- *   regions: object[], maxEnhanced: number, config: object, signal: AbortSignal,
+ *   regions: object[], maxEnhanced: number, model?: string|null, config: object, signal: AbortSignal,
  *   notify: Function }} options
  * @returns {Promise<{ enhancedPaths: string[], warnings: string[] }>}
  * @ai.hint io
@@ -345,6 +337,9 @@ export async function advancedEnhanceCrops({ root, client, referencePath, cropPa
     const seedreamModel = model || advancedImageModel(config ?? {});
 
     if (!cropPaths.length || !regions.length) return { enhancedPaths, warnings };
+    // Generation is a task on this model too, so the enhanced pass walks the same host chain the
+    // decomposition used instead of the synchronous images route.
+    const channels = decompositionChannels(client, seedreamModel);
 
     let serial = 1;
     // Crop the reference to each region and ask seedream for a transparent version.
@@ -366,12 +361,13 @@ export async function advancedEnhanceCrops({ root, client, referencePath, cropPa
             const rawBytes = await readFile(path.join(root, cropped.rel ?? tmpOutput)).catch(() => null);
             if (!rawBytes?.length) continue;
 
-            // Generate transparent version. `images.generate` already walks the images pool and
-            // rewrites the id per host, so the model name is all this pass needs.
+            // Generate transparent version. The task route owns both the host chain and the
+            // `image_urls` field this model reads, so the crop travels as bytes and comes back as base64.
             const b64 = await generateTransparentLayer({
-                client, model: seedreamModel,
+                client, channels, model: seedreamModel,
                 prompt: 'Extract the foreground object from this region with a transparent background. Remove any background, shadows, or artifacts. Keep only the object.',
-                bytes: rawBytes, mime: 'image/png', size: null, signal,
+                bytes: rawBytes, mime: 'image/png', signal,
+                onWarn: (message) => notify?.({ type: 'warning', message }),
             });
 
             if (b64?.length) {

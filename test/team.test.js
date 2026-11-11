@@ -2539,10 +2539,13 @@ test('advanced measurer mode decomposes the reference first and verifies the she
             assert.equal(body.image_urls.length, 1, 'exactly one picture is decomposed');
             return { data: [{ task_id: 'task-adv' }] };
         }
-        return { data: [{ b64_json: TINY_PNG }] };
+        // The enhanced crop is a generation, and seedream answers a task for that too.
+        return { code: 200, data: [{ status: 'pending', task_id: 'task-crop' }] };
     };
     taskScript = ({ taskId }) => {
-        assert.equal(taskId, 'task-adv');
+        if (taskId !== 'task-adv') {
+            return { data: { status: 'completed', result: { images: [{ url: [layerUrl], sizes: ['1024x1024'] }] } } };
+        }
         return {
             data: { status: 'completed', result: { images: [{
                 url: [layerUrl, layerUrl, layerUrl],
@@ -2615,6 +2618,18 @@ test('advanced measurer mode decomposes the reference first and verifies the she
         const attached = verify.input.flatMap((item) => item.content ?? []).filter((part) => part.type === 'input_image').length;
         assert.ok(attached >= 2, `both decomposed layers travel to the measurer, got ${attached}`);
         assert.ok(imageBodies.some((body) => body.layer_decomposition === true), 'the reference was decomposed by seedream-5.5');
+        // The enhanced crops are generations, and a generation of this model answers a task: the day
+        // they went back through the synchronous images route, every crop died on «не содержит ни
+        // b64_json, ни url», so the absence of that warning is the regression this asserts.
+        const generations = imageBodies.filter((body) => !body.layer_decomposition);
+        for (const body of generations) {
+            assert.equal(body.background, 'transparent', 'a crop is asked for as a transparent cut');
+            assert.equal(body.output_format, 'png');
+            assert.equal(body.image_urls?.length, 1, 'the crop region travels in image_urls');
+            assert.equal('input_references' in body, false);
+        }
+        assert.equal(events.find((event) => event.type === 'warning' && /Улучшенный кроп не создан/.test(event.message)), undefined,
+            `the enhanced pass produced its crops: ${events.filter((e) => e.type === 'warning').map((e) => e.message).join(' / ')}`);
         const started = events.find((event) => event.type === 'stage.start' && event.stage === 'measure');
         assert.equal(started.measurerMode, 'advanced');
         assert.ok(events.some((event) => event.type === 'measure.pass' && event.phase === 'advanced-decomposition' && event.layers === 2));
@@ -2687,18 +2702,23 @@ test('advanced mode runs when seedream is named only by modelsBackends, not by i
     imageScript = (body) => {
         imageBodies.push(body);
         if (body.layer_decomposition) return { data: [{ task_id: 'task-map' }] };
-        return { data: [{ b64_json: TINY_PNG }] };
+        return { data: [{ status: 'pending', task_id: 'task-map-crop' }] };
     };
-    taskScript = () => ({
-        data: { status: 'completed', result: { images: [{
-            url: [layerUrl, layerUrl],
-            sizes: ['1000x800', '400x100'],
-            layers: [
-                { z_index: 0, name: 'base', background: 'opaque' },
-                { z_index: 1, name: 'panel', background: 'transparent', bounding_box: { absolute: [10, 10, 410, 110] } },
-            ],
-        }] } },
-    });
+    taskScript = ({ taskId }) => {
+        if (taskId !== 'task-map') {
+            return { data: { status: 'completed', result: { images: [{ url: [layerUrl], sizes: ['1024x1024'] }] } } };
+        }
+        return {
+            data: { status: 'completed', result: { images: [{
+                url: [layerUrl, layerUrl],
+                sizes: ['1000x800', '400x100'],
+                layers: [
+                    { z_index: 0, name: 'base', background: 'opaque' },
+                    { z_index: 1, name: 'panel', background: 'transparent', bounding_box: { absolute: [10, 10, 410, 110] } },
+                ],
+            }] } },
+        };
+    };
     detectCoder = true;
     script = (body) => {
         const role = roleOf(body);

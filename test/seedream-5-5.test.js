@@ -2,11 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ApiError } from '../src/openai/errors.js';
 import {
-    SEEDREAM_MODEL, isSeedream55, seedreamLayerSize, layerDecompositionBody,
-    normalizeLayerBox, parseLayerDecomposition, decomposeLayers, generateTransparentLayer,
+    SEEDREAM_MODEL, isSeedream55, seedreamLayerSize, seedreamGenerationSize, layerDecompositionBody, generationBody,
+    normalizeLayerBox, parseLayerDecomposition, taskImageSources, decomposeLayers, generateTransparentLayer,
 } from '../src/openai/seedream-5-5.js';
 
 const SOURCE = { bytes: Buffer.from('fake-png-bytes'), mime: 'image/png' };
+const TINY = Buffer.from('layer-bytes').toString('base64');
 
 /** One completed task answer with a base image and two layers. */
 function completedAnswer() {
@@ -138,15 +139,69 @@ test('a failed task and an answer without results are both named errors', async 
     await assert.rejects(decomposeLayers({ client: failing, source: SOURCE }), /статусом «failed»: content policy/);
 });
 
-test('the enhanced-crop pass asks the images route for a transparent png', async () => {
-    const seen = [];
-    const client = { images: { async generate(options) { seen.push(options); return ['AUNncmFtZQ==']; } } };
+test('the enhanced-crop pass runs generation as a task and carries the crop in image_urls', async () => {
+    const bodies = [];
+    const calls = [];
+    // The gateway answers a task id for generation too, and the picture only appears on the task.
+    const client = {
+        async call(route, options = {}) {
+            calls.push(`${options.method ?? 'POST'} ${route}`);
+            if (route === 'images/generations') {
+                bodies.push(options.body);
+                return { code: 200, data: [{ status: 'pending', task_id: 'task-crop' }] };
+            }
+            assert.equal(route, 'tasks/task-crop');
+            return { data: { status: 'completed', result: { images: [{ url: [`data:image/png;base64,${TINY}`], sizes: ['1024x1024'] }] } } };
+        },
+    };
     const payloads = await generateTransparentLayer({ client, prompt: 'extract', bytes: Buffer.from('region') });
-    assert.deepEqual(payloads, ['AUNncmFtZQ==']);
-    assert.equal(seen[0].background, 'transparent');
-    assert.equal(seen[0].format, 'png');
-    assert.equal(seen[0].model, SEEDREAM_MODEL);
-    assert.match(seen[0].references[0], /^data:image\/png;base64,/);
+    assert.deepEqual(calls, ['POST images/generations', 'GET tasks/task-crop']);
+    assert.deepEqual(payloads, [TINY], 'the data-URI answer is decoded into base64');
+    const body = bodies[0];
+    assert.equal(body.background, 'transparent');
+    assert.equal(body.output_format, 'png');
+    assert.equal(body.layer_decomposition, undefined, 'the enhanced crop is a generation, not a decomposition');
+    assert.equal('n' in body, false);
+    assert.match(body.image_urls[0], /^data:image\/png;base64,/);
+    assert.equal('input_references' in body, false, 'this model reads image_urls, not the generic field');
+});
+
+test('generation frames: a small crop becomes 1K, a valid frame stays, a ratio survives', () => {
+    // A measurement crop is far under the vendor's 921 600-pixel minimum, and an exact frame below
+    // it is a synchronous HTTP 400 — so the tier is the only honest answer for a small region.
+    assert.equal(seedreamGenerationSize('400x100'), '1K');
+    assert.equal(seedreamGenerationSize(null), '1K');
+    assert.equal(seedreamGenerationSize('2K'), '2K');
+    assert.equal(seedreamGenerationSize('2048x1152'), '2048x1152', '2 359 296 px sits inside the budget');
+    assert.equal(seedreamGenerationSize('16x9'), '16:9');
+    assert.equal(seedreamGenerationSize('8k'), '1K');
+});
+
+test('a transparent generation never combines transparency with jpeg and always carries a prompt', () => {
+    const body = generationBody({ prompt: 'cut out', references: ['https://cdn.test/x.png'], background: 'transparent', format: 'jpeg' });
+    assert.equal(body.output_format, 'jpeg');
+    assert.equal('background' in body, false, 'the vendor rejects transparent jpeg');
+    assert.throws(() => generationBody({ prompt: '   ' }), /требует prompt/);
+    assert.throws(() => generationBody({ prompt: 'x', references: Array(11).fill('https://cdn.test/x.png') }), /не больше 10 референсов/);
+});
+
+test('picture sources are read from both the task shape and the synchronous one', () => {
+    assert.deepEqual(taskImageSources({ data: { status: 'completed', result: { images: [{ url: ['https://cdn/a.png', 'https://cdn/b.png'] }] } } }),
+        [{ kind: 'url', value: 'https://cdn/a.png' }, { kind: 'url', value: 'https://cdn/b.png' }]);
+    assert.deepEqual(taskImageSources({ data: [{ b64_json: 'AAA' }, { url: 'https://cdn/c.png' }] }),
+        [{ kind: 'b64', value: 'AAA' }, { kind: 'url', value: 'https://cdn/c.png' }]);
+    assert.deepEqual(taskImageSources({ data: [{ status: 'pending', task_id: 't' }] }), [], 'a running task has no pictures yet');
+});
+
+test('a generation task that ends without a picture is a named error, not an empty crop', async () => {
+    const client = {
+        async call(route) {
+            return route === 'images/generations'
+                ? { data: [{ task_id: 'task-empty' }] }
+                : { data: { status: 'completed', result: { images: [] } } };
+        },
+    };
+    await assert.rejects(generateTransparentLayer({ client, prompt: 'extract', bytes: Buffer.from('x') }), /без изображения/);
 });
 
 test('a host that does not carry seedream hands the decomposition to the next backend', async () => {

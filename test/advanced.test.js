@@ -4,7 +4,8 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
-import { canRunAdvanced, advancedImageModel, shouldUseReasoningPro, advancedMeasurerProfile, advancedMeasurePhase1 } from '../src/agent/advanced.js';
+import { canRunAdvanced, advancedImageModel, shouldUseReasoningPro, advancedMeasurerProfile, advancedMeasurePhase1, advancedEnhanceCrops } from '../src/agent/advanced.js';
+import { detectMagick } from '../src/agent/image-magick.js';
 import { SEEDREAM_MODEL } from '../src/openai/seedream-5-5.js';
 import { TINY_PNG } from './helpers/mock-server.js';
 
@@ -147,6 +148,50 @@ test('phase 1 asks the backend that serves seedream, not the primary host', asyn
         assert.equal(result.layers.length, 2);
     } finally {
         server.close();
+        await rm(dir, { recursive: true, force: true });
+    }
+});
+
+test('the enhanced pass cuts a region and asks seedream for its transparent version as a task', async (t) => {
+    const exe = await detectMagick({ magickPath: null });
+    if (!exe) { t.skip('ImageMagick is not installed, so no region can be cut'); return; }
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-advanced-enhance-'));
+    const layerUrl = `data:image/png;base64,${TINY_PNG}`;
+    const calls = [];
+    const bodies = [];
+    try {
+        await writeFile(path.join(dir, 'ref.png'), Buffer.from(TINY_PNG, 'base64'));
+        const client = {
+            channels: () => [{
+                label: 'https://api.apimart.ai/v1',
+                client: {
+                    async call(route, options = {}) {
+                        calls.push(`${options.method ?? 'POST'} ${route}`);
+                        if (route === 'images/generations') {
+                            bodies.push(options.body);
+                            return { code: 200, data: [{ status: 'pending', task_id: 'task-crop' }] };
+                        }
+                        return { data: { status: 'completed', result: { images: [{ url: [layerUrl], sizes: ['1024x1024'] }] } } };
+                    },
+                },
+            }],
+        };
+        const out = await advancedEnhanceCrops({
+            root: dir, client, referencePath: 'ref.png', cropPaths: ['x.png'],
+            regions: [{ box: { x: 0, y: 0, width: 1, height: 1 } }],
+            model: 'seedream-5-5', config: {}, notify: () => {},
+        });
+        assert.deepEqual(out.warnings, []);
+        assert.equal(out.enhancedPaths.length, 1, 'the transparent cut came back from the task');
+        assert.ok(await stat(path.join(dir, out.enhancedPaths[0])).then((info) => info.isFile(), () => false), 'the crop is stored');
+        assert.deepEqual(calls, ['POST images/generations', 'GET tasks/task-crop'],
+            'generation of this model is a task, not a synchronous images call');
+        assert.equal(bodies[0].background, 'transparent');
+        assert.equal(bodies[0].output_format, 'png');
+        assert.equal(bodies[0].size, '1K', 'a 1×1 region cannot ask for its own pixel frame');
+        assert.equal(bodies[0].image_urls.length, 1, 'the region travels in image_urls');
+        assert.equal('input_references' in bodies[0], false);
+    } finally {
         await rm(dir, { recursive: true, force: true });
     }
 });

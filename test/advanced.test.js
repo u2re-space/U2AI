@@ -393,7 +393,7 @@ test('phase 1 keeps the boxes in the reference frame and every name ASCII', asyn
         });
         assert.equal('prompt' in bodies[0], true, 'the generation request carries a source-geometry guard');
         assert.match(bodies[0].prompt, /Preserve the source image or fragment at its original scale and geometry/);
-        assert.match(bodies[0].prompt, /500x400 pixels on a 1280x720 canvas/);
+        assert.match(bodies[0].prompt, /500x400 pixels on a 960x960 canvas/);
         assert.equal(result.sheet.canvas.width, 500);
         assert.equal(result.sheet.canvas.height, 400);
         const item = [...result.sheet.elements, ...result.sheet.regions][0];

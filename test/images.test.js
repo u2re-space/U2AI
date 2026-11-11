@@ -76,7 +76,7 @@ test('proxyapi uses the images API and omits Responses-only image fields', () =>
     assert.equal(normalizeImageSize(''), null);
     assert.equal(normalizeImageSize('1024x1024'), '1024x1024');
     assert.equal(normalizeImageSize('768x1024'), '768x1024');
-    assert.equal(normalizeImageSize('1280x720'), /*'1536x1024'*/'2048x1152');
+    assert.equal(normalizeImageSize('1280x720'), /*'1536x1024'*/'1280x720');
     assert.equal(normalizeImageSize('portrait'), '573x1145');
     assert.equal(imageRequestSize('2048x2048', 'gpt-image-2.6-sunburst'), '2048x2048');
     assert.equal(imageRequestSize('1024x1024', 'gpt-image-1'), '1024x1024');
@@ -370,7 +370,7 @@ test('any shape token reaches each family as a frame or a ratio it accepts', () 
     assert.equal(imageRequestSize('16:9', 'gpt-image-2.6-sunburst', '2K'), '2816x1584');
     assert.equal(imageRequestSize('2.39:1', 'gpt-image-2.6-sunburst', '4K'), '3472x1456');
     // The frame is 16-multiple and inside the model limits, so a rejection retries on the preset.
-    assert.deepEqual(imageSizeAttempts('2.39:1', 'gpt-image-2.6-sunburst'), ['1984x832', '2048x1536']);
+    assert.deepEqual(imageSizeAttempts('2.39:1', 'gpt-image-2.6-sunburst'), ['1984x832', /*'2048x1536'*/ '1024x768']);
 
     // A tier-based model without free frames takes the frame of its tier whose shape is closest.
     assert.equal(normalizeImageSize('21:9'), '1237x530');

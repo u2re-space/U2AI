@@ -54,7 +54,7 @@ import { imageModelFor } from '../openai/images.js';
 import { detectMagick, magickCrop, magickPadImageBytes, magickRemoveImagePadding, magickTrimImage } from './image-magick.js';
 import { rasterPadImageBytes, rasterRemoveImagePadding, rasterTrim } from './image-raster.js';
 import { paddedSizeToMinPixels, paddedSizeToMinPixelsByResolution } from '../shared/images.js';
-import { readImageSize } from '../shared/images.js';
+import { readImageSize, inferResolution } from '../shared/images.js';
 
 /** Subdirectory where the advanced measurer writes decomposition artefacts. */
 const ADVANCED_DIR = '.tmp/_advanced-measure/';
@@ -349,10 +349,15 @@ async function downloadLayerImage(url, signal) {
  * @returns {Promise<object|null>}
  * @ai.hint io
  */
-async function padSeedreamInput(bytes, model, config, signal) {
+async function padSeedreamInput(bytes, model, config, signal, resolution = "auto") {
     const original = readImageSize(bytes);
     if (!original?.width || !original?.height) return null;
-    const floor = paddedSizeToMinPixelsByResolution(original, model); // TODO! support not only 1k, but 2k canvas...
+
+    if (resolution?.includes?.("x")) {
+        resolution = inferResolution(original, model);
+    }
+
+    const floor = paddedSizeToMinPixelsByResolution(original, model, resolution) ?? paddedSizeToMinPixels(original, model);
     const width = Math.max(Math.ceil(original.width / 16) * 16, floor?.width ?? 0);
     const height = Math.max(Math.ceil(original.height / 16) * 16, floor?.height ?? 0);
     if (width === original.width && height === original.height) {
@@ -525,7 +530,7 @@ export async function advancedMeasurePhase1({ root, workId, client, referencePat
         return { sheet: null, cropPaths, layers, warnings };
     }
 
-    const inputPadding = await padSeedreamInput(refBytes, seedreamModel, config, signal).catch((error) => {
+    const inputPadding = await padSeedreamInput(refBytes, seedreamModel, config, signal, size).catch((error) => {
         warnings.push(`Padding входа Seedream не выполнен: ${error.message ?? String(error)}`);
         return null;
     });

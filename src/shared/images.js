@@ -478,11 +478,11 @@ export function inferResolution({ width, height }, model = null) {
     const maxSide = Math.max(width, height);
     const profile = imageModelProfile(model);//model ? imageModelProfile(model) : null;
 
-    if (maxSide <= 512 && (profile?.minPixels <= (512*512) || !profile?.minPixels)) return '512';
-    if (maxSide <= 1024) return '1k';
-    if (maxSide <= 2048) return '2k';
-    if (maxSide <= 3072) return '3k';
-    if (maxSide > 2048 && maxSide < 8192) return '4k';
+    if (maxSide > 3072 && maxSide < 8192) return '4k';
+    if (maxSide >= 3072) return '3k';
+    if (maxSide >= 2048) return '2k';
+    if (maxSide >= 1024) return '1k';
+    if (maxSide >= 512 && (profile?.minPixels <= (512*512) || !profile?.minPixels)) return '512';
 
     // 4k — максимальный уровень; запросы больше него попадут в 4k.
     return maxSide > 2048 ? '4k' : '1k';
@@ -542,8 +542,9 @@ export const fromMinimalSize = ({width, height}, minPixels = 16384, maxPixels = 
     const originalSize = {width, height};
     
     // method one
-    const upscaleRatio = Math.sqrt(Math.max(minPixels/(originalSize.width*originalSize.height), 1));
-    
+    const maxUpscaleRatio =  Math.sqrt(Math.max(maxPixels/(originalSize.width*originalSize.height), 1));
+    const upscaleRatio = Math.min(Math.sqrt(Math.max(minPixels/(originalSize.width*originalSize.height), 1)), maxUpscaleRatio);
+
     if (needsToPad16) {
         paddedSize.width  = (Math.ceil(Math.ceil(originalSize.width  * upscaleRatio) / 16) * 16);
         paddedSize.height = (Math.ceil(Math.ceil(originalSize.height * upscaleRatio) / 16) * 16);
@@ -630,13 +631,17 @@ export function normalizeImageSize(size, resolution = null, model = null) {
         isShapeOnly = !parsed && !tierFromToken(value, model);
     }
 
-    const resolutionKey = tierFromToken(resolution, model) || tierFromToken(value, model)
-        || (isOrientationWord || isShapeOnly ? '1k' : inferResolution(requested, model));
-
-    
     const profile = imageModelProfile(model);
     const minPixels = profile?.minPixels || 16384;
     const maxPixels = profile?.maxPixels || 16777216;
+
+    if (size?.includes?.("x")) {
+        const clamped = fromMinimalSize(requested, minPixels, maxPixels, profile.div16Padding);
+        return `${clamped.width}x${clamped.height}`;
+    }
+
+    const resolutionKey = tierFromToken(resolution, model) || tierFromToken(value, model)
+        || (isOrientationWord || isShapeOnly ? '1k' : inferResolution(requested, model));
 
     const computed = computeSize(`${requested.width}:${requested.height}` || value, resolutionKey, minPixels, maxPixels, profile.div16Padding);
     return `${computed.width}x${computed.height}`;
@@ -916,7 +921,7 @@ export function nearestRiverflowRatio(sizePixels) {
  * @ai.hint pure
  */
 export function imageSizeAttempts(size, model, resolution = null) {
-    const initial = imageRequestSize(size, model, resolution);
+    const initial = /*normalizeImageSize(size, resolution, model) ||*/ imageRequestSize(size, model, resolution);//;
     if (!initial) return [];
     const profile = imageModelProfile(model);
     if (!profile.customSizes || !/^\d+x\d+$/.test(initial)) {

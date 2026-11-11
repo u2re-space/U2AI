@@ -14,7 +14,7 @@ import { listenProtocol } from '../server/protocol.js';
 import { createProcessRegistry } from './registry.js';
 import { createToolset } from '../agent/tools.js';
 
-const TOOLS = ['list_files', 'read_file', 'search_files', 'write_file', 'replace_text', 'delete_file', 'run_command', 'run_script'];
+const TOOLS = ['list_files', 'read_file', 'search_files', 'write_file', 'copy_path', 'replace_text', 'delete_file', 'run_command', 'run_script'];
 
 /**
  * Open the MCP server and the claim registry. Loads TypeScript only from here.

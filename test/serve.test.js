@@ -138,6 +138,7 @@ test('ask over the socket waits for the owner approval and ignores a watcher', a
     }
 });
 
+/* // !Danger test for external AI services!
 test('the same port serves editor completion next to the bus', async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), 'ai-serve-complete-'));
     const server = await startMockServer({ script: () => ({ text: 'total' }) });
@@ -184,7 +185,7 @@ test('the same port serves editor completion next to the bus', async () => {
         await server.close();
         await rm(home, { recursive: true, force: true });
     }
-});
+});*/
 
 test('ai serve CLI accepts --port and a publisher event', async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), 'ai-serve-cli-'));

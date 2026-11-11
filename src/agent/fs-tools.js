@@ -1,18 +1,18 @@
 /**
  * @file src/agent/fs-tools.js
  * @module agent/fs-tools
- * @purpose List, read, search, and edit UTF-8 files inside the working directory.
+ * @purpose List, read, search, edit, and copy files inside the working directory.
  * @depends node:path, node:fs/promises, agent/paths, agent/project-backup, util/text
  * @usedBy agent/tools, agent/team
- * @exports listFiles, readTextFile, searchFiles, writeTextFile, replaceInFile, deleteFile, makeDirectory
+ * @exports listFiles, readTextFile, searchFiles, writeTextFile, replaceInFile, deleteFile, makeDirectory, copyPath
  * @ai.tags filesystem, tools
  * @ai.hint io
  * @changed 2026-10-21 A direct search can include noisy directories; a missing path lists its parent.
  */
 
 import path from 'node:path';
-import { readFile, writeFile, mkdir, stat, readdir, unlink, copyFile, open } from 'node:fs/promises';
-import { resolveInside, NOISY_DIRS } from './paths.js';
+import { readFile, writeFile, mkdir, stat, lstat, readdir, unlink, copyFile, cp, open } from 'node:fs/promises';
+import { resolveInside, isInside, isForbiddenDirName, isProtectedFileName, NOISY_DIRS } from './paths.js';
 import { formatBytes } from '../util/text.js';
 import { saveProjectBackup } from './project-backup.js';
 
@@ -304,4 +304,52 @@ export async function makeDirectory({ root, dir }) {
     const { abs, rel } = await resolveInside(root, dir, { forWrite: true, allowRoot: false });
     await mkdir(abs, { recursive: true });
     return { rel };
+}
+
+/**
+ * Copy a file or directory tree without decoding or transforming its contents.
+ * Both paths stay in the workspace; destination must not already exist.
+ * @param {{ root: string, source: string, destination: string }} options
+ * @returns {Promise<object>}
+ * @exports
+ * @ai.hint io
+ */
+export async function copyPath({ root, source, destination }) {
+    const from = await resolveInside(root, source, { allowRoot: false });
+    const to = await resolveInside(root, destination, { forWrite: true, allowRoot: false });
+    if (from.rel === '.backup' || from.rel.startsWith('.backup/')) throw new Error(`Чтение из .backup запрещено: ${from.rel}`);
+    if (to.rel === '.backup' || to.rel.startsWith('.backup/')) throw new Error(`Запись в .backup запрещена: ${to.rel}`);
+
+    const info = await lstat(from.abs).catch(() => null);
+    if (!info) throw new Error(`Источник не найден: ${source}`);
+    if (info.isSymbolicLink()) throw new Error(`Копирование символических ссылок запрещено: ${from.rel}`);
+    if (!info.isFile() && !info.isDirectory()) throw new Error(`Источник должен быть файлом или каталогом: ${from.rel}`);
+
+    const destinationPath = path.resolve(to.abs);
+    if (info.isDirectory() && isInside(from.abs, destinationPath)) throw new Error('Нельзя копировать каталог внутрь самого себя.');
+
+    async function validateTree(abs, rel) {
+        const current = await lstat(abs);
+        const name = path.basename(abs);
+        if (name === '.backup') throw new Error(`Доступ к .backup запрещён: ${rel}`);
+        if (isForbiddenDirName(name)) throw new Error(`Доступ запрещён: ${rel}`);
+        if (current.isSymbolicLink()) throw new Error(`Копирование символических ссылок запрещено: ${rel}`);
+        if (current.isFile() && isProtectedFileName(name)) throw new Error(`Файл с секретами недоступен: ${rel}`);
+        if (current.isDirectory()) {
+            for (const entry of await readdir(abs, { withFileTypes: true })) {
+                const child = path.join(abs, entry.name);
+                const childRel = `${rel}/${entry.name}`;
+                await validateTree(child, childRel);
+            }
+        } else if (!current.isFile()) {
+            throw new Error(`Неподдерживаемый тип файла: ${rel}`);
+        }
+    }
+    await validateTree(from.abs, from.rel);
+
+    const targetInfo = await lstat(to.abs).catch(() => null);
+    if (targetInfo) throw new Error(`Путь назначения уже существует: ${to.rel}`);
+    await mkdir(path.dirname(to.abs), { recursive: true });
+    await cp(from.abs, to.abs, { recursive: true, errorOnExist: true, force: false, dereference: false });
+    return { source: from.rel, destination: to.rel, type: info.isDirectory() ? 'directory' : 'file' };
 }

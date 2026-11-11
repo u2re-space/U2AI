@@ -357,7 +357,7 @@ export function createHub({ token, onStart = async () => {}, createId = () => ra
         send(socket, errorFrame('unknown_type', `Неизвестный тип кадра: ${frame.type}.`));
     }
 
-    const PROCESSABLE = ['delete_file', 'list_files', 'read_file', 'replace_text', 'run_command', 'run_script', 'search_files', 'write_file'];
+    const PROCESSABLE = ['copy_path', 'delete_file', 'list_files', 'read_file', 'replace_text', 'run_command', 'run_script', 'search_files', 'write_file'];
     const PROCESSABLE_SET = new Set(PROCESSABLE);
 
     /**

@@ -2,7 +2,7 @@ import { McpServer, createMcpHandler } from '@modelcontextprotocol/server';
 import { localhostHostValidation, localhostOriginValidation, toNodeHandler } from '@modelcontextprotocol/node';
 import { z } from 'zod';
 
-const TOOLS = ['list_files', 'read_file', 'search_files', 'write_file', 'replace_text', 'delete_file', 'run_command', 'run_script'] as const;
+const TOOLS = ['list_files', 'read_file', 'search_files', 'write_file', 'copy_path', 'replace_text', 'delete_file', 'run_command', 'run_script'] as const;
 
 const loose = z.object({}).passthrough();
 

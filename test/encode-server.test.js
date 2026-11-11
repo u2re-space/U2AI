@@ -54,7 +54,7 @@ test('the encode server lists tools, reads through Node, and sends writes to a h
         await mcp(host.mcpURL, { jsonrpc: '2.0', method: 'notifications/initialized' }, headers);
         const list = await mcp(host.mcpURL, { jsonrpc: '2.0', id: 2, method: 'tools/list' }, headers);
         const names = list.result.tools.map((tool) => tool.name).sort();
-        assert.deepEqual(names, ['delete_file', 'encode', 'list_files', 'read_file', 'replace_text', 'run_command', 'run_script', 'search_files', 'write_file']);
+        assert.deepEqual(names, ['copy_path', 'delete_file', 'encode', 'list_files', 'read_file', 'replace_text', 'run_command', 'run_script', 'search_files', 'write_file']);
         const read = await mcp(host.mcpURL, {
             jsonrpc: '2.0', id: 3, method: 'tools/call',
             params: { name: 'read_file', arguments: { path: 'note.txt' } },

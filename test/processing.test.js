@@ -44,6 +44,24 @@ test('processing: null uses Node and a host result does not touch the disk', asy
     }
 });
 
+test('processing: copy_path copies binary data and records the destination change', async () => {
+    const root = await rootFor('copy');
+    try {
+        const bytes = Buffer.from([0, 255, 128, 1]);
+        await writeFile(path.join(root, 'source.bin'), bytes);
+        const toolset = createToolset({ root, config: defaults, names: ['copy_path'], approvalLevel: 'all' });
+        const result = await toolset.execute({
+            name: 'copy_path', call_id: 'c1',
+            arguments: JSON.stringify({ source: 'source.bin', destination: 'assets/copied.bin' }),
+        });
+        assert.equal(result.ok, true, result.output);
+        assert.deepEqual(await readFile(path.join(root, 'assets', 'copied.bin')), bytes);
+        assert.deepEqual(toolset.stats().changes, [{ op: 'create', path: 'assets/copied.bin' }]);
+    } finally {
+        await rm(root, { recursive: true, force: true });
+    }
+});
+
 test('processing: replace_text changes refresh the project map', async () => {
     const root = await rootFor('map');
     try {

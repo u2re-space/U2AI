@@ -96,6 +96,14 @@ export const TOOL_SPECS = {
             overwrite: bool('Allow replacing an existing file. Use false when creating a file that must not exist yet.'),
         }),
     },
+    copy_path: {
+        category: 'write', group: 'fs',
+        description: 'Copy a file or an entire directory tree inside the working directory without reading, decoding, or transforming file contents; binary files are copied byte-for-byte. The destination must not already exist. Symbolic links and protected files are refused.',
+        parameters: schema({
+            source: str('Existing file or directory path relative to the working directory.'),
+            destination: str('New file or directory path relative to the working directory. Must not already exist.'),
+        }),
+    },
     replace_text: {
         category: 'write', group: 'fs',
         description: 'Edit a text file by replacing an exact fragment. The fragment must match exactly once unless all=true. Prefer this over write_file for small edits.',
@@ -507,7 +515,7 @@ export function toolDefinitions(names, enums = {}) {
 /** Which tools are enabled for a config.tools selection. */
 export function enabledToolNames(tools, { interactive = false, memory = false, summarize = false, imageApi = false, unsafeScreenshot = false, images = true } = {}) {
     const names = [];
-    if (tools.fs) names.push('list_files', 'read_file', 'search_files', 'write_file', 'replace_text', 'delete_file', 'make_dir', 'view_image', 'structure_file', 'list_backups', 'restore_backup');
+    if (tools.fs) names.push('list_files', 'read_file', 'search_files', 'write_file', 'copy_path', 'replace_text', 'delete_file', 'make_dir', 'view_image', 'structure_file', 'list_backups', 'restore_backup');
     if (tools.fs && summarize) names.push('summarize_file');
     if (tools.shell) names.push(...SHELL_TOOL_NAMES);
     if (tools.fetch) names.push('fetch_url');

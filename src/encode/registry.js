@@ -13,7 +13,7 @@
 import { randomUUID } from 'node:crypto';
 import { listenProtocol } from '../server/protocol.js';
 
-const PROCESSABLE = ['delete_file', 'list_files', 'read_file', 'replace_text', 'run_command', 'run_script', 'search_files', 'write_file'];
+const PROCESSABLE = ['copy_path', 'delete_file', 'list_files', 'read_file', 'replace_text', 'run_command', 'run_script', 'search_files', 'write_file'];
 const PROCESSABLE_SET = new Set(PROCESSABLE);
 const CHANGE_OPS = new Set(['create', 'overwrite', 'edit', 'delete']);
 

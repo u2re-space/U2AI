@@ -23,8 +23,8 @@ import { detectImageMime } from '../core/attachments.js';
 import { errorMessage, formatBytes, truncate, clipMiddle } from '../util/text.js';
 import { resolveInside, NOISY_DIRS } from './paths.js';
 import { listProjectBackups, restoreProjectBackup } from './project-backup.js';
-import { listFiles, readTextFile, searchFiles, writeTextFile, replaceInFile, deleteFile, makeDirectory } from './fs-tools.js';
-import { loadProjectMap, searchMapped, updateProjectMapPath } from './map.js';
+import { listFiles, readTextFile, searchFiles, writeTextFile, replaceInFile, deleteFile, makeDirectory, copyPath } from './fs-tools.js';
+import { buildProjectMap, loadProjectMap, searchMapped, updateProjectMapPath } from './map.js';
 import { SHELLS, runCommand, runProgram, scriptLaunch, sshPlan } from './shell.js';
 import { guardScaffold, isScaffoldCommand } from '../generate/scaffold.js';
 import { structureCode } from '../structure/structure.js';
@@ -151,8 +151,8 @@ function commandReport(result, timeoutMs, limits) {
     return { output: body.join('\n'), summary: status, ok: result.exitCode === 0 };
 }
 
-const PROCESSABLE = new Set(['delete_file', 'list_files', 'read_file', 'replace_text', 'run_command', 'run_script', 'search_files', 'write_file']);
-const WRITE_CHANGES = new Set(['write_file', 'replace_text', 'delete_file']);
+const PROCESSABLE = new Set(['copy_path', 'delete_file', 'list_files', 'read_file', 'replace_text', 'run_command', 'run_script', 'search_files', 'write_file']);
+const WRITE_CHANGES = new Set(['copy_path', 'write_file', 'replace_text', 'delete_file']);
 const CHANGE_OPS = new Set(['create', 'overwrite', 'edit', 'delete']);
 /**
  * Image tools a read-only stage may still run, provided the file lands inside `.tmp/`:
@@ -230,8 +230,12 @@ export function createToolset({
                 const { rel } = await resolveInside(root, change.path, { forWrite: true, allowRoot: false });
                 if (rel === '.backup' || rel.startsWith('.backup/')) throw new Error(`Запись в .backup запрещена: ${rel}`);
                 stats.changes.push({ op: change.op, path: rel });
-                try { await updateProjectMapPath(root, rel); }
-                catch (error) { notify({ type: 'warning', message: `Карта проекта не обновлена: ${error.message}` }); }
+                try {
+                    const changedPath = path.join(root, ...rel.split('/'));
+                    const info = await stat(changedPath).catch(() => null);
+                    if (info?.isDirectory()) await buildProjectMap(root);
+                    else await updateProjectMapPath(root, rel);
+                } catch (error) { notify({ type: 'warning', message: `Карта проекта не обновлена: ${error.message}` }); }
             } catch (error) {
                 notify({ type: 'warning', message: error.message });
             }
@@ -276,6 +280,7 @@ export function createToolset({
                 const head = String(args.content ?? '').split('\n').slice(0, 12).join('\n');
                 return `${args.overwrite ? 'Записать' : 'Создать'} ${args.path} (${formatBytes(bytes)})\n${head}${bytes > Buffer.byteLength(head) ? '\n…' : ''}`;
             }
+            case 'copy_path': return `Скопировать ${args.source} → ${args.destination}`;
             case 'replace_text':
                 return `Изменить ${args.path}${args.all ? ' (все вхождения)' : ''}\n--- было ---\n${truncate(args.search, 400, { singleLine: false })}\n--- станет ---\n${truncate(args.replacement, 400, { singleLine: false })}`;
             case 'delete_file': return `Удалить файл ${args.path} (копия сохранится в резервном каталоге)`;
@@ -386,6 +391,17 @@ export function createToolset({
             const shot = result.projectBackup ? ` Снимок ${result.projectBackup.id} (${result.projectBackup.slot}).` : '';
             const output = labelOutsideEdit(result.rel, `${result.created ? 'Создан' : 'Перезаписан'} ${result.rel} (${formatBytes(result.bytes)}).${shot}`);
             return { output, summary: `${result.created ? '+' : '~'} ${result.rel}` };
+        },
+        /** Copy one binary-safe file or directory tree without reading its contents. */
+        async copy_path(args) {
+            const result = await copyPath({ root, source: args.source, destination: args.destination });
+            stats.changes.push({ op: 'create', path: result.destination });
+            try {
+                if (result.type === 'directory' && await loadProjectMap(root)) await buildProjectMap(root);
+                else await updateProjectMapPath(root, result.destination);
+            } catch (error) { notify({ type: 'warning', message: `Карта проекта не обновлена: ${error.message}` }); }
+            const output = labelOutsideEdit(result.destination, `Скопировано ${result.source} → ${result.destination} (${result.type === 'directory' ? 'каталог' : 'файл'}).`);
+            return { output, summary: `+ ${result.destination}` };
         },
         /** Replace the fragment, record the edit, and refresh that map path. */
         async replace_text(args) {

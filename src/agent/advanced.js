@@ -42,6 +42,124 @@ import { readImageSize } from '../shared/images.js';
 const ADVANCED_DIR = '.tmp/_advanced-measure/';
 
 /**
+ * The decomposition prompt. It is short, Latin-only and says in which language the model must answer,
+ * because the labels of this run come back in whatever language the request suggests: a Russian plan
+ * pasted in here produced layer names in Chinese, which then travelled into file names and the sheet.
+ * The vendor also warns that a long prompt can cost the OCR result, so the plan never travels here —
+ * the measurer reads it in the second pass, where it belongs.
+ */
+export const LAYER_PROMPT = 'Split this interface screenshot into its visual layers: background, panels, cards, images, icons, and every text block on its own. '
+    + 'Name and describe each layer in English, using Latin letters, digits and hyphens only (nav-logo, hero-badge, price-card-1). '
+    + 'Never write Chinese, Cyrillic or any other non-Latin script in names or descriptions.';
+
+/** A region this small is not an object, and seedream cannot cut anything out of it. */
+const MIN_CROP_SIDE = 32;
+
+/**
+ * A file-name slug both the filesystem and the model can read. The gateway names layers in any script
+ * it likes, and stripping a Chinese name down to `[a-z0-9]` used to leave a file called `01-.png`.
+ * @param {string|null|undefined} name
+ * @param {number} index
+ * @returns {string}
+ * @ai.hint pure
+ */
+function layerSlug(name, index) {
+    const clean = String(name ?? '').normalize('NFKD')
+        .replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase().slice(0, 32);
+    return clean || `layer-${index}`;
+}
+
+/**
+ * The layer name as it may enter the sheet: printable ASCII, or a generated label. A name the coder
+ * cannot read is not a name, and the picture plus its box carry the meaning anyway.
+ * @param {string|null|undefined} name
+ * @param {number} index
+ * @returns {string}
+ * @ai.hint pure
+ */
+function layerLabel(name, index) {
+    const clean = String(name ?? '').replace(/[^\x20-\x7e]+/g, ' ').replace(/\s+/g, ' ').trim();
+    return clean || `layer-${index}`;
+}
+
+/**
+ * Boxes are reported in the frame of the base image the task produced, and `size: auto` still rescales
+ * that base — an input under 1K is enlarged, one over 2K is shrunk, and a long landing page always is.
+ * The harness cuts every crop from the reference file, so a box left in the base frame lands up and
+ * left of the element it names and the crop comes back a zoomed fragment of the wrong place. This
+ * converts the geometry into the reference frame, which is the one the measurer, `crop_image` and the
+ * staged crops all speak.
+ * @param {object[]} layers
+ * @param {{width:number,height:number}|null} baseFrame
+ * @param {{width:number,height:number}|null} refFrame
+ * @returns {{ layers: object[], scale: {x:number,y:number}|null }}
+ * @ai.hint pure
+ */
+function toReferenceFrame(layers, baseFrame, refFrame) {
+    const bw = baseFrame?.width;
+    const bh = baseFrame?.height;
+    if (!bw || !bh || !refFrame?.width || !refFrame?.height) return { layers, scale: null };
+    const x = refFrame.width / bw;
+    const y = refFrame.height / bh;
+    if (Math.abs(x - 1) < 0.01 && Math.abs(y - 1) < 0.01) return { layers, scale: null };
+    const scale = { x, y };
+    const moved = layers.map((layer) => {
+        if (!layer?.box) return layer;
+        const box = layer.box;
+        return {
+            ...layer,
+            box: {
+                x: Math.round(box.x * x),
+                y: Math.round(box.y * y),
+                width: Math.max(1, Math.round(box.width * x)),
+                height: Math.max(1, Math.round(box.height * y)),
+            },
+        };
+    });
+    return { layers: moved, scale };
+}
+
+/**
+ * Regions worth a paid generation, in the order they should spend the budget.
+ * The gateway hands back the same object as two layers (an icon and its shadow), and each duplicate
+ * used to be cropped, sent and billed for the very same picture; a box reaching outside the frame
+ * makes ImageMagick pad the crop, which misaligns it again; and a sliver contains no object at all.
+ * @param {object[]} regions
+ * @param {{width:number,height:number}|null} frame
+ * @param {number} limit
+ * @returns {Array<{ name: string, box: object }>}
+ * @ai.hint pure
+ */
+function cropTargets(regions, frame, limit) {
+    const seen = new Set();
+    const targets = [];
+    for (const region of regions) {
+        const box = region?.box;
+        if (!box) continue;
+        let { x, y, width, height } = box;
+        if (frame?.width && frame?.height) {
+            x = Math.max(0, Math.round(x));
+            y = Math.max(0, Math.round(y));
+            width = Math.min(Math.round(width), frame.width - x);
+            height = Math.min(Math.round(height), frame.height - y);
+        } else {
+            x = Math.round(x);
+            y = Math.round(y);
+            width = Math.round(width);
+            height = Math.round(height);
+        }
+        if (!(width >= MIN_CROP_SIDE) || !(height >= MIN_CROP_SIDE)) continue;
+        const key = `${x}:${y}:${width}:${height}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        targets.push({ name: region.name, box: { x, y, width, height } });
+    }
+    // The biggest regions are the ones the measurer cannot read without a cut-out, so they go first.
+    targets.sort((a, b) => (b.box.width * b.box.height) - (a.box.width * a.box.height));
+    return targets.slice(0, limit);
+}
+
+/**
  * The seedream-5.5 id this run should decompose with, or null when the configuration names none.
  * Three places say the model exists, in the order a user would expect them to be honored:
  *   1. `imageModel` itself, when it already is a seedream-5.5 id;
@@ -155,7 +273,7 @@ function buildPartialSheet({ base, layers, ocr, baseImageBytes }, sourcePath) {
         const box = layer.box;
         if (!box) continue;
         const isText = layer.text && String(layer.text.text).trim();
-        const name = layer.name || `layer-${layer.index}`;
+        const name = layerLabel(layer.name, layer.index);
         const kind = isText ? 'text' : (layer.background === 'transparent' ? 'transparent' : 'region');
         const entry = {
             name,
@@ -172,7 +290,7 @@ function buildPartialSheet({ base, layers, ocr, baseImageBytes }, sourcePath) {
             typography: null,
             confidence: box ? 'high' : 'low',
             source: sourcePath,
-            notes: `Layer ${layer.index}, z=${layer.z}${layer.name ? `, "${layer.name}"` : ''}, background: ${layer.background}`,
+            notes: `Layer ${layer.index}, z=${layer.z}, background: ${layer.background}`,
             use: isText ? 'copy text content, font styling' : 'crop as artwork reference',
             crop: null,
         };
@@ -219,12 +337,12 @@ function buildPartialSheet({ base, layers, ocr, baseImageBytes }, sourcePath) {
  * Split the reference into layers and enhanced crops. Returns the partial sheet, crop paths, and
  * the raw layer data so the second pass can refer to them.
  * @param {{ root: string, workId: string, client: object, referencePath: string,
- *   prompt: string|null, size: string|null, maxLayers: number, config: object,
+ *   prompt?: string|null, size: string|null, maxLayers: number, model?: string|null, config: object,
  *   signal: AbortSignal, notify: Function }} options
  * @returns {Promise<{ sheet: object|null, cropPaths: string[], layers: object[], warnings: string[] }>}
  * @ai.hint io
  */
-export async function advancedMeasurePhase1({ root, workId, client, referencePath, prompt = null,
+export async function advancedMeasurePhase1({ root, workId, client, referencePath, prompt = LAYER_PROMPT,
     size = 'auto', maxLayers = 16, model = null, config, signal, notify }) {
     const warnings = [];
     const layers = [];
@@ -264,7 +382,7 @@ export async function advancedMeasurePhase1({ root, workId, client, referencePat
     try {
         decomposition = await decomposeLayers({
             client, channels, model: seedreamModel, source: { bytes: refBytes, mime: refMime },
-            prompt, size, maxImages: maxLayers, textRecognition: true, signal, onPoll: (data) => {
+            prompt: prompt || LAYER_PROMPT, size, maxImages: maxLayers, textRecognition: true, signal, onPoll: (data) => {
                 notify?.({ type: 'measure.progress', phase: 'decomposition', status: data.status, polls: data.polls, elapsedMs: data.elapsedMs });
             }, onWarn: (message) => notify?.({ type: 'warning', message }),
         });
@@ -280,9 +398,26 @@ export async function advancedMeasurePhase1({ root, workId, client, referencePat
         return { sheet: null, cropPaths, layers, warnings };
     }
 
+    // The boxes arrive in the frame of the returned base image, which the tier may have rescaled;
+    // every crop in this pipeline is cut from the reference file, so the geometry moves into that frame.
+    const { layers: placed, scale } = toReferenceFrame(decomposition.layers, decomposition.base?.size ?? null, refPixels ?? null);
+    if (!scale && decomposition.base?.size?.width && refPixels?.width
+        && (decomposition.base.size.width !== refPixels.width || decomposition.base.size.height !== refPixels.height)) {
+        warnings.push(`Размер базового изображения (${decomposition.base.size.width}x${decomposition.base.size.height}) не совпадает с референсом `
+            + `(${refPixels.width}x${refPixels.height}) и рамки слоёв не пересчитаны — кропы могут быть смещены.`);
+    }
+    // The label is what reaches the file names, the sheet and the coder, so it stays readable ASCII.
+    const named = placed.map((layer) => ({
+        ...layer,
+        name: layerLabel(layer.name, layer.index),
+        description: undefined,
+        text: layer.text ? { text: layer.text.text, lines: layer.text.lines } : null,
+    }));
+    const base = decomposition.base ? { ...decomposition.base, size: refPixels ?? decomposition.base.size } : null;
+
     // Download layers and save them.
     let serial = 1;
-    for (const layer of decomposition.layers) {
+    for (const layer of named) {
         // Skip layers with no box — they are artwork fragments the measurer cannot measure.
         if (!layer.box) continue;
         const layerBytes = await downloadLayerImage(layer.url, signal);
@@ -291,8 +426,7 @@ export async function advancedMeasurePhase1({ root, workId, client, referencePat
             warnings.push(`Слой ${layer.index} не скачан, данные для второго прохода сохранены.`);
         }
 
-        const slug = (layer.name || `layer-${layer.index}`).replace(/[^a-z0-9]+/gi, '-').slice(0, 40);
-        const rel = `${cropDir}${String(serial).padStart(2, '0')}-${slug}.png`;
+        const rel = `${cropDir}${String(serial).padStart(2, '0')}-${layerSlug(layer.name, layer.index)}.png`;
         if (layerBytes) {
             const abs = path.join(root, rel);
             await writeFile(abs, layerBytes).catch(() => {});
@@ -306,56 +440,63 @@ export async function advancedMeasurePhase1({ root, workId, client, referencePat
     // Save the base image.
     const baseRel = `${cropDir}00-base.png`;
     const baseAbs = path.join(root, baseRel);
-    if (decomposition.base) {
-        const baseBytes = await downloadLayerImage(decomposition.base.url, signal);
+    if (base?.url) {
+        const baseBytes = await downloadLayerImage(base.url, signal);
         if (baseBytes) await writeFile(baseAbs, baseBytes).catch(() => {});
         else warnings.push('Базовое изображение разложения не скачано.');
     }
 
     // Build partial sheet from layer geometry.
-    const sheet = buildPartialSheet({ ...decomposition, baseImageBytes: refBytes }, referencePath);
+    const sheet = buildPartialSheet({ base, layers: named, ocr: decomposition.ocr ?? [], baseImageBytes: refBytes }, referencePath);
+    if (scale) {
+        sheet.assumptions.push(`Layer boxes were rescaled from the ${decomposition.base.size.width}x${decomposition.base.size.height} `
+            + `base image into the ${refPixels.width}x${refPixels.height} reference frame.`);
+    }
 
     notify?.({ type: 'measure.pass', pass: 1, phase: 'advanced-decomposition', layers: layers.length, crops: cropPaths.length });
 
-    return { sheet, cropPaths, layers, warnings };
+    return { sheet, cropPaths, layers, base, frame: refPixels, decomposition, warnings };
 }
 
 /**
  * Generate enhanced crops for specific regions using seedream-5.5 transparent generation.
  * This creates semi-transparent fragments that the measurer can inspect more closely. Every crop is
- * a paid generation (the reference is billed too), so the region count is capped by `maxEnhanced`.
+ * a paid generation (the reference is billed too), so the regions are deduplicated, clamped into the
+ * frame, ordered by size and capped by `maxEnhanced`.
  * @param {{ root: string, client: object, referencePath: string, cropPaths: string[],
- *   regions: object[], maxEnhanced: number, model?: string|null, config: object, signal: AbortSignal,
- *   notify: Function }} options
+ *   regions: object[], maxEnhanced: number, frame?: {width:number,height:number}|null,
+ *   model?: string|null, config: object, signal: AbortSignal, notify: Function }} options
  * @returns {Promise<{ enhancedPaths: string[], warnings: string[] }>}
  * @ai.hint io
  */
 export async function advancedEnhanceCrops({ root, client, referencePath, cropPaths, regions = [],
-    maxEnhanced = 8, model = null, config, signal, notify }) {
+    maxEnhanced = 8, frame = null, model = null, config, signal, notify }) {
     const enhancedPaths = [];
     const warnings = [];
     const seedreamModel = model || advancedImageModel(config ?? {});
 
-    if (!cropPaths.length || !regions.length) return { enhancedPaths, warnings };
+    const targets = cropTargets(regions, frame, maxEnhanced);
+    if (!cropPaths.length || !targets.length) return { enhancedPaths, warnings };
     // Generation is a task on this model too, so the enhanced pass walks the same host chain the
     // decomposition used instead of the synchronous images route.
     const channels = decompositionChannels(client, seedreamModel);
+    const exe = await detectMagick({ magickPath: config?.magickPath ?? null });
+    if (!exe) {
+        warnings.push('ImageMagick не найден — улучшенные кропы не создаются, слои разложения остаются.');
+        return { enhancedPaths, warnings };
+    }
 
     let serial = 1;
     // Crop the reference to each region and ask seedream for a transparent version.
-    for (const region of regions.slice(0, maxEnhanced)) {
-        const box = region.box;
-        if (!box) continue;
+    for (const target of targets) {
+        const box = target.box;
+        const stamp = `${Date.now()}-${serial}`;
         try {
-            const exe = await detectMagick({ magickPath: config.magickPath ?? null });
-            if (!exe) continue;
+            const tmpOutput = `${ADVANCED_DIR}region-raw-${stamp}.png`;
 
-            const stamp = `${Date.now()}-${serial++}`;
-            const tmpOutput = `.tmp/_advanced-measure/region-raw-${stamp}.png`;
-
-            // Crop the region from the original.
+            // The box is already in the reference frame, so the original file is what gets cut.
             const cropped = await magickCrop({ exe, input: referencePath, output: tmpOutput,
-                x: Math.round(box.x), y: Math.round(box.y), width: Math.round(box.width), height: Math.round(box.height),
+                x: box.x, y: box.y, width: box.width, height: box.height,
                 cwd: root, signal });
 
             const rawBytes = await readFile(path.join(root, cropped.rel ?? tmpOutput)).catch(() => null);
@@ -371,14 +512,15 @@ export async function advancedEnhanceCrops({ root, client, referencePath, cropPa
             });
 
             if (b64?.length) {
-                const enhancedRel = `.tmp/_advanced-measure/enhanced-${stamp}.png`;
+                const enhancedRel = `${ADVANCED_DIR}enhanced-${String(serial).padStart(2, '0')}-${layerSlug(target.name, serial)}.png`;
                 const enhancedAbs = path.join(root, enhancedRel);
                 await mkdir(path.dirname(enhancedAbs), { recursive: true }).catch(() => {});
                 await writeFile(enhancedAbs, Buffer.from(b64[0], 'base64')).catch(() => {});
                 enhancedPaths.push(enhancedRel);
+                serial += 1;
             }
         } catch (error) {
-            warnings.push(`Улучшенный кроп не создан: ${error.message ?? String(error)}`);
+            warnings.push(`Улучшенный кроп не создан (${target.name} ${box.x},${box.y} ${box.width}×${box.height}): ${error.message ?? String(error)}`);
         }
     }
 
@@ -408,9 +550,11 @@ export function advancedMeasurerProfile(config) {
 export async function advancedMeasure({ root, workId, referencePath, plan = '', config,
     client, signal, notify }) {
     const seedreamModel = advancedImageModel(config ?? {});
+    // The plan is deliberately not sent to the decomposition call: the vision model answers in the
+    // language of the prompt, and a long Russian brief is what filled the layer names with CJK text.
     const result = await advancedMeasurePhase1({
         root, workId, client, referencePath,
-        prompt: plan || null,
+        prompt: LAYER_PROMPT,
         size: 'auto',
         maxLayers: config.agent.advancedMaxLayers ?? 32,
         model: seedreamModel,
@@ -422,6 +566,7 @@ export async function advancedMeasure({ root, workId, referencePath, plan = '', 
         const enhanced = await advancedEnhanceCrops({
             root, client, referencePath, cropPaths: result.cropPaths,
             regions: result.sheet.regions ?? [],
+            frame: result.frame,
             model: seedreamModel,
             config, signal, notify,
         });

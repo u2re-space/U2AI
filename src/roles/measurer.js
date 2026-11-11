@@ -135,6 +135,10 @@ Your job is to finish the sheet:
 - Report confidence honestly: high only for numbers you actually read off the picture, medium for a clear reading with an ambiguous detail,
   low for a value inferred from proportions or a neighbouring element, unknown when it cannot be read. Null is better than a guess.
 - Put every inference and every box you corrected into "assumptions" or the item's "notes".
+- Write every string you return in English, ASCII only: "name", "use", "notes", "assumptions", "summary". The layer names and OCR strings you
+  were handed may be machine-generated or in another language; do not copy them into the sheet verbatim, restate them in English. The one
+  exception is a text value that must be reproduced exactly to be coded (the string a heading actually says) — keep that verbatim and say in
+  "notes" that it is quoted content.
 
 When the budget runs short, stop looking and report the complete sheet with what you have. Return one compact JSON measurement sheet with
 all schema-required fields, use null for unknown measurements, and do not write project files or propose code. Reply in JSON only.

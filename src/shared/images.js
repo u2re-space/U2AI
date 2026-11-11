@@ -382,6 +382,61 @@ export function presetImageSize(value, resolution = null, model = null) {
         : (LANDSCAPE_SIZES[tier] || LANDSCAPE_SIZES['1k']);
 }
 
+
+
+
+export const fromMinimalSize = ({width, height}, minPixels = 16384, maxPixels = 16777216, needsToPad16 = true)=>{
+    const paddedSize   = {width, height};
+    const originalSize = {width, height};
+    
+    // method one
+    const upscaleRatio = Math.sqrt(Math.max(minPixels/(originalSize.width*originalSize.height), 1));
+    
+    if (needsToPad16) {
+        paddedSize.width  = (Math.ceil(Math.ceil(originalSize.width  * upscaleRatio) / 16) * 16);
+        paddedSize.height = (Math.ceil(Math.ceil(originalSize.height * upscaleRatio) / 16) * 16);
+    } else {
+        paddedSize.width  = Math.ceil(originalSize.width  * upscaleRatio);
+        paddedSize.height = Math.ceil(originalSize.height * upscaleRatio);
+    }
+
+    //
+    return paddedSize;
+}
+
+export const computeSize = (aspect = "1:1", resolution = "1k", minPixels = 16384, maxPixels = 16777216, needsToPad16 = true)=>{
+    const aspectPair = aspect?.split?.(":");
+    const aspectDiv = parseInt(aspectPair?.[0]) / parseInt(aspectPair?.[1]);
+    const resolutionMap = {
+        "512": 512, 
+        "1k": 1024, 
+        "1.5k": 1536, 
+        "2k": 2048, 
+        "3k": 3072, 
+        "4k": 4096
+    };
+    const L_mapped = resolutionMap[resolution?.trim?.()?.toLowerCase?.() || "1k"];
+    //const width  = Math.ceil(Math.sqrt((L_mapped * aspectDiv)) / 16) * 16;
+    //const height = Math.ceil(Math.sqrt((L_mapped / aspectDiv)) / 16) * 16;
+    let width  = L_mapped;
+    let height = L_mapped;
+    
+    if (aspectDiv > 1) {
+        width  = L_mapped;
+        height = (L_mapped * L_mapped) / width / aspectDiv;
+    } else
+    if (aspectDiv < 1) {
+        height = L_mapped;
+        width  = (L_mapped * L_mapped) / height * aspectDiv;
+    }
+    
+    return fromMinimalSize({ width, height }, minPixels, maxPixels, needsToPad16);
+}
+
+
+
+
+
 /**
  * Map a requested size to the nearest supported one.
  *
@@ -425,6 +480,16 @@ export function normalizeImageSize(size, resolution = null, model = null) {
 
     const resolutionKey = tierFromToken(resolution, model) || tierFromToken(value, model)
         || (isOrientationWord || isShapeOnly ? '1k' : inferResolution(requested, model));
+
+    
+    const profile = imageModelProfile(model);
+    const minPixels = profile?.minPixels || 16384;
+    const maxPixels = profile?.maxPixels || 16777216;
+
+    const computed = computeSize(`${requested.width}:${requested.height}` || value, resolutionKey, minPixels, maxPixels, profile.div16Padding);
+    return `${computed.width}x${computed.height}`;
+
+/*  // deprecated due of AI resolution and aspect-ratio standardization
     const supportedSizes = IMAGE_SIZES_BY_RESOLUTION[resolutionKey];
     if (!supportedSizes) return presetImageSize(value, resolution, model);
 
@@ -440,6 +505,13 @@ export function normalizeImageSize(size, resolution = null, model = null) {
 
     const pool = matchingOrientation.length ? matchingOrientation : candidates;
 
+    if (isOrientationWord || !parseImageSize(value)) {
+        return pool
+            .slice()
+            .sort((a, b) => b.width * b.height - a.width * b.height)[0]
+            .size;
+    }
+
     // A shape named without pixels asks for the frame of the tier whose own shape is closest;
     // a bare orientation word or a bare tier asks for the largest frame in that shape.
     if (isShapeOnly) {
@@ -449,13 +521,8 @@ export function normalizeImageSize(size, resolution = null, model = null) {
                 || b.width * b.height - a.width * a.height)[0]
             .size;
     }
-    if (isOrientationWord || !parseImageSize(value)) {
-        return pool
-            .slice()
-            .sort((a, b) => b.width * b.height - a.width * b.height)[0]
-            .size;
-    }
 
+    
     const fitting = pool.filter(
         (candidate) =>
             candidate.width >= requested.width &&
@@ -492,6 +559,7 @@ export function normalizeImageSize(size, resolution = null, model = null) {
                     getAspectDifference(b, requested)
             );
         })[0].size;
+*/
 }
 
 

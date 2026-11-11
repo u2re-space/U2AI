@@ -28,7 +28,7 @@
 import path from 'node:path';
 import { mkdir, writeFile, readFile, stat } from 'node:fs/promises';
 import { resolveInside } from './paths.js';
-import { isSeedream55, decomposeLayers, generateTransparentLayer, SEEDREAM_INPUT_MAX_BYTES, SEEDREAM_INPUT_MAX_PIXELS } from '../openai/seedream-5-5.js';
+import { isSeedream55, decomposeLayers, generateTransparentLayer, SEEDREAM_MODEL, SEEDREAM_INPUT_MAX_BYTES, SEEDREAM_INPUT_MAX_PIXELS } from '../openai/seedream-5-5.js';
 import { imageModelFor } from '../openai/images.js';
 import { detectMagick, magickCrop } from './image-magick.js';
 import { readImageSize } from '../shared/images.js';
@@ -37,16 +37,60 @@ import { readImageSize } from '../shared/images.js';
 const ADVANCED_DIR = '.tmp/_advanced-measure/';
 
 /**
+ * The seedream-5.5 id this run should decompose with, or null when the configuration names none.
+ * Three places say the model exists, in the order a user would expect them to be honored:
+ *   1. `imageModel` itself, when it already is a seedream-5.5 id;
+ *   2. a key of `modelsBackends` — the map that says "this host serves this model", which is where
+ *      seedream is usually written while the default image model stays a GPT one;
+ *   3. the gateway's own id, tried across every images backend in turn.
+ * Case 3 is why this never returns null on a bare config: availability is decided by the answer of
+ * the hosts, not by a name the config happened to mention.
+ * @param {object} config
+ * @returns {string}
+ * @exports
+ * @ai.hint pure
+ */
+export function advancedImageModel(config) {
+    const configured = config?.imageModel ?? imageModelFor(config ?? {}, {});
+    if (configured && isSeedream55(configured)) return configured;
+    const declared = Object.keys(config?.modelsBackends ?? {}).filter((name) => isSeedream55(name));
+    if (declared.length) return declared[0];
+    return SEEDREAM_MODEL;
+}
+
+/**
  * Whether the current configuration can run the advanced measurer at all.
- * Checks seedream-5.5 availability in the active image backends.
+ * Two shapes say yes: seedream-5.5 is named somewhere the router can address (`imageModel`, or a key
+ * of `modelsBackends`), or there is an images pool to walk looking for it. A config with neither has
+ * nowhere to ask, and the run stays on the standard passes instead of paying for a doomed task.
  * @param {object} config
  * @returns {boolean}
  * @exports
  * @ai.hint pure
  */
 export function canRunAdvanced(config) {
-    const imageModel = config.imageModel ?? imageModelFor(config, {});
-    return Boolean(imageModel && isSeedream55(imageModel));
+    if (isSeedream55(config?.imageModel)) return true;
+    if (Object.keys(config?.modelsBackends ?? {}).some((name) => isSeedream55(name))) return true;
+    return [...(config?.imagesBackends ?? []), ...(config?.backends ?? [])]
+        .some((item) => String(item?.baseURL ?? '').trim());
+}
+
+/**
+ * Hosts to decompose on, in the order they should be tried, each knowing how it names the model.
+ * A client without a channel list (a test double, a single-host caller) walks the plain route.
+ * @param {object} client
+ * @param {string} model
+ * @returns {Array<{ client: object, modelFor?: Function, label?: string }>|null}
+ * @ai.hint pure
+ */
+function decompositionChannels(client, model) {
+    if (typeof client?.channels !== 'function') return null;
+    try {
+        const list = client.channels('images', model);
+        return Array.isArray(list) && list.length ? list : null;
+    } catch {
+        return null;
+    }
 }
 
 /**
@@ -190,13 +234,15 @@ function buildPartialSheet({ base, layers, ocr, baseImageBytes }, sourcePath) {
  * @ai.hint io
  */
 export async function advancedMeasurePhase1({ root, workId, client, referencePath, prompt = null,
-    size = 'auto', maxLayers = 16, config, signal, notify }) {
+    size = 'auto', maxLayers = 16, model = null, config, signal, notify }) {
     const warnings = [];
     const layers = [];
     const cropPaths = [];
     const cropDir = `${ADVANCED_DIR}crops/`;
     const cropDirAbs = path.join(root, cropDir);
     await mkdir(cropDirAbs, { recursive: true }).catch(() => {});
+    const seedreamModel = model || advancedImageModel(config ?? {});
+    const channels = decompositionChannels(client, seedreamModel);
 
     // Load the reference image.
     let refAbs = referencePath;
@@ -221,18 +267,20 @@ export async function advancedMeasurePhase1({ root, workId, client, referencePat
 
     const refMime = refAbs.endsWith('.jpg') || refAbs.endsWith('.jpeg') ? 'image/jpeg' : 'image/png';
 
-    // Decompose.
+    // Decompose. The host chain is resolved per model, because the gateway that serves seedream is
+    // usually not the primary one, and `modelsBackends` is the only place that says which is which.
     let decomposition;
     try {
         decomposition = await decomposeLayers({
-            client, source: { bytes: refBytes, mime: refMime },
+            client, channels, model: seedreamModel, source: { bytes: refBytes, mime: refMime },
             prompt, size, maxImages: maxLayers, textRecognition: true, signal, onPoll: (data) => {
                 notify?.({ type: 'measure.progress', phase: 'decomposition', status: data.status, polls: data.polls, elapsedMs: data.elapsedMs });
-            },
+            }, onWarn: (message) => notify?.({ type: 'warning', message }),
         });
     } catch (error) {
-        warnings.push(`Разложение слоёв не удалось: ${error.message ?? String(error)}`);
-        notify?.({ type: 'warning', message: `Разложение слоёв не удалось: ${error.message ?? String(error)}` });
+        const hosts = channels?.length ? ` на ${channels.length} бэкенде(ах): ${channels.map((c) => c.label).join(', ')}` : '';
+        warnings.push(`Разложение слоёв не удалось (${seedreamModel}${hosts}): ${error.message ?? String(error)}`);
+        notify?.({ type: 'warning', message: `Разложение слоёв не удалось (${seedreamModel}${hosts}): ${error.message ?? String(error)}` });
         return { sheet: null, cropPaths, layers, warnings };
     }
 
@@ -291,9 +339,10 @@ export async function advancedMeasurePhase1({ root, workId, client, referencePat
  * @ai.hint io
  */
 export async function advancedEnhanceCrops({ root, client, referencePath, cropPaths, regions = [],
-    maxEnhanced = 8, config, signal, notify }) {
+    maxEnhanced = 8, model = null, config, signal, notify }) {
     const enhancedPaths = [];
     const warnings = [];
+    const seedreamModel = model || advancedImageModel(config ?? {});
 
     if (!cropPaths.length || !regions.length) return { enhancedPaths, warnings };
 
@@ -317,9 +366,11 @@ export async function advancedEnhanceCrops({ root, client, referencePath, cropPa
             const rawBytes = await readFile(path.join(root, cropped.rel ?? tmpOutput)).catch(() => null);
             if (!rawBytes?.length) continue;
 
-            // Generate transparent version.
+            // Generate transparent version. `images.generate` already walks the images pool and
+            // rewrites the id per host, so the model name is all this pass needs.
             const b64 = await generateTransparentLayer({
-                client, prompt: 'Extract the foreground object from this region with a transparent background. Remove any background, shadows, or artifacts. Keep only the object.',
+                client, model: seedreamModel,
+                prompt: 'Extract the foreground object from this region with a transparent background. Remove any background, shadows, or artifacts. Keep only the object.',
                 bytes: rawBytes, mime: 'image/png', size: null, signal,
             });
 
@@ -360,11 +411,13 @@ export function advancedMeasurerProfile(config) {
  */
 export async function advancedMeasure({ root, workId, referencePath, plan = '', config,
     client, signal, notify }) {
+    const seedreamModel = advancedImageModel(config ?? {});
     const result = await advancedMeasurePhase1({
         root, workId, client, referencePath,
         prompt: plan || null,
         size: 'auto',
         maxLayers: config.agent.advancedMaxLayers ?? 32,
+        model: seedreamModel,
         config, signal, notify,
     });
 
@@ -373,6 +426,7 @@ export async function advancedMeasure({ root, workId, referencePath, plan = '', 
         const enhanced = await advancedEnhanceCrops({
             root, client, referencePath, cropPaths: result.cropPaths,
             regions: result.sheet.regions ?? [],
+            model: seedreamModel,
             config, signal, notify,
         });
         result.cropPaths.push(...enhanced.enhancedPaths);

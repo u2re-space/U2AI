@@ -30,6 +30,7 @@
 
 import { setTimeout as sleep } from 'node:timers/promises';
 import { ApiError } from './errors.js';
+import { modelMissing, providerDown } from './fallback.js';
 import { SEEDREAM_5_5 } from '../shared/model-profiles.js';
 
 /** Default model id of the seedream-5.5 route on the proxy gateway. */
@@ -265,38 +266,67 @@ async function pollTask(client, taskId, { signal, timeoutMs = DEFAULT_TASK_TIMEO
  * Split one picture into a base image and transparent PNG layers with seedream-5.5.
  * Returns normalized records: the base frame, one entry per layer (z-order, name, box in base
  * pixels, optional OCR text), and the raw parsed answer under `raw`.
- * @param {{ client: { call: Function }, source: { bytes: Buffer, mime?: string }, model?: string,
+ *
+ * `channels` is the host chain the caller resolved for this model (`client.channels('images', model)`):
+ * the gateway that serves seedream is rarely the primary host, and the decomposition body cannot go
+ * through `images.generate`, so the walk over hosts happens here. A host that answers "model not
+ * found" or is down advances to the next one; anything else is the caller's problem at once. The task
+ * is polled on the host that created it, because a task id means nothing to the other backends.
+ * @param {{ client?: { call: Function }, channels?: Array<{ client: { call: Function }, modelFor?: Function, label?: string }>,
+ *   source: { bytes: Buffer, mime?: string }, model?: string,
  *   prompt?: string|null, size?: string|null, maxImages?: number|null, textRecognition?: boolean,
- *   signal?: AbortSignal, timeoutMs?: number, onPoll?: Function }} options
+ *   signal?: AbortSignal, timeoutMs?: number, onPoll?: Function, onWarn?: Function }} options
  * @returns {Promise<{ base: object|null, layers: object[], ocr: object[], raw: object, taskId: string|null }>}
  * @exports
  * @ai.hint io
  */
-export async function decomposeLayers({ client, source, model = SEEDREAM_MODEL, prompt = null, size = 'auto',
-    maxImages = null, textRecognition = true, signal, timeoutMs, onPoll = null }) {
-    if (!client?.call) throw new ApiError('decomposeLayers: нужен API-клиент с методом call().', { code: 'INVALID_REQUEST' });
+export async function decomposeLayers({ client = null, channels = null, source, model = SEEDREAM_MODEL, prompt = null,
+    size = 'auto', maxImages = null, textRecognition = true, signal, timeoutMs, onPoll = null, onWarn = null }) {
     if (Buffer.byteLength(source?.bytes ?? '') > SEEDREAM_INPUT_MAX_BYTES) {
         throw new ApiError(`Вход разложения больше ${SEEDREAM_INPUT_MAX_BYTES} байт — уменьшите изображение.`, { code: 'IMAGE_TOO_LARGE' });
     }
-    const body = layerDecompositionBody({ model, source, prompt, size, maxImages, textRecognition });
-    const created = await client.call('images/generations', { body, signal });
-    const createdData = taskData(created);
-    if (createdData?.status === 'completed') {
-        const parsed = parseLayerDecomposition(created);
-        return { ...parsed, raw: created, taskId: null };
+    const chain = (Array.isArray(channels) && channels.length
+        ? channels
+        : (client?.call ? [{ client }] : [])
+    ).filter((channel) => typeof channel?.client?.call === 'function');
+    if (!chain.length) throw new ApiError('decomposeLayers: нужен API-клиент с методом call() или список каналов.', { code: 'INVALID_REQUEST' });
+    let lastError = null;
+    for (const channel of chain) {
+        // Each host names the model its own way: `modelsBackends` may carry a vendor, prefix or suffix.
+        const id = typeof channel.modelFor === 'function' ? channel.modelFor(model) : model;
+        const body = layerDecompositionBody({ model: id, source, prompt, size, maxImages, textRecognition });
+        try {
+            const created = await channel.client.call('images/generations', { body, signal });
+            const createdData = taskData(created);
+            if (createdData?.status === 'completed') {
+                const parsed = parseLayerDecomposition(created);
+                return { ...parsed, raw: created, taskId: null, host: channel.label ?? null };
+            }
+            const taskId = String(created?.data?.[0]?.task_id ?? created?.data?.task_id ?? created?.task_id ?? '').trim();
+            if (!taskId) {
+                // No task and no completed data: the gateway answered something this route does not speak.
+                const parsed = parseLayerDecomposition(created);
+                if (parsed.base || parsed.layers.length) return { ...parsed, raw: created, taskId: null, host: channel.label ?? null };
+                throw new ApiError('Ответ seedream-5.5 не содержит ни task_id, ни результатов разложения.', {
+                    code: 'INVALID_RESPONSE', details: { keys: Object.keys(created ?? {}) },
+                });
+            }
+            const settled = await pollTask(channel.client, taskId, { signal, timeoutMs, onPoll });
+            const parsed = parseLayerDecomposition(settled);
+            return { ...parsed, raw: settled, taskId, host: channel.label ?? null };
+        } catch (error) {
+            // A missing model or a dead host is this backend's answer, not the route's: try the next one.
+            if (!modelMissing(error) && !providerDown(error)) throw error;
+            lastError = error;
+            const next = chain.indexOf(channel) < chain.length - 1;
+            if (next) {
+                try {
+                    onWarn?.(`Разложение на ${channel.label || 'этом бэкенде'} не вышло (${error.message ?? error}); пробую следующий хост.`);
+                } catch { /* observer */ }
+            }
+        }
     }
-    const taskId = String(created?.data?.[0]?.task_id ?? created?.data?.task_id ?? created?.task_id ?? '').trim();
-    if (!taskId) {
-        // No task and no completed data: the gateway answered something this route does not speak.
-        const parsed = parseLayerDecomposition(created);
-        if (parsed.base || parsed.layers.length) return { ...parsed, raw: created, taskId: null };
-        throw new ApiError('Ответ seedream-5.5 не содержит ни task_id, ни результатов разложения.', {
-            code: 'INVALID_RESPONSE', details: { keys: Object.keys(created ?? {}) },
-        });
-    }
-    const settled = await pollTask(client, taskId, { signal, timeoutMs, onPoll });
-    const parsed = parseLayerDecomposition(settled);
-    return { ...parsed, raw: settled, taskId };
+    throw lastError ?? new ApiError('Ни один бэкенд не выполнил разложение слоёв.', { code: 'NO_PROVIDER' });
 }
 
 /**

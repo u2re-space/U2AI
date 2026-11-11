@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ApiError } from '../src/openai/errors.js';
-import { attemptChain, fallbackModel, modelMissing, providerDown, providerList } from '../src/openai/fallback.js';
+import { attemptChain, createFallbackClient, fallbackModel, modelMissing, providerDown, providerList } from '../src/openai/fallback.js';
 import { defaults } from '../src/core/config.js';
 
 test('known models fall back to another channel', () => {
@@ -66,4 +66,43 @@ test('sprutdock is used only when its key is present', () => {
 
     // unsupported or bad configured...
     //assert.equal(providerList(config, { ROUTERAI_API_KEY: '{{env:ROUTERAI_API_KEY}}' })[0].apiKey, '{{env:ROUTERAI_API_KEY}}');
+});
+
+/** A client factory that records hosts instead of opening sockets. */
+function fakeTransport() {
+    const opened = [];
+    return {
+        opened,
+        create: (spec) => {
+            opened.push(spec.baseURL);
+            return { baseURL: spec.baseURL, call: async () => ({}), images: {}, responses: {}, close() {} };
+        },
+    };
+}
+
+test('the channel list hands a model to the host the config placed it on', () => {
+    // The shape of a real config: several images hosts, and seedream-5.5 written down for one of
+    // them only. Decomposition cannot go through images.generate, so it walks this list instead —
+    // asking the primary host for seedream is what used to answer "Model 'seedream-5-5' not found".
+    const { opened, create } = fakeTransport();
+    const client = createFallbackClient({
+        baseURL: 'https://sprutdock.ru/v1',
+        apiKey: 'primary-key',
+        imagesBackends: [
+            { baseURL: 'https://sprutdock.ru/v1', apiKey: 'a' },
+            { baseURL: 'https://api.apimart.ai/v1', apiKey: 'b' },
+        ],
+        modelsBackends: {
+            'seedream-5-5': [{ baseURL: 'https://api.apimart.ai/v1', apiKey: 'b', vendor: 'bytedance-seed' }],
+        },
+    }, { create });
+    const narrow = client.channels('images', 'seedream-5-5');
+    assert.deepEqual(narrow.map((channel) => channel.label), ['https://api.apimart.ai/v1']);
+    assert.equal(typeof narrow[0].client.call, 'function', 'a channel carries the client that must be called');
+    assert.equal(narrow[0].modelFor('seedream-5-5'), 'bytedance-seed/seedream-5-5', 'the host names the model its own way');
+    // A model the map does not place still walks the whole pool, so nothing is lost for it.
+    assert.deepEqual(client.channels('images', 'gpt-image-2.6-sunburst').map((channel) => channel.label),
+        ['https://sprutdock.ru/v1', 'https://api.apimart.ai/v1']);
+    client.close();
+    assert.ok(opened.length > 0, 'the hosts were opened through the injected factory');
 });

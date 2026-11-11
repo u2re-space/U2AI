@@ -538,6 +538,21 @@ export function createFallbackClient(config, { create = createClient } = {}) {
                 throw last ?? new ApiError('Сервис модерации недоступен.', { code: 'MODERATION_UNAVAILABLE', status: 404 });
             },
         },
+        /**
+         * The hosts that carry `kind` for `model`, in the order attemptChain would try them, each
+         * with the id that host expects. A route that posts through client.call() itself — the
+         * seedream-5.5 decomposition answers a task id and then polls it — cannot use images.generate,
+         * so without this chain it stays on the primary host and a model that only `modelsBackends`
+         * places comes back as "not found", which is exactly what the user's config would hit.
+         * @param {string} kind
+         * @param {string|null} [model]
+         * @returns {{ label: string, client: object, modelFor: (name: string) => string }[]}
+         */
+        channels: (kind, model = null) => endpoints(kind, model).map((endpoint) => ({
+            label: endpoint.label,
+            client: endpoint.client,
+            modelFor: (name) => rewriteModel(name, endpoint.modelRewrite),
+        })),
         close: () => {
             primary.close();
             for (const entry of opened.values()) entry.client.close();

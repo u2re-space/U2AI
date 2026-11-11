@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { ApiError } from '../src/openai/errors.js';
 import {
     SEEDREAM_MODEL, isSeedream55, seedreamLayerSize, layerDecompositionBody,
     normalizeLayerBox, parseLayerDecomposition, decomposeLayers, generateTransparentLayer,
@@ -146,4 +147,62 @@ test('the enhanced-crop pass asks the images route for a transparent png', async
     assert.equal(seen[0].format, 'png');
     assert.equal(seen[0].model, SEEDREAM_MODEL);
     assert.match(seen[0].references[0], /^data:image\/png;base64,/);
+});
+
+test('a host that does not carry seedream hands the decomposition to the next backend', async () => {
+    const seen = [];
+    const host = (label, { serves }) => ({
+        async call(route, options = {}) {
+            seen.push(`${label} ${route}`);
+            if (!serves) throw new ApiError(`Model '${options.body?.model}' not found`, { status: 404, apiCode: 'model_not_found' });
+            return route === 'images/generations' ? { data: [{ task_id: 'task-9' }] } : completedAnswer();
+        },
+    });
+    const channels = [
+        { label: 'https://sprutdock.ru/v1', client: host('sprutdock', { serves: false }) },
+        // The second host names the model its own way, and the task is polled on the same host.
+        { label: 'https://api.apimart.ai/v1', client: host('apimart', { serves: true }), modelFor: (name) => `bytedance-seed/${name}` },
+    ];
+    const result = await decomposeLayers({ channels, source: SOURCE, onWarn: () => {} });
+    assert.equal(result.taskId, 'task-9');
+    assert.equal(result.host, 'https://api.apimart.ai/v1', 'the answer names the host that served it');
+    assert.deepEqual(seen, [
+        'sprutdock images/generations',
+        'apimart images/generations',
+        'apimart tasks/task-9',
+    ], 'a task id is polled where it was created, never on the host that refused the model');
+});
+
+test('the rewritten model id is what reaches the host that serves it', async () => {
+    const bodies = [];
+    const channels = [{
+        label: 'apimart',
+        modelFor: (name) => `bytedance-seed/${name}`,
+        client: {
+            async call(route, options = {}) {
+                if (route === 'images/generations') {
+                    bodies.push(options.body.model);
+                    return { data: [{ task_id: 'task-1' }] };
+                }
+                return completedAnswer();
+            },
+        },
+    }];
+    await decomposeLayers({ channels, source: SOURCE });
+    assert.deepEqual(bodies, ['bytedance-seed/seedream-5-5']);
+});
+
+test('a rejected request is not retried on another backend', async () => {
+    const seen = [];
+    const channels = ['first', 'second'].map((label) => ({
+        label,
+        client: {
+            async call() {
+                seen.push(label);
+                throw new ApiError('size is not supported', { status: 400 });
+            },
+        },
+    }));
+    await assert.rejects(decomposeLayers({ channels, source: SOURCE }), /size is not supported/);
+    assert.deepEqual(seen, ['first'], 'a 400 is the request’s own fault, so the chain stops');
 });

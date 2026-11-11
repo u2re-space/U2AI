@@ -4,7 +4,8 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
-import { canRunAdvanced, shouldUseReasoningPro, advancedMeasurerProfile, advancedMeasurePhase1 } from '../src/agent/advanced.js';
+import { canRunAdvanced, advancedImageModel, shouldUseReasoningPro, advancedMeasurerProfile, advancedMeasurePhase1 } from '../src/agent/advanced.js';
+import { SEEDREAM_MODEL } from '../src/openai/seedream-5-5.js';
 import { TINY_PNG } from './helpers/mock-server.js';
 
 /** A completed decomposition answer whose pictures come from the local test server. */
@@ -36,6 +37,26 @@ test('advanced mode runs only on a seedream-5.5 picture model', () => {
     assert.equal(canRunAdvanced({ imageModel: 'seedream-5-5' }), true);
     assert.equal(canRunAdvanced({ imageModel: 'openai/gpt-image-2.6-sunburst' }), false);
     assert.equal(canRunAdvanced({}), false, 'without an images transport there is nothing to decompose with');
+});
+
+test('a seedream named only in modelsBackends is found and used for decomposition', () => {
+    // The shape of a real config: the default image model is a GPT one, and seedream lives on a
+    // single host that `modelsBackends` names. Advanced mode must still run, and on that host.
+    const config = {
+        baseURL: 'https://sprutdock.ru/v1',
+        imageModel: 'openai/gpt-image-2.6-sunburst',
+        backends: [{ baseURL: 'https://sprutdock.ru/v1', apiKey: 'k' }],
+        imagesBackends: [{ baseURL: 'https://sprutdock.ru/v1', apiKey: 'k' }, { baseURL: 'https://api.apimart.ai/v1', apiKey: 'k' }],
+        modelsBackends: { 'seedream-5-5': [{ baseURL: 'https://api.apimart.ai/v1' }] },
+    };
+    assert.equal(canRunAdvanced(config), true, 'the model is reachable even though imageModel is not seedream');
+    assert.equal(advancedImageModel(config), 'seedream-5-5', 'the id is taken as the config writes it, so its host entry matches');
+});
+
+test('the decomposition model follows imageModel, then modelsBackends, then the gateway default', () => {
+    assert.equal(advancedImageModel({ imageModel: 'bytedance-seed/seedream-5-5-pro' }), 'bytedance-seed/seedream-5-5-pro');
+    assert.equal(advancedImageModel({ imageModel: 'openai/gpt-image-2.6-sunburst', modelsBackends: { 'seedream-5-5': [{}] } }), 'seedream-5-5');
+    assert.equal(advancedImageModel({ imageModel: 'openai/gpt-image-2.6-sunburst' }), SEEDREAM_MODEL);
 });
 
 test('every OpenAI GPT model gets reasoning pro in advanced mode, other vendors do not', () => {
@@ -84,6 +105,46 @@ test('phase 1 turns one decomposition answer into a sheet, layer files, and OCR 
         assert.match(sheet.notes, /OCR на нескольких слоях/);
         assert.deepEqual(sheet.assumptions, ['Layer boxes were read by seedream-5.5, not by the measurer role.']);
         assert.ok(events.some((event) => event.type === 'measure.pass' && event.phase === 'advanced-decomposition'));
+    } finally {
+        server.close();
+        await rm(dir, { recursive: true, force: true });
+    }
+});
+
+test('phase 1 asks the backend that serves seedream, not the primary host', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-advanced-hosts-'));
+    const tried = [];
+    const server = http.createServer((_req, res) => {
+        res.writeHead(200, { 'content-type': 'image/png' });
+        res.end(TINY_PNG);
+    });
+    try {
+        await writeFile(path.join(dir, 'ref.png'), TINY_PNG);
+        await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+        const origin = `http://127.0.0.1:${server.address().port}`;
+        const serving = {
+            async call(route, options = {}) {
+                tried.push(`apimart ${route} ${options.body?.model ?? ''}`.trim());
+                return route === 'images/generations' ? { data: [{ task_id: 'task-1' }] } : answer(origin);
+            },
+        };
+        const client = {
+            // The primary host is the one that answers "model not found" in the field; it must never
+            // be asked at all once the channel list says where the model actually lives.
+            async call() { tried.push('primary'); throw new Error('the primary host must not be used'); },
+            channels(kind, model) {
+                tried.push(`channels ${kind} ${model}`);
+                return [{ label: 'https://api.apimart.ai/v1', client: serving, modelFor: (name) => name }];
+            },
+        };
+        const result = await advancedMeasurePhase1({
+            root: dir, workId: 'w', client, referencePath: 'ref.png',
+            config: { agent: { advancedMaxLayers: 12 }, modelsBackends: { 'seedream-5-5': [{ baseURL: 'https://api.apimart.ai/v1' }] } },
+            notify: () => {},
+        });
+        assert.deepEqual(tried, ['channels images seedream-5-5', 'apimart images/generations seedream-5-5', 'apimart tasks/task-1']);
+        assert.ok(result.sheet, 'the layers came from the host the config names');
+        assert.equal(result.layers.length, 2);
     } finally {
         server.close();
         await rm(dir, { recursive: true, force: true });

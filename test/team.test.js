@@ -2665,12 +2665,79 @@ test('advanced measurer mode without a seedream picture model warns and stays on
             emit: (event) => events.push(event),
         });
         assert.equal(result.status, 'completed', result.error?.message);
-        assert.ok(events.some((event) => event.type === 'warning' && /advanced, но image-модель не Seedream 5\.5/.test(event.message)),
+        assert.ok(events.some((event) => event.type === 'warning' && /advanced, но seedream-5\.5 не найден/.test(event.message)),
             'the user is told the expensive mode is not available');
         assert.equal(events.find((event) => event.type === 'stage.start' && event.stage === 'measure').measurerMode, 'standard');
         assert.ok(events.some((event) => event.type === 'measure.pass' && event.phase === 'overview'), 'the standard overview pass runs instead');
         assert.equal(measureBodies.length, 1);
         assert.notEqual(measureBodies[0].reasoning?.mode, 'pro', 'the standard mode does not force pro reasoning');
+    } finally {
+        await rm(dir, { recursive: true, force: true });
+    }
+});
+
+test('advanced mode runs when seedream is named only by modelsBackends, not by imageModel', async () => {
+    // The shape of a real config: the default image model is a GPT one and seedream-5.5 lives on a
+    // single host. Refusing advanced mode here would ignore exactly what the user wrote down.
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-measure-advanced-map-'));
+    const events = [];
+    const imageBodies = [];
+    await writeFile(path.join(dir, 'mockup.png'), Buffer.from(TINY_PNG, 'base64'));
+    const layerUrl = `data:image/png;base64,${TINY_PNG}`;
+    imageScript = (body) => {
+        imageBodies.push(body);
+        if (body.layer_decomposition) return { data: [{ task_id: 'task-map' }] };
+        return { data: [{ b64_json: TINY_PNG }] };
+    };
+    taskScript = () => ({
+        data: { status: 'completed', result: { images: [{
+            url: [layerUrl, layerUrl],
+            sizes: ['1000x800', '400x100'],
+            layers: [
+                { z_index: 0, name: 'base', background: 'opaque' },
+                { z_index: 1, name: 'panel', background: 'transparent', bounding_box: { absolute: [10, 10, 410, 110] } },
+            ],
+        }] } },
+    });
+    detectCoder = true;
+    script = (body) => {
+        const role = roleOf(body);
+        if (role === 'answer') return { text: 'Нужен план.\nroute: plan' };
+        if (role === 'classifier') return { text: JSON.stringify({ label: 'normal' }) };
+        if (role === 'planner') {
+            return { text: JSON.stringify({ summary: 'стили по референсу', complexity: 'normal', steps: [{ goal: 'Создать styles.scss', details: '', verify: 'прочитать styles.scss' }], filesOfInterest: [], searchQueries: [], questionsForCollector: [], acceptanceCriteria: [], needsReview: false, imageNotes: null, risks: [] }) };
+        }
+        if (role === 'measurer') {
+            return { text: JSON.stringify({
+                summary: 's', source: 'mockup.png', unit: 'px',
+                units: { source: 'px', rootFontSize: 16, scale: null, preferred: ['rem'], notes: '' },
+                confidence: 'low', assumptions: [], canvas: { x: 0, y: 0, width: 100, height: 100 },
+                elements: [], regions: [], rules: [], notes: '',
+            }) };
+        }
+        if (role === 'collector') return { text: JSON.stringify({ findings: [], answers: [], conventions: [], notes: '' }) };
+        if (role === 'memory') return { text: JSON.stringify({ taskSummary: 'x', memories: [] }) };
+        return { text: 'ok' };
+    };
+    const config = baseConfig();
+    config.memory = { ...defaults.memory, enabled: false };
+    config.imageModel = 'openai/gpt-image-2.6-sunburst';
+    config.modelsBackends = { 'seedream-5-5': [{ baseURL: 'https://api.apimart.ai/v1' }] };
+    config.agent = { ...config.agent, measurerMode: 'advanced', measurerPasses: 1 };
+    try {
+        const result = await runTeam({
+            client: client(), config, ledger: createLedger(), task: 'стили по референсу',
+            root: dir, approvalLevel: 'read', referencePaths: ['mockup.png'],
+            parts: [{ type: 'input_image', image: { path: 'mockup.png' } }],
+            emit: (event) => events.push(event),
+        });
+        assert.equal(result.status, 'completed', result.error?.message);
+        assert.equal(events.find((event) => event.type === 'warning' && /seedream-5\.5 не найден/.test(event.message)), undefined,
+            'a seedream named in modelsBackends is available, so nothing warns');
+        assert.equal(events.find((event) => event.type === 'stage.start' && event.stage === 'measure').measurerMode, 'advanced');
+        assert.ok(events.some((event) => event.type === 'measure.pass' && event.phase === 'advanced-decomposition'));
+        assert.equal(imageBodies.find((body) => body.layer_decomposition)?.model, 'seedream-5-5',
+            'the decomposition asks for the id the config places on its own host');
     } finally {
         await rm(dir, { recursive: true, force: true });
     }

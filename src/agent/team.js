@@ -1265,7 +1265,7 @@ export async function runTeam({
                         // Seedream 5.5 image model, otherwise the run silently stays on the standard passes.
                         const measurerMode = config.agent.measurerMode ?? 'standard';
                         if (measurerMode === 'advanced' && !canRunAdvanced(config)) {
-                            notify({ type: 'warning', message: 'agent.measurerMode: advanced, но image-модель не Seedream 5.5 — замеры идут обычным режимом (standard).' });
+                            notify({ type: 'warning', message: 'agent.measurerMode: advanced, но seedream-5.5 не найден ни среди image-моделей, ни среди бэкендов (imageModel / modelsBackends / imagesBackends) — замеры идут обычным режимом (standard).' });
                         }
                         const measureTurns = Math.max(1, config.agent.measurerMaxTurns ?? 8);
                         // One pass spends the whole turn budget on the overview. A second pass splits it

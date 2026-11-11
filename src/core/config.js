@@ -38,6 +38,7 @@ import { profileFor, snapEffort, lowerEffort, contextBytes, modeFor, DEFAULT_PRO
 import { tierChoice } from './role-tiers.js';
 import { PIPELINE_STAGE_IDS } from '../agent/pipeline.js';
 import { expandConfigStrings } from './placeholders.js';
+import { liveEnv } from './runtime-env.js';
 
 const KiB = 1024;
 

@@ -337,8 +337,7 @@ export const defaults = Object.freeze({
         decomposer       : r({ model: 'moonshotai/kimi-k3.1-pro', effort: 'xhigh' }),
         designer         : r({ model: 'moonshotai/kimi-k3.1-pro', effort: 'xhigh' }),
         worker           : r({ model: 'moonshotai/kimi-k3.1-pro', effort: 'xhigh' }),
-        //'image-processor': r({ model: "moonshotai/kimi-k3.1-pro", effort: 'xhigh' }),
-        'image-processor': r({ model: "gpt-6-luna", effort: 'xhigh' }),
+        'image-processor': r({ model: "moonshotai/kimi-k3.1-pro", effort: 'xhigh' }), // will be fixed in 0.2.16, I was too hurry when used `gpt-6-luna` in 0.2.15 release
         reviewer : r({ model: "gpt-6.1-terra",
             tiers: [
                 { model: 'gpt-6.1-terra', effort: ['medium', 'high', 'xhigh'] }, // check (review tier)

@@ -4,10 +4,13 @@
  * @purpose Parse argv, dispatch one command, and map failures to process exit codes.
  * @depends node:path, node:util, node:fs/promises, node:url, node:module, core/config, ui/renderer, jobs/manager, openai/errors, commands/shared, commands/ask, commands/chat, commands/run, commands/image, commands/jobs, commands/memory, commands/misc, commands/map, commands/complete, commands/gen, commands/mcp, commands/channels, cli-help
  * @usedBy bin/ai
- * @exports HELP, stripDetach, main
+ * @exports HELP, stripDetach, parseArgv, main
  * @ai.tags cli, dispatch
  * @ai.hint keep
  * @changed 2026-10-15 Load .env and repair a split Windows API key and base URL.
+ * @changed 2026-11-11 --role-image-model; parseArgs moved into the exported parseArgv, because its
+ *   allowNegative rewrite (`--no-measure` → `measure: false`) has to be read the same way everywhere.
+
  */
 import path from 'node:path';
 import { parseArgs } from 'node:util';
@@ -49,7 +52,7 @@ const OPTIONS = {
     image: { type: 'string', multiple: true }, file: { type: 'string', short: 'f', multiple: true }, url: { type: 'string', multiple: true }, detail: { type: 'string' },
     out: { type: 'string', short: 'o' }, session: { type: 'string', short: 's' }, store: { type: 'boolean', default: false },
     id: { type: 'string' },
-    web: { type: 'boolean', default: false }, 'no-web': { type: 'boolean', default: false }, images: { type: 'boolean', default: false }, desktop: { type: 'boolean', default: false }, browser: { type: 'boolean', default: false }, 'browser-engine': { type: 'string' }, 'browser-path': { type: 'string' }, 'unsafe-screenshot': { type: 'boolean', default: false }, tools: { type: 'string' },
+    web: { type: 'boolean' }, 'no-web': { type: 'boolean', default: false }, images: { type: 'boolean', default: false }, desktop: { type: 'boolean', default: false }, browser: { type: 'boolean', default: false }, 'browser-engine': { type: 'string' }, 'browser-path': { type: 'string' }, 'unsafe-screenshot': { type: 'boolean', default: false }, tools: { type: 'string' },
     'no-tools': { type: 'boolean', default: false }, agents: { type: 'boolean' }, 'agents-file': { type: 'string' }, approve: { type: 'string' }, yes: { type: 'boolean', short: 'y', default: false },
     cwd: { type: 'string', short: 'C' }, 'max-turns': { type: 'string' }, 'budget-usd': { type: 'string' }, 'budget-tokens': { type: 'string' },
     'max-output-tokens': { type: 'string' }, temperature: { type: 'string' }, verbosity: { type: 'string' }, shell: { type: 'string' },
@@ -64,7 +67,8 @@ const OPTIONS = {
     'image-size-hint': { type: 'string' },
     partials: { type: 'string' }, 'image-model': { type: 'string' }, count: { type: 'string', short: 'n' }, schema: { type: 'string' },
     follow: { type: 'boolean', default: false }, help: { type: 'boolean', short: 'h', default: false }, version: { type: 'boolean', short: 'V', default: false },
-    role: { type: 'string', multiple: true }, single: { type: 'boolean', default: false }, team: { type: 'boolean', default: false },
+    role: { type: 'string', multiple: true }, 'role-image-model': { type: 'string', multiple: true },
+    single: { type: 'boolean', default: false }, team: { type: 'boolean', default: false },
     route: { type: 'string' }, 'no-chain': { type: 'boolean', default: false }, 'no-resume': { type: 'boolean', default: false },
     coordinator: { type: 'boolean' }, extract: { type: 'string' }, 'no-extract': { type: 'boolean', default: false },
     orchestrator: { type: 'boolean' },
@@ -121,9 +125,26 @@ export function stripDetach(argv) {
 }
 
 /**
+ * Parse argv with the option table above.
+ *
+ * `allowNegative` is what makes `--no-measure`, `--no-web` and friends work, and it carries one trap
+ * every consumer must know about: the negative form always lands on the *positive* key. `--no-measure`
+ * arrives as `measure: false`, while a declared `no-measure` option keeps its default `false`. Reading
+ * `values['no-measure']` therefore sees nothing; `commands/flags.js` reads the negative through
+ * `flagsOff()`, which accepts both shapes (serve/hub hand over a values object built by hand).
+ * @param {string[]} argv Arguments after the node binary and script path.
+ * @returns {{ values: object, positionals: string[] }}
+ * @exports
+ * @ai.hint pure
+ */
+export function parseArgv(argv) {
+    return parseArgs({ args: argv, options: OPTIONS, allowPositionals: true, strict: true, allowNegative: true });
+}
+
+/**
  * Parse argv, run the selected command, and return a process exit code.
  * bin/ai.js calls this. Handles --help, --version, --detach, and SIGINT.
- * @param {string[]} [argv=process.argv.slice(2)] Raw command-line arguments.
+ * @param {string[]} [argvInput=process.argv.slice(2)] Raw command-line arguments.
  * @returns {Promise<number>} 0 success, 1 failure, 2 usage, 130 cancelled.
  * @exports
  * @ai.hint io
@@ -134,7 +155,7 @@ export async function main(argvInput = process.argv.slice(2)) {
     let values, positionals;
     let publisher = null;
     try {
-        ({ values, positionals } = parseArgs({ args: argv, options: OPTIONS, allowPositionals: true, strict: true, allowNegative: true }));
+        ({ values, positionals } = parseArgv(argv));
     } catch (error) {
         process.stderr.write(`Ошибка аргументов: ${error.message}\nСправка: ai --help\n`);
         return 2;

@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { startMockServer, TINY_PNG } from './helpers/mock-server.js';
 import { ensureLocalEnv } from './helpers/local-env.js';
 import { createJobManager } from '../src/jobs/manager.js';
-import { stripDetach } from '../src/cli.js';
+import { parseArgv, stripDetach } from '../src/cli.js';
 
 const bin = fileURLToPath(new URL('../bin/ai.js', import.meta.url));
 let server;
@@ -46,6 +46,16 @@ function runCli(args, { input = null, env = {} } = {}) {
     });
 }
 const jsonLines = (stdout) => stdout.trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+
+test('parseArgv preserves hyphenated model ids and exposes --no-measure through the positive key', () => {
+    const parsed = parseArgv([
+        'run', 'render', '--role-image-model', 'image-processor=seedream-5-5', '--no-measure',
+    ]);
+    assert.deepEqual(parsed.values['role-image-model'], ['image-processor=seedream-5-5']);
+    assert.equal(parsed.values.measure, false);
+    assert.equal(parsed.values['no-measure'], false);
+    assert.equal(parseArgv(['run', 'draw', '--web']).values.web, true);
+});
 
 test('ask: prints the answer, logs usage, exits 0', async () => {
     script = () => ({ text: 'Ответ модели', reasoning: 'коротко подумал' });

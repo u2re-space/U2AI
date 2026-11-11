@@ -22,6 +22,7 @@ import { detectMagick, magickPadImageBytes, magickRemoveImagePadding } from '../
 import { rasterPadImageBytes, rasterRemoveImagePadding } from '../agent/image-raster.js';
 import { backgroundValue, encodeMultipart, generationBody, imageFormatField, imageModelProfile, imageSizeAttempts, imageSizeFields, readImageSize, imageComplexityValue, imageSources, isImageSizeError, isSvgRequest, needsDiv16Padding, needsMinPixelsPadding, paddedSizeToMinPixels, normalizeVectorRatio, parseImageSize, resolveImageFormat, withSizeHint } from './images.js';
 import { rasterFitToSourceFrame } from '../agent/image-raster.js';
+import { isSeedream55, generateTransparentLayer } from './seedream-5-5.js';
 
 export { ApiError };
 
@@ -700,6 +701,12 @@ export function createClient({
             // A vector call answers its frame through `size`/`aspect_ratio` of the vector branch, so
             // the raster size ladder has nothing to retry there.
             const vector = isSvgRequest({ model, format });
+            if (isSeedream55(model)) {
+                const payloads = await generateTransparentLayer({
+                    client: { call }, model, prompt, references, size, background, format, signal,
+                });
+                return vector ? payloads : fitPayloadsToFrame(payloads, size);
+            }
             const attempts = vector ? [] : imageSizeAttempts(size, model, resolution);
             let result;
             for (let index = 0; ; index++) {
@@ -733,7 +740,7 @@ export function createClient({
                 const references = files.map((file) => `data:${file.mime || 'image/png'};base64,${Buffer.from(file.bytes).toString('base64')}`);
                 return images.generate({ model, prompt, size: frame, complexity, format, background, references, resolution, signal });
             }
-             if (!vector && (needsDiv16Padding(model, imageDiv16) || needsMinPixelsPadding(model, imagePadToMin)) && files?.length) {
+            if (!vector && (needsDiv16Padding(model, imageDiv16) || needsMinPixelsPadding(model, imagePadToMin)) && files?.length) {
                 const toFloor = needsMinPixelsPadding(model, imagePadToMin);
                 // The frame the request names in pixels, when it names one. Padding raises that frame to
                 // the model floor and grows the canvas around the source; it never answers the caller's
@@ -767,6 +774,24 @@ export function createClient({
                 requestFiles = prepared.map((item) => item.file);
                 padding = prepared[0].frame;
                 requestedFrame = `${padding.width}x${padding.height}`;
+            }
+            if (isSeedream55(model)) {
+                const references = (requestFiles ?? []).map((file) => `data:${file.mime || 'image/png'};base64,${Buffer.from(file.bytes).toString('base64')}`);
+                const payloads = await generateTransparentLayer({
+                    client: { call }, model, prompt, references, size: requestedFrame, background, format, signal,
+                });
+                if (!padding) return fitPayloadsToFrame(payloads, size);
+                const restored = await Promise.all(payloads.map(async (payload) => {
+                    const bytes = Buffer.from(payload, 'base64');
+                    const cut = padding.engine === 'magick'
+                        ? await magickRemoveImagePadding({ ...padding, bytes, signal })
+                        : await rasterRemoveImagePadding({ ...padding, bytes, engine: padding.engine });
+                    return cut.toString('base64');
+                }));
+                const target = parseImageSize(String(size ?? '').trim())
+                    ? size
+                    : `${padding.originalWidth}x${padding.originalHeight}`;
+                return fitPayloadsToFrame(restored, target);
             }
             // No frame in the request (auto/empty) and nothing padded: take it from the source
             // picture, so an edit keeps the input image's own size and aspect instead of the

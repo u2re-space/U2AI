@@ -1,5 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
+import { createClient } from '../src/openai/client.js';
+import { TINY_PNG } from './helpers/mock-server.js';
 import { ApiError } from '../src/openai/errors.js';
 import {
     SEEDREAM_MODEL, isSeedream55, seedreamLayerSize, seedreamGenerationSize, layerDecompositionBody, generationBody,
@@ -217,6 +220,47 @@ test('the enhanced-crop pass runs generation as a task and carries the crop in i
     assert.equal('n' in body, false);
     assert.match(body.image_urls[0], /^data:image\/png;base64,/);
     assert.equal('input_references' in body, false, 'this model reads image_urls, not the generic field');
+});
+
+test('ordinary Seedream generate and edit poll async tasks and send edit inputs as image_urls', async () => {
+    const requests = [];
+    const server = http.createServer(async (req, res) => {
+        const chunks = [];
+        for await (const chunk of req) chunks.push(chunk);
+        const raw = Buffer.concat(chunks).toString('utf8');
+        requests.push({ method: req.method, url: req.url, body: raw ? JSON.parse(raw) : null });
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        if (req.url === '/v1/images/generations') {
+            res.end(JSON.stringify({ data: [{ task_id: `task-${requests.filter((item) => item.method === 'POST').length}` }] }));
+            return;
+        }
+        res.end(JSON.stringify({ data: { status: 'completed', result: { images: [{ url: [`data:image/png;base64,${TINY}`] }] } } }));
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address();
+    const client = createClient({ apiKey: 'sk-test', baseURL: `http://127.0.0.1:${port}/v1/`, retries: 0, imageDiv16: 'never', imagePadToMin: 'never' });
+    try {
+        const generated = await client.images.generate({ model: 'seedream-5-5', prompt: 'draw', size: 'auto' });
+        assert.deepEqual(generated, [TINY]);
+        const edited = await client.images.edit({
+            model: 'bytedance-seed/seedream-5-5', prompt: 'change', size: 'auto',
+            files: [{ filename: 'source.png', mime: 'image/png', bytes: Buffer.from(TINY_PNG, 'base64') }],
+        });
+        assert.deepEqual(edited, [TINY]);
+        assert.deepEqual(requests.map((item) => `${item.method} ${item.url}`), [
+            'POST /v1/images/generations', 'GET /v1/tasks/task-1',
+            'POST /v1/images/generations', 'GET /v1/tasks/task-2',
+        ]);
+        assert.equal(requests[0].body.size, '1K');
+        assert.equal(requests[0].body.prompt, 'draw');
+        assert.equal(requests[1].body, null);
+        assert.equal(requests[2].body.prompt, 'change');
+        assert.match(requests[2].body.image_urls[0], /^data:image\/png;base64,/);
+        assert.equal('input_references' in requests[2].body, false);
+    } finally {
+        client.close();
+        await new Promise((resolve) => server.close(resolve));
+    }
 });
 
 test('generation frames: a small crop becomes 1K, a valid frame stays, a ratio survives', () => {

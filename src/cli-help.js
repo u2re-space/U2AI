@@ -106,14 +106,17 @@ context=false запускает роль на чистом контексте. 
   --budget-usd <n>       лимит расходов (нужны prices в конфигурации)   --budget-tokens <n>
 
 Команда (run и gen):
-  --role <роль=модель[:effort[:max-effort]]>  модель для роли: planner, architect, orchestrator, worker, coder, styler, reviewer,
+  --role <роль=модель[:effort[:max-effort]]>  текстовая модель роли: planner, architect, orchestrator, worker, coder, styler, reviewer,
                           solver, clicker, typer, encoder, classifier, decomposer, measurer, iconifier,
                           image-processor, designer, default, all.
                          В шапке рана роли показываются как модель:роль.
                          Своё имя-слаг создаёт роль в roles.<имя> (инструкции и инструменты задаются в конфигурации)
                          (например: --role planner=gpt-6.1-terra:high --role worker=gpt-6.1-terra:medium:high --role reviewer=gpt-6.1-terra)
-                         --role collector=... и --role coordinator=... принимают orchestrator (объединённая роль)
-    --team / --single      команда ролей / один агент     --no-chain   сразу planner, без первого ответа
+                          --role collector=... и --role coordinator=... принимают orchestrator (объединённая роль)
+  --role-image-model <роль=модель>  модель генерации и редактирования изображений только для роли
+                          (например: --role-image-model image-processor=seedream-5-5)
+     --team / --single      команда ролей / один агент     --no-chain   сразу planner, без первого ответа
+
     --orchestrator         оркестратор после этапов: сбор контекста, свежий взгляд на план, правки плана и указания следующему шагу
    --extract off|auto|always  encoder в режиме извлечения чистит ответ и кладёт готовые файлы в .tmp/<id>/extracted.
                          auto — только для маршрута encoder, always — и для planner. --no-extract выключает

@@ -68,6 +68,16 @@ test('the iconifier chooses icons and edits markup without taking over styles', 
     assert.deepEqual(EXECUTORS.iconifier.tools, ['list_files', 'read_file', 'search_files', 'view_image', 'write_file', 'replace_text', 'fetch_url', 'download_font', 'download_icons', 'generate_svg', 'vectorize_image']);
 });
 
+test('the image processor preserves raster scale and never invents source dimensions', () => {
+    const raster = ROLE_INSTRUCTIONS['image-processor'].split('[ONLY_FOR_RASTER]:')[1].split('\n')[0];
+    assert.match(raster, /not to upscale or stretch/);
+    assert.match(raster, /original scale and geometry/);
+    assert.match(raster, /canvas origin \(0,0\)/);
+    assert.match(raster, /extend the canvas to the right and bottom/);
+    assert.match(raster, /Never invent or guess.*dimensions/);
+    assert.match(raster, /unverified original size/);
+});
+
 test('the image processor trims padding through crop_image', () => {
     assert.match(ROLE_INSTRUCTIONS['image-processor'], /Trimming padding is a crop_image call/);
     assert.match(ROLE_INSTRUCTIONS['image-processor'], /trim=true/);

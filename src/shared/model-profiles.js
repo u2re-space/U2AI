@@ -8,12 +8,14 @@ export const RIVERFLOW = /(?:^|\/)riverflow-/i;
 
 /** Default ProxyAPI text-to-image model when imageModel is unset. See https://proxyapi.ru/models/browse/image */
 export const PROXY_IMAGE_MODEL = 'openai/gpt-image-2.6-sunburst';
+//export const PROXY_IMAGE_MODEL = 'seedream-5-5';
 
 /**
  * Default ProxyAPI model for edits and image-conditioned generation. Same gpt-image-2.5 family as
  * the generation default; both ids accept a source image and are interchangeable through --image-model.
  */
 export const PROXY_IMAGE_EDIT_MODEL = 'openai/gpt-image-2.6-sunburst';
+//export const PROXY_IMAGE_EDIT_MODEL = 'seedream-5-5';
 
 /**
  * Default ProxyAPI vector (SVG) model. gpt-image-2.6 answers `output_format: svg`, so the same family

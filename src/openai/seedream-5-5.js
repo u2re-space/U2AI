@@ -452,6 +452,7 @@ async function runSeedreamTask({ client = null, channels = null, model, body, si
             if (taskData(created)?.status === 'completed') return { raw: created, taskId: null, host: channel.label ?? null };
             const taskId = String(created?.data?.[0]?.task_id ?? created?.data?.task_id ?? created?.task_id ?? '').trim();
             if (!taskId) {
+                if (taskImageSources(created).length) return { raw: created, taskId: null, host: channel.label ?? null };
                 throw new ApiError(noResult, { code: 'INVALID_RESPONSE', details: { keys: Object.keys(created ?? {}) } });
             }
             const settled = await pollTask(channel.client, taskId, { signal, timeoutMs, onPoll });

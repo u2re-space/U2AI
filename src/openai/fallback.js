@@ -15,7 +15,7 @@ import { createClient } from './client.js';
 import { ApiError } from './errors.js';
 import { isReasoningModel, supportsVerbosity } from '../core/config.js';
 import { envValue, liveEnv } from '../core/runtime-env.js';
-import { MODEL_FALLBACKS } from './shared/model-profiles.js';
+import { MODEL_FALLBACKS, SEEDREAM_5_5 } from './shared/model-profiles.js';
 
 /** Default stand-ins. Keys may be bare or prefixed with openai/. */
 export { MODEL_FALLBACKS };
@@ -467,6 +467,21 @@ export function createFallbackClient(config, { create = createClient } = {}) {
             },
         });
     };
+    const seedreamImage = async (args, edit = false) => {
+        const { generateTransparentLayer } = await import('./seedream-5-5.js');
+        const references = edit
+            ? (args.files ?? []).map((file) => `data:${file.mime || 'image/png'};base64,${Buffer.from(file.bytes).toString('base64')}`)
+            : (Array.isArray(args.references) ? args.references : []);
+        return generateTransparentLayer({
+            channels: endpoints('images', args.model).map((endpoint) => ({
+                label: endpoint.label, client: endpoint.client,
+                modelFor: (name) => rewriteModel(name, endpoint.modelRewrite),
+            })),
+            model: args.model, prompt: args.prompt, references, size: args.size,
+            background: args.background, format: args.format, signal: args.signal,
+            onWarn: (message) => { try { args.onEvent?.({ type: 'warning', message }); } catch { /* observer */ } },
+        });
+    };
 
     return {
         ...primary,
@@ -487,8 +502,12 @@ export function createFallbackClient(config, { create = createClient } = {}) {
         get transport() { return active.transport ?? 'responses'; },
         images: {
             ...primary.images,
-            generate: (args = {}) => sendBody(args, { signal: args.signal, onEvent: args.onEvent }, 'images'),
-            edit: (args = {}) => sendBody(args, { signal: args.signal, onEvent: args.onEvent }, 'images-edit'),
+            generate: (args = {}) => SEEDREAM_5_5.test(String(args.model ?? ''))
+                ? seedreamImage(args)
+                : sendBody(args, { signal: args.signal, onEvent: args.onEvent }, 'images'),
+            edit: (args = {}) => SEEDREAM_5_5.test(String(args.model ?? ''))
+                ? seedreamImage(args, true)
+                : sendBody(args, { signal: args.signal, onEvent: args.onEvent }, 'images-edit'),
             vectorize: (args = {}) => sendBody(args, { signal: args.signal, onEvent: args.onEvent }, 'images-vector'),
         },
         decisions: {

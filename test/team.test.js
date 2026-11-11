@@ -14,6 +14,7 @@ import { isIconifierMarkup, runTeam, toolNamesForRole } from '../src/agent/team.
 import { enabledToolNames } from '../src/agent/tool-specs.js';
 import { diffHunk, describeChangeSet } from '../src/agent/diff.js';
 import { overridesFrom } from '../src/commands/shared.js';
+import { parseArgv } from '../src/cli.js';
 import { startMockServer, TINY_PNG } from './helpers/mock-server.js';
 import { pngOf } from './helpers/png.js';
 import { encodeArtifacts } from '../src/encode/encode.ts';
@@ -197,6 +198,21 @@ test('resolveRole merges role, default role and top-level settings; --role flags
     assert.throws(() => overridesFrom({ role: ['Bad Name=x'] }), /--role/);
     assert.throws(() => overridesFrom({ role: ['UPPER=x'] }), /--role/);
     assert.deepEqual(overridesFrom({ role: ['image-processor=gpt-6.1-terra:medium'] }).roles, { 'image-processor': { model: 'gpt-6.1-terra', effort: 'medium' } });
+    const cliValues = parseArgv(['run', 'draw', '--role', 'image-processor=gpt-6.1-terra:medium', '--role-image-model', 'image-processor=seedream-5-5', '--no-measure']).values;
+    const cliOverrides = overridesFrom(cliValues);
+    assert.deepEqual(cliOverrides.roles['image-processor'], {
+        model: 'gpt-6.1-terra', effort: 'medium', imageModel: 'seedream-5-5',
+    });
+    assert.equal(cliOverrides.agent.measure, 'off');
+    const otherOff = overridesFrom(parseArgv([
+        'run', 'draw', '--no-extract', '--no-decor', '--no-architect', '--no-decompose', '--no-subrefs', '--no-design',
+    ]).values).agent;
+    assert.deepEqual(otherOff, {
+        extract: 'off', decorations: 'off', architect: 'off', decompose: 'off',
+        decomposerSubReferences: 'off', design: 'off',
+    });
+    assert.deepEqual(overridesFrom(parseArgv(['run', 'draw', '--no-web', '--no-tools']).values).tools,
+        { web: false, fs: false, shell: false, fetch: false, mcp: false, channels: false, subagents: false, browser: false, images: false, askUser: false, desktop: false });
     assert.equal(Object.keys(overridesFrom({ role: ['all=cheap'] }).roles).length, 20);
     assert.equal(overridesFrom({ extract: 'always' }).agent.extract, 'always');
     assert.equal(overridesFrom({ 'no-extract': true }).agent.extract, 'off');

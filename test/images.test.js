@@ -1216,10 +1216,9 @@ test('a source below the model floor is padded up to it and the padding is cut o
         const server = http.createServer(async (req, res) => {
             const chunks = [];
             for await (const chunk of req) chunks.push(chunk);
-            const raw = Buffer.concat(chunks).toString('latin1');
-            const imagePart = /name="image"; filename="source\.png"\r\nContent-Type: image\/png\r\n\r\n([\s\S]*?)\r\n--/.exec(raw);
-            const bytes = Buffer.from(imagePart?.[1] ?? '', 'latin1');
-            sent.push({ size: /name="size"\r\n\r\n([^\r]+)/.exec(raw)?.[1], bytes });
+            const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+            const bytes = Buffer.from(body.image_urls[0].split(',')[1], 'base64');
+            sent.push({ size: body.size, bytes });
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ data: [{ b64_json: bytes.toString('base64') }] }));
         });
@@ -1271,10 +1270,9 @@ test('image.padToMin never leaves the small source at its own padded frame', asy
         const server = http.createServer(async (req, res) => {
             const chunks = [];
             for await (const chunk of req) chunks.push(chunk);
-            const raw = Buffer.concat(chunks).toString('latin1');
-            const imagePart = /name="image"; filename="source\.png"\r\nContent-Type: image\/png\r\n\r\n([\s\S]*?)\r\n--/.exec(raw);
-            const bytes = Buffer.from(imagePart?.[1] ?? '', 'latin1');
-            sent.push({ size: /name="size"\r\n\r\n([^\r]+)/.exec(raw)?.[1], bytes });
+            const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+            const bytes = Buffer.from(body.image_urls[0].split(',')[1], 'base64');
+            sent.push({ size: body.size, bytes });
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ data: [{ b64_json: bytes.toString('base64') }] }));
         });
@@ -1291,7 +1289,7 @@ test('image.padToMin never leaves the small source at its own padded frame', asy
             await writeFile(sentPath, sent[0].bytes);
             const sentInfo = await rasterInfo(sentPath, { cwd: root, engine: 'sharp' });
             assert.deepEqual([sentInfo.width, sentInfo.height], [304, 400]);
-            assert.equal(sent[0].size, '304x400');
+            assert.equal(sent[0].size, '1K', 'Seedream generation uses its accepted size tiers even when the input stays at its own frame');
             const resultPath = path.join(root, 'result.png');
             await writeFile(resultPath, Buffer.from(payloads[0], 'base64'));
             const info = await rasterInfo(resultPath, { cwd: root, engine: 'sharp' });

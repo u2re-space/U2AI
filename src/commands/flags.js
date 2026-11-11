@@ -171,6 +171,24 @@ function toolSwitches(value) {
 }
 
 /**
+ * Was this option switched off by its `--no-…` form?
+ *
+ * parseArgs runs with `allowNegative`, and that rewrite lands on the positive key: `--no-measure`
+ * arrives as `measure: false`, while the declared `no-measure` option keeps its default `false`.
+ * Reading only `values['no-measure']` silently ignores the flag, which is how `--no-measure`,
+ * `--no-extract`, `--no-web`, `--no-tools` and the other stage switches stopped meaning anything.
+ * The explicit key is still honored, because `ai serve` and the hub hand over a values object they
+ * assembled themselves (`noExtract: true`) instead of parsing argv.
+ * @param {object} values
+ * @param {string} name option name without dashes, e.g. `measure` for `--no-measure`
+ * @returns {boolean}
+ * @ai.hint pure
+ */
+function flagsOff(values, name) {
+    return values[`no-${name}`] === true || values[name] === false;
+}
+
+/**
  * Map a legacy or current role name to the name stored in configuration.
  * @param {string} name
  * @returns {string}
@@ -275,37 +293,50 @@ export function overridesFrom(values, { command = null } = {}) {
             }
         }
     }
+    if (values['role-image-model']?.length) {
+        o.roles ??= {};
+        for (const spec of values['role-image-model']) {
+            const match = /^([\w*-]+)=(.+)$/.exec(spec.trim());
+            if (!match) throw new UsageError(`--role-image-model: ожидается имя=модель, получено "${spec}"`);
+            const [, rawName, imageModel] = match;
+            const name = canonicalRole(rawName);
+            if (!ROLE_NAMES.includes(name) && !CUSTOM_ROLE_NAME.test(name)) {
+                throw new UsageError(`--role-image-model: неизвестная роль "${name}" (${ROLE_NAMES.join(', ')}) или своё имя ${CUSTOM_ROLE_NAME.source}`);
+            }
+            o.roles[name] = { ...(o.roles[name] ?? {}), imageModel };
+        }
+    }
     if (values.single) (o.agent ??= {}).mode = 'single';
     if (values.team) (o.agent ??= {}).mode = 'team';
-    if (values['no-chain']) (o.agent ??= {}).chain = false;
-    if (values['no-resume']) (o.agent ??= {}).resume = false;
-    if (values['no-extract']) (o.agent ??= {}).extract = 'off';
+    if (flagsOff(values, 'chain')) (o.agent ??= {}).chain = false;
+    if (flagsOff(values, 'resume')) (o.agent ??= {}).resume = false;
+    if (flagsOff(values, 'extract')) (o.agent ??= {}).extract = 'off';
     if (values.extract) {
         if (!['off', 'auto', 'always'].includes(values.extract)) throw new UsageError('--extract: off | auto | always');
         (o.agent ??= {}).extract = values.extract;
     }
-    if (values['no-measure']) (o.agent ??= {}).measure = 'off';
+    if (flagsOff(values, 'measure')) (o.agent ??= {}).measure = 'off';
     if (values.measure) {
         if (!['off', 'auto', 'always'].includes(values.measure)) throw new UsageError('--measure: off | auto | always');
         (o.agent ??= {}).measure = values.measure;
     }
-    if (values['no-decor']) (o.agent ??= {}).decorations = 'off';
+    if (flagsOff(values, 'decor')) (o.agent ??= {}).decorations = 'off';
     if (values.decor) {
         if (!['off', 'auto', 'always'].includes(values.decor)) throw new UsageError('--decor: off | auto | always');
         (o.agent ??= {}).decorations = values.decor;
     }
-    if (values['no-architect']) (o.agent ??= {}).architect = 'off';
+    if (flagsOff(values, 'architect')) (o.agent ??= {}).architect = 'off';
     if (values.architect) {
         if (!['off', 'auto', 'always'].includes(values.architect)) throw new UsageError('--architect: off | auto | always');
         (o.agent ??= {}).architect = values.architect;
     }
-    if (values['no-decompose']) (o.agent ??= {}).decompose = 'off';
+    if (flagsOff(values, 'decompose')) (o.agent ??= {}).decompose = 'off';
     if (values.decompose) {
         if (!['off', 'auto', 'always'].includes(values.decompose)) throw new UsageError('--decompose: off | auto | always');
         (o.agent ??= {}).decompose = values.decompose;
     }
     // Sub-references are generated images, so asking for them turns the images route on.
-    if (values['no-subrefs']) (o.agent ??= {}).decomposerSubReferences = 'off';
+    if (flagsOff(values, 'subrefs')) (o.agent ??= {}).decomposerSubReferences = 'off';
     if (values.subrefs) {
         if (!['off', 'auto', 'always'].includes(values.subrefs)) throw new UsageError('--subrefs: off | auto | always');
         (o.agent ??= {}).decomposerSubReferences = values.subrefs;
@@ -326,7 +357,7 @@ export function overridesFrom(values, { command = null } = {}) {
     }
     // Optional design stage: produces a visual design direction, layout, and HTML template
     // before the decomposer and measurer. Expensive role (xhigh + image generation).
-    if (values['no-design']) (o.agent ??= {}).design = 'off';
+    if (flagsOff(values, 'design')) (o.agent ??= {}).design = 'off';
     if (values.design) {
         if (!['off', 'auto', 'always'].includes(values.design)) throw new UsageError('--design: off | auto | always');
         (o.agent ??= {}).design = values.design;
@@ -392,7 +423,7 @@ export function overridesFrom(values, { command = null } = {}) {
         o.agents = { enabled: true, globalFile: values['agents-file'] };
     }
     if (values.web) o.tools.web = true;
-    if (values['no-web']) o.tools.web = false;
+    if (flagsOff(values, 'web')) o.tools.web = false;
     if (values.images) o.tools.images = true;
     if (values.desktop) o.tools.desktop = true;
     if (values.browser) o.tools.browser = true;
@@ -406,7 +437,7 @@ export function overridesFrom(values, { command = null } = {}) {
         o.tools.browser = true;
     }
     if (values['unsafe-screenshot']) (o.desktop ??= {}).unsafeScreenshot = true;
-    if (values.tools !== undefined) {
+    if (typeof values.tools === 'string') {
         const list = values.tools.split(',').map((s) => s.trim()).filter(Boolean);
         const all = toolSwitches(false);
         if (!(list.length === 1 && list[0] === 'none')) {
@@ -418,7 +449,7 @@ export function overridesFrom(values, { command = null } = {}) {
         }
         Object.assign(o.tools, all);
     }
-    if (values['no-tools']) Object.assign(o.tools, toolSwitches(false));
+    if (flagsOff(values, 'tools')) Object.assign(o.tools, toolSwitches(false));
     if (values.detail && !IMAGE_DETAILS.includes(values.detail)) throw new UsageError(`--detail: ${IMAGE_DETAILS.join(' | ')}`);
     if (values.fidelity !== undefined || values.creativity !== undefined || values.platform) o.generate = {};
     if (values.fidelity !== undefined) {

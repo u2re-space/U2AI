@@ -185,7 +185,7 @@ export function generationBody({ model = SEEDREAM_MODEL, prompt, references = nu
 /**
  * `data` of a task answer, or null while the task is still running.
  * @param {object} result
- * @returns {{ status: string, error: string|null, images: object[] }|null}
+ * @returns {{ status: string, error: string|null, reason: string|null, images: object[] }|null}
  * @ai.hint pure
  */
 function taskData(result) {
@@ -194,7 +194,51 @@ function taskData(result) {
     const status = String(data.status ?? '').trim().toLowerCase();
     if (!['pending', 'processing', 'completed', 'failed', 'canceled', 'cancelled'].includes(status)) return null;
     const error = typeof data.error === 'string' ? data.error : (data.error?.message ?? null);
-    return { status, error, images: Array.isArray(data.result?.images) ? data.result.images : [] };
+    // `reason` is documented as the machine-readable cause and is the only part that tells a refused
+    // picture apart from a timeout; the message alone reads the same for both.
+    const reason = typeof data.error?.reason === 'string' ? data.error.reason.trim() : (typeof data.error?.code === 'string' ? data.error.code.trim() : null);
+    return { status, error, reason, images: Array.isArray(data.result?.images) ? data.result.images : [] };
+}
+
+/**
+ * Did the provider refuse the pictures rather than the request?
+ * A decomposition redraws the whole reference — the base image and every layer are outputs the model
+ * painted over somebody else's layout — and the vendor's moderation stops that under copyright
+ * (`OutputImageSensitiveContentDetected.PolicyViolation`, `content_policy_violation`, "did not pass
+ * content safety review"). Nothing in the request caused it and nothing in the request can fix it:
+ * the same file asked again gets the same answer, so this class must end the attempt instead of
+ * spending the remaining paid generations on it.
+ * @param {unknown} error
+ * @returns {boolean}
+ * @exports
+ * @ai.hint pure
+ */
+export function isContentRejection(error) {
+    const parts = [
+        error?.details?.reason, error?.details?.code, error?.apiCode, error?.code,
+        error?.details?.message, error?.message, error,
+    ];
+    return parts.some((part) => typeof part === 'string'
+        && /sensitivecontent|policyviolation|content[_\s]policy|content safety|copyright|moderation/i.test(part));
+}
+
+/**
+ * What to tell a human when the provider refused the pictures. The vendor's sentence names a prompt
+ * the caller never sent, so it is replaced rather than repeated: a user reading "adjust your prompt"
+ * would go looking for a prompt that does not exist.
+ * @param {unknown} error
+ * @param {string} what the name of the operation that was refused
+ * @returns {string}
+ * @exports
+ * @ai.hint pure
+ */
+export function contentRejectionNotice(error, what) {
+    // Only the machine-readable code is quoted; `details.reason` carries the vendor's prose, which is
+    // exactly the sentence that blames a prompt this pipeline never sent.
+    const code = [error?.apiCode, error?.details?.code].find((part) => typeof part === 'string' && part);
+    return `${what} отклонено модерацией провайдера${code ? ` (${code})` : ''}: перерисовка чужого макета распознана `
+        + 'как контент с авторскими ограничениями. Это ответ на само изображение, а не на запрос, поэтому повтор его не изменит; '
+        + 'средства за неудачную задачу возвращаются.';
 }
 
 /**
@@ -348,7 +392,11 @@ async function pollTask(client, taskId, { signal, timeoutMs = DEFAULT_TASK_TIMEO
         if (data?.status === 'completed') return result;
         if (data?.status === 'failed' || data?.status === 'canceled' || data?.status === 'cancelled') {
             throw new ApiError(`Задача seedream-5.5 завершилась со статусом «${data.status}»${data.error ? `: ${data.error}` : ''}.`, {
-                code: 'TASK_FAILED', details: { taskId, status: data.status, reason: data.error },
+                // `reason` is carried on the error itself: it is what tells a refused picture apart
+                // from a timeout, and the caller has to be able to ask without parsing prose.
+                code: 'TASK_FAILED',
+                apiCode: data.reason,
+                details: { taskId, status: data.status, reason: data.error, code: data.reason ?? null },
             });
         }
         if (Date.now() - startedAt > timeoutMs) {

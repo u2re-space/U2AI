@@ -23,6 +23,12 @@
  *   are no longer rescaled by the size of the returned base image, they enter the sheet at `medium`
  *   confidence as `box approximate`, names are ASCII, and the crops they feed are padded, deduplicated
  *   by IoU and dropped when most of the box lies outside the frame.
+ * @changed 2026-11-11 The moderation of the vendor refuses the redraw of somebody else's layout
+ *   (`OutputImageSensitiveContentDetected.PolicyViolation` / `content_policy_violation`), which is the
+ *   normal fate of a commercial reference in this mode. That class is now named in the warning instead
+ *   of the vendor's prose about a prompt nobody sent, and the enhanced-crop pass stops at the first
+ *   such refusal: every remaining crop is a piece of the same refused picture and would be billed the
+ *   same way.
  * @changed 2026-11-11 The padding that left every measurement with phantom spacing is narrowed where
  *   the answer gives tighter geometry: a text layer is cut to the union of its
  *   `text_recognition.lines[].bounding_box`, and the line frames plus `runs[].style` fill the font
@@ -43,7 +49,7 @@
 import path from 'node:path';
 import { mkdir, writeFile, readFile, stat } from 'node:fs/promises';
 import { resolveInside } from './paths.js';
-import { isSeedream55, decomposeLayers, generateTransparentLayer, downloadImageBytes, SEEDREAM_MODEL, SEEDREAM_INPUT_MAX_BYTES, SEEDREAM_INPUT_MAX_PIXELS } from '../openai/seedream-5-5.js';
+import { isSeedream55, decomposeLayers, generateTransparentLayer, downloadImageBytes, isContentRejection, contentRejectionNotice, SEEDREAM_MODEL, SEEDREAM_INPUT_MAX_BYTES, SEEDREAM_INPUT_MAX_PIXELS } from '../openai/seedream-5-5.js';
 import { imageModelFor } from '../openai/images.js';
 import { detectMagick, magickCrop } from './image-magick.js';
 import { readImageSize } from '../shared/images.js';
@@ -452,6 +458,15 @@ export async function advancedMeasurePhase1({ root, workId, client, referencePat
             }, onWarn: (message) => notify?.({ type: 'warning', message }),
         });
     } catch (error) {
+        if (isContentRejection(error)) {
+            // The vendor refused the picture itself. Saying so once, in plain words, is worth more than
+            // a stack of retries on the same file: the answer is a property of the reference, not of
+            // the request.
+            const message = contentRejectionNotice(error, 'Разложение слоёв');
+            warnings.push(message);
+            notify?.({ type: 'warning', message });
+            return { sheet: null, cropPaths, layers, warnings };
+        }
         const hosts = channels?.length ? ` на ${channels.length} бэкенде(ах): ${channels.map((c) => c.label).join(', ')}` : '';
         warnings.push(`Разложение слоёв не удалось (${seedreamModel}${hosts}): ${error.message ?? String(error)}`);
         notify?.({ type: 'warning', message: `Разложение слоёв не удалось (${seedreamModel}${hosts}): ${error.message ?? String(error)}` });
@@ -596,6 +611,14 @@ export async function advancedEnhanceCrops({ root, client, referencePath, cropPa
                 serial += 1;
             }
         } catch (error) {
+            if (isContentRejection(error)) {
+                // The vendor's sentence arrives as a JSON body and names a prompt this pipeline never
+                // sent, so it is replaced with the one line that says what happened and what follows.
+                warnings.push(contentRejectionNotice(error, 'Генерация улучшенных кропов'));
+                const skipped = targets.length - targets.indexOf(target) - 1;
+                if (skipped > 0) warnings.push(`Улучшенных кропов не создано ещё ${skipped}: генерация остановлена после отказа модерации.`);
+                break;
+            }
             warnings.push(`Улучшенный кроп не создан (${target.name} ${box.x},${box.y} ${box.width}×${box.height}): ${error.message ?? String(error)}`);
         }
     }

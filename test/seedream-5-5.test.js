@@ -4,6 +4,7 @@ import { ApiError } from '../src/openai/errors.js';
 import {
     SEEDREAM_MODEL, isSeedream55, seedreamLayerSize, seedreamGenerationSize, layerDecompositionBody, generationBody,
     normalizeLayerBox, parseLayerDecomposition, taskImageSources, decomposeLayers, generateTransparentLayer,
+    isContentRejection, contentRejectionNotice,
 } from '../src/openai/seedream-5-5.js';
 
 const SOURCE = { bytes: Buffer.from('fake-png-bytes'), mime: 'image/png' };
@@ -158,6 +159,37 @@ test('a failed task and an answer without results are both named errors', async 
         },
     };
     await assert.rejects(decomposeLayers({ client: failing, source: SOURCE }), /статусом «failed»: content policy/);
+});
+
+test('a moderation refusal is recognized in both shapes the vendor answers it', async () => {
+    // Async: the task is created, then the picture is refused on the way out.
+    const refused = {
+        async call(path) {
+            if (path === 'images/generations') return { data: [{ task_id: 'task-9' }] };
+            return {
+                data: {
+                    status: 'failed',
+                    error: { message: 'Your request did not pass content safety review. Please adjust your prompt or input files.', reason: 'content_policy_violation' },
+                },
+            };
+        },
+    };
+    const asyncError = await decomposeLayers({ client: refused, source: SOURCE }).catch((error) => error);
+    assert.equal(isContentRejection(asyncError), true, 'the reason the task carries is what identifies the refusal');
+    // Synchronous: a 400 on the way in, with the code in the body the gateway passes through.
+    const syncError = new ApiError('OpenAI API: The request failed because the output image may be related to copyright restrictions. Request id: 02179', {
+        code: 'HTTP_ERROR', status: 400, apiCode: 'OutputImageSensitiveContentDetected.PolicyViolation', apiType: 'BadRequest',
+    });
+    assert.equal(isContentRejection(syncError), true);
+    assert.equal(isContentRejection(new ApiError('Задача seedream-5.5 не дождалась результата за 14 мин.', { code: 'TASK_TIMEOUT' })), false,
+        'a timeout is not a refusal and must stay retryable material');
+    assert.equal(isContentRejection(new ApiError('model not found', { code: 'MODEL_NOT_FOUND' })), false);
+    assert.equal(isContentRejection(null), false);
+
+    const notice = contentRejectionNotice(asyncError, 'Разложение слоёв');
+    assert.match(notice, /модерацией/);
+    assert.match(notice, /content_policy_violation/, 'the machine-readable code reaches the user, the prose does not');
+    assert.doesNotMatch(notice, /prompt/i, 'the vendor blames a prompt this pipeline never sent');
 });
 
 test('the enhanced-crop pass runs generation as a task and carries the crop in image_urls', async () => {

@@ -2771,7 +2771,7 @@ test('advanced measurer mode falls back to the standard passes when decompositio
     const measureBodies = [];
     await writeFile(path.join(dir, 'mockup.png'), Buffer.from(TINY_PNG, 'base64'));
     imageScript = () => ({ data: [{ task_id: 'task-bad' }] });
-    taskScript = () => ({ data: { status: 'failed', error: 'content policy' } });
+    taskScript = () => ({ data: { status: 'failed', error: 'generation_timeout' } });
     detectCoder = true;
     script = (body) => {
         const role = roleOf(body);

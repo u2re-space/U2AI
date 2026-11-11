@@ -257,13 +257,90 @@ test('phase 1 warns instead of throwing when the reference is missing or the tas
             client: {
                 async call(route) {
                     if (route === 'images/generations') return { data: [{ task_id: 'task-2' }] };
-                    return { data: { status: 'failed', error: 'content policy' } };
+                    return { data: { status: 'failed', error: 'generation_timeout' } };
                 },
             },
             referencePath: 'ref.png', config: {}, notify: () => {},
         });
         assert.equal(failed.sheet, null);
         assert.match(failed.warnings.join('\n'), /Разложение слоёв не удалось/);
+    } finally {
+        await rm(dir, { recursive: true, force: true });
+    }
+});
+
+test('a reference the moderation refuses is reported as refused, not as a broken request', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-advanced-policy-'));
+    try {
+        await writeFile(path.join(dir, 'ref.png'), pngOf(1000, 800));
+        const refused = await advancedMeasurePhase1({
+            root: dir, workId: 'w',
+            client: {
+                async call(route) {
+                    if (route === 'images/generations') return { data: [{ task_id: 'task-3' }] };
+                    return {
+                        data: {
+                            status: 'failed',
+                            error: {
+                                message: 'Your request did not pass content safety review. Please adjust your prompt or input files and try again.',
+                                reason: 'content_policy_violation',
+                            },
+                        },
+                    };
+                },
+            },
+            referencePath: 'ref.png', config: {}, notify: () => {},
+        });
+        const text = refused.warnings.join('\n');
+        assert.equal(refused.sheet, null);
+        assert.match(text, /отклонено модерацией провайдера \(content_policy_violation\)/);
+        assert.doesNotMatch(text, /did not pass content safety review/, 'the vendor sentence about a prompt nobody sent is not repeated');
+    } finally {
+        await rm(dir, { recursive: true, force: true });
+    }
+});
+
+test('the enhanced pass stops buying generations once the moderation refuses the picture', async (t) => {
+    const exe = await detectMagick({ magickPath: null });
+    if (!exe) { t.skip('ImageMagick is not installed, so no region can be cut'); return; }
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-advanced-policy-crops-'));
+    const posts = [];
+    try {
+        await writeFile(path.join(dir, 'ref.png'), pngOf(1000, 800));
+        const client = {
+            channels: () => [{
+                label: 'https://api.apimart.ai/v1',
+                client: {
+                    async call(route, options = {}) {
+                        if (route === 'images/generations') {
+                            posts.push(options.body);
+                            return { data: [{ task_id: 'task-crop' }] };
+                        }
+                        return {
+                            data: {
+                                status: 'failed',
+                                error: { message: 'output image may be related to copyright restrictions', code: 'OutputImageSensitiveContentDetected.PolicyViolation' },
+                            },
+                        };
+                    },
+                },
+            }],
+        };
+        const out = await advancedEnhanceCrops({
+            root: dir, client, referencePath: 'ref.png', cropPaths: ['x.png'],
+            regions: [
+                { name: 'first', box: { x: 0, y: 0, width: 800, height: 600 } },
+                { name: 'second', box: { x: 0, y: 0, width: 400, height: 300 } },
+                { name: 'third', box: { x: 500, y: 200, width: 300, height: 300 } },
+            ],
+            frame: { width: 1000, height: 800 },
+            model: 'seedream-5-5', config: {}, notify: () => {},
+        });
+        assert.equal(posts.length, 1, 'one refusal is enough: every remaining crop is a piece of the same refused picture');
+        assert.equal(out.enhancedPaths.length, 0);
+        assert.match(out.warnings.join('\n'), /генерация остановлена после отказа модерации/i);
+        assert.match(out.warnings.join('\n'), /ещё 2/);
+        assert.equal(out.warnings.filter((warning) => /отклонено модерацией/.test(warning)).length, 1);
     } finally {
         await rm(dir, { recursive: true, force: true });
     }

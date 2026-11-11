@@ -9,7 +9,7 @@
  *   openai/images, agent/image-magick, agent/paths
  * @usedBy agent/team
  * @exports canRunAdvanced, advancedImageModel, advancedMeasure, advancedMeasurePhase1,
- *   advancedEnhanceCrops, advancedMeasurerProfile, shouldUseReasoningPro
+ *   advancedEnhanceCrops, advancedMeasurerProfile, shouldUseReasoningPro, LAYER_PROMPT
  * @ai.tags measurer, advanced, seedream, decomposition
  * @ai.hint io
  * @changed 2026-11-10 First version: crop-first decomposition, OCR-aware elements, layer boxes as
@@ -18,13 +18,23 @@
  *   another family, and both seedream modes now run as tasks on that host chain — the enhanced crop
  *   pass left the synchronous images route, which could neither poll a task nor carry the region in
  *   `image_urls`.
+ * @changed 2026-11-11 A measured run showed the layer boxes are areas, not measurements (padded
+ *   around the object, up to a tenth of the frame off, one object returned as several layers). They
+ *   are no longer rescaled by the size of the returned base image, they enter the sheet at `medium`
+ *   confidence as `box approximate`, names are ASCII, and the crops they feed are padded, deduplicated
+ *   by IoU and dropped when most of the box lies outside the frame.
+ * @changed 2026-11-11 The padding that left every measurement with phantom spacing is narrowed where
+ *   the answer gives tighter geometry: a text layer is cut to the union of its
+ *   `text_recognition.lines[].bounding_box`, and the line frames plus `runs[].style` fill the font
+ *   size, line step, weight and family instead of leaving them null. The decomposition now runs
+ *   without a prompt, because the vendor states a prompt alongside `text_recognition` can cost the OCR.
  *
  * How advanced differs from standard:
  *   - standard: the model reads the reference and returns boxes; the harness cuts the crops.
- *   - advanced: seedream-5.5 splits the reference into layers with bounding boxes itself (the
- *     model read those boxes, not the measurer), and also generates semi-transparent enhanced
- *     crops. The JSON sheet merges both. The crop count ceiling (MAX_CROPS) does not apply in
- *     advanced mode.
+ *   - advanced: seedream-5.5 splits the reference into layers with bounding boxes itself and also
+ *     generates semi-transparent enhanced crops. Those boxes are approximate areas the generation
+ *     model drew, so the measurer verifies every one of them on the picture before the sheet is
+ *     trusted. The crop count ceiling (MAX_CROPS) does not apply in advanced mode.
  *
  * The measurer model gets `reasoning.mode: "pro"` when it is an OpenAI GPT model — the extra
  * reasoning power is useful for the second pass over the many layers and crops.
@@ -42,11 +52,11 @@ import { readImageSize } from '../shared/images.js';
 const ADVANCED_DIR = '.tmp/_advanced-measure/';
 
 /**
- * The decomposition prompt. It is short, Latin-only and says in which language the model must answer,
- * because the labels of this run come back in whatever language the request suggests: a Russian plan
- * pasted in here produced layer names in Chinese, which then travelled into file names and the sheet.
- * The vendor also warns that a long prompt can cost the OCR result, so the plan never travels here —
- * the measurer reads it in the second pass, where it belongs.
+ * An optional brief for the decomposition call. It is NOT sent by default: the vendor states that with
+ * `text_recognition: true` a prompt can cost the OCR result, and the OCR is what this pipeline measures
+ * with (the line frames, the font style, the copy). When a caller does pass one, this is the wording
+ * that keeps names and descriptions in Latin script — a Russian plan pasted in here once came back
+ * with layer names in Chinese.
  */
 export const LAYER_PROMPT = 'Split this interface screenshot into its visual layers: background, panels, cards, images, icons, and every text block on its own. '
     + 'Name and describe each layer in English, using Latin letters, digits and hyphens only (nav-logo, hero-badge, price-card-1). '
@@ -54,6 +64,67 @@ export const LAYER_PROMPT = 'Split this interface screenshot into its visual lay
 
 /** A region this small is not an object, and seedream cannot cut anything out of it. */
 const MIN_CROP_SIDE = 32;
+
+/**
+ * The tight frame around the text a layer carries.
+ * `bounding_box` of a layer is an area the generation model drew around the whole object, and it is
+ * padded: measured on a real page, a heading layer was 644×597 where the glyphs occupy 604×410, and a
+ * row of social icons came back 296×296 for a 34 px control. That padding is exactly the phantom
+ * spacing a coder ends up writing. `text_recognition.lines[].bounding_box` is documented as a frame
+ * of the line in the same coordinates and is the only geometry in this answer that hugs the content,
+ * so a text layer is narrowed to the union of its lines.
+ * @param {object[]} lines the OCR lines of one layer
+ * @param {object} box the layer box the lines are claimed to sit in
+ * @returns {object|null} the tighter box, or null when the lines do not describe a subset of it
+ * @ai.hint pure
+ */
+function textBoxUnion(lines, box) {
+    const boxes = lines.map((line) => line?.box).filter((item) => item?.width > 0 && item?.height > 0);
+    if (!boxes.length) return null;
+    const left = Math.min(...boxes.map((item) => item.x));
+    const top = Math.min(...boxes.map((item) => item.y));
+    const right = Math.max(...boxes.map((item) => item.x + item.width));
+    const bottom = Math.max(...boxes.map((item) => item.y + item.height));
+    const tight = { x: left, y: top, width: right - left, height: bottom - top };
+    // A union wider than the layer it belongs to means the line frames are not in the same frame as
+    // the layer box; guessing which of the two is right would invent geometry, so the layer wins.
+    const slack = 0.1 * Math.max(box.width, box.height);
+    if (tight.x < box.x - slack || tight.y < box.y - slack
+        || tight.x + tight.width > box.x + box.width + slack
+        || tight.y + tight.height > box.y + box.height + slack) return null;
+    return tight;
+}
+
+/**
+ * The typography the OCR already measured, so the measurer verifies a number instead of inventing one.
+ * `runs[].style` carries the family guess and the bold/italic flags, and the line frames give the two
+ * numbers a picture cannot easily yield: the height of a line of glyphs and the step between lines.
+ * Everything the vendor does not state stays null.
+ * @param {object[]} lines
+ * @returns {object|null}
+ * @ai.hint pure
+ */
+function typographyFromLines(lines) {
+    const styled = lines.flatMap((line) => (Array.isArray(line?.runs) ? line.runs : [])
+        .map((run) => run?.style).filter((style) => style && typeof style === 'object'));
+    const boxes = lines.map((line) => line?.box).filter((item) => item?.width > 0 && item?.height > 0)
+        .sort((a, b) => a.y - b.y);
+    if (!styled.length && !boxes.length) return null;
+    const first = styled[0] ?? {};
+    const lineHeight = boxes.length >= 2
+        ? Math.round(boxes.slice(1).reduce((sum, box, i) => sum + (box.y - boxes[i].y), 0) / (boxes.length - 1))
+        : null;
+    return {
+        role: 'text',
+        family: String(first.similar_font_family ?? '').trim(),
+        familyConfidence: String(first.similar_font_family ?? '').trim() ? 'low' : 'unknown',
+        fontSize: boxes.length ? Math.round(Math.min(...boxes.map((box) => box.height))) : null,
+        weight: typeof first.bold === 'boolean' ? (first.bold ? 700 : 400) : null,
+        lineHeight,
+        letterSpacing: null,
+        style: first.italic === true ? 'italic' : '',
+    };
+}
 
 /**
  * A file-name slug both the filesystem and the model can read. The gateway names layers in any script
@@ -83,47 +154,34 @@ function layerLabel(name, index) {
 }
 
 /**
- * Boxes are reported in the frame of the base image the task produced, and `size: auto` still rescales
- * that base — an input under 1K is enlarged, one over 2K is shrunk, and a long landing page always is.
- * The harness cuts every crop from the reference file, so a box left in the base frame lands up and
- * left of the element it names and the crop comes back a zoomed fragment of the wrong place. This
- * converts the geometry into the reference frame, which is the one the measurer, `crop_image` and the
- * staged crops all speak.
- * @param {object[]} layers
+ * What the two frames the answer speaks about are, and whether they disagree.
+ * `sizes[0]` is the pixel size of the base PNG the task produced (`size: auto` rescales the input to
+ * a tier: a 1024×768 page comes back as 1182×887), while `bounding_box.absolute` is read in the frame
+ * of the picture that was sent. Measured on a real decomposition: the boxes of a 1024×768 reference
+ * land within a few tens of pixels of the element when used as they arrive, and every one of them
+ * slides a further 13% up and left when divided by the base ratio. So the boxes are kept as they are
+ * and the difference is only reported — the measurer is the one who reads the final numbers.
  * @param {{width:number,height:number}|null} baseFrame
  * @param {{width:number,height:number}|null} refFrame
- * @returns {{ layers: object[], scale: {x:number,y:number}|null }}
+ * @returns {{width:number,height:number}|null} the disagreement, or null when there is nothing to say
  * @ai.hint pure
  */
-function toReferenceFrame(layers, baseFrame, refFrame) {
+function frameMismatch(baseFrame, refFrame) {
     const bw = baseFrame?.width;
     const bh = baseFrame?.height;
-    if (!bw || !bh || !refFrame?.width || !refFrame?.height) return { layers, scale: null };
-    const x = refFrame.width / bw;
-    const y = refFrame.height / bh;
-    if (Math.abs(x - 1) < 0.01 && Math.abs(y - 1) < 0.01) return { layers, scale: null };
-    const scale = { x, y };
-    const moved = layers.map((layer) => {
-        if (!layer?.box) return layer;
-        const box = layer.box;
-        return {
-            ...layer,
-            box: {
-                x: Math.round(box.x * x),
-                y: Math.round(box.y * y),
-                width: Math.max(1, Math.round(box.width * x)),
-                height: Math.max(1, Math.round(box.height * y)),
-            },
-        };
-    });
-    return { layers: moved, scale };
+    if (!bw || !bh || !refFrame?.width || !refFrame?.height) return null;
+    if (Math.abs(bw - refFrame.width) / refFrame.width < 0.02 && Math.abs(bh - refFrame.height) / refFrame.height < 0.02) return null;
+    return { width: bw, height: bh };
 }
 
 /**
  * Regions worth a paid generation, in the order they should spend the budget.
- * The gateway hands back the same object as two layers (an icon and its shadow), and each duplicate
- * used to be cropped, sent and billed for the very same picture; a box reaching outside the frame
- * makes ImageMagick pad the crop, which misaligns it again; and a sliver contains no object at all.
+ * A seedream box is an area, not a measurement: on a real reference it came out padded around the
+ * object and shifted up-left by up to a tenth of the frame, so a cut along its edges loses part of
+ * what it names. Every box therefore grows by a margin before it is cut. The same object also comes
+ * back as several layers (an icon, its shadow, the text on it), and each duplicate used to be
+ * cropped, sent and billed for the very same picture, so a region whose box is the same area one
+ * already on the list is dropped instead of paying twice for one fragment.
  * @param {object[]} regions
  * @param {{width:number,height:number}|null} frame
  * @param {number} limit
@@ -131,27 +189,43 @@ function toReferenceFrame(layers, baseFrame, refFrame) {
  * @ai.hint pure
  */
 function cropTargets(regions, frame, limit) {
-    const seen = new Set();
     const targets = [];
     for (const region of regions) {
         const box = region?.box;
         if (!box) continue;
         let { x, y, width, height } = box;
+        const asked = Math.max(1, Math.max(0, width) * Math.max(0, height));
+        const margin = Math.round(0.08 * Math.max(width, height));
+        x -= margin;
+        y -= margin;
+        width += margin * 2;
+        height += margin * 2;
         if (frame?.width && frame?.height) {
             x = Math.max(0, Math.round(x));
             y = Math.max(0, Math.round(y));
             width = Math.min(Math.round(width), frame.width - x);
             height = Math.min(Math.round(height), frame.height - y);
         } else {
-            x = Math.round(x);
-            y = Math.round(y);
+            x = Math.max(0, Math.round(x));
+            y = Math.max(0, Math.round(y));
             width = Math.round(width);
             height = Math.round(height);
         }
         if (!(width >= MIN_CROP_SIDE) || !(height >= MIN_CROP_SIDE)) continue;
-        const key = `${x}:${y}:${width}:${height}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
+        // A box that loses most of itself outside the frame is a geometry error of the model, not an
+        // object touching the edge; the corner that survives holds nothing worth paying for.
+        if (width * height < 0.5 * asked) continue;
+        const area = width * height;
+        const duplicate = targets.some((taken) => {
+            const other = taken.box;
+            const overlap = Math.max(0, Math.min(x + width, other.x + other.width) - Math.max(x, other.x))
+                * Math.max(0, Math.min(y + height, other.y + other.height) - Math.max(y, other.y));
+            // IoU, not containment: a small element inside a big panel is a different fragment and
+            // deserves its own cut, while an icon and its shadow are the same box paid for twice.
+            const union = area + other.width * other.height - overlap;
+            return union > 0 && overlap / union >= 0.6;
+        });
+        if (duplicate) continue;
         targets.push({ name: region.name, box: { x, y, width, height } });
     }
     // The biggest regions are the ones the measurer cannot read without a cut-out, so they go first.
@@ -287,24 +361,15 @@ function buildPartialSheet({ base, layers, ocr, baseImageBytes }, sourcePath) {
             gap: null,
             placement: '',
             css: '',
-            typography: null,
-            confidence: box ? 'high' : 'low',
+            typography: isText ? (layer.typography ?? typographyFromLines(Array.isArray(layer.text?.lines) ? layer.text.lines : [])) : null,
+            confidence: 'medium',
             source: sourcePath,
-            notes: `Layer ${layer.index}, z=${layer.z}, background: ${layer.background}`,
+            notes: `Layer ${layer.index}, z=${layer.z}, background: ${layer.background}; `
+                + (layer.tightened ? 'box tightened to the OCR line frames' : 'box approximate'),
             use: isText ? 'copy text content, font styling' : 'crop as artwork reference',
             crop: null,
         };
         if (isText) {
-            entry.typography = {
-                role: 'text',
-                family: '',
-                familyConfidence: 'unknown',
-                fontSize: null,
-                weight: null,
-                lineHeight: null,
-                letterSpacing: null,
-                style: '',
-            };
             entry.notes += `; text: ${String(layer.text.text).slice(0, 120)}`;
         }
         if (kind === 'transparent') {
@@ -322,9 +387,9 @@ function buildPartialSheet({ base, layers, ocr, baseImageBytes }, sourcePath) {
         summary: `Advanced decomposition: ${layers.length} layers from seedream-5.5`,
         source: sourcePath,
         unit: 'px',
-        units: { source: 'px', rootFontSize: 16, scale: null, preferred: ['rem', 'px', '%'], notes: 'Layer boxes from decomposition, not from visual reading.' },
+        units: { source: 'px', rootFontSize: 16, scale: null, preferred: ['rem', 'px', '%'], notes: 'Layer boxes come from a generation model: they are approximate areas, not measured edges.' },
         confidence: layers.filter((l) => l.box).length > layers.length * 0.5 ? 'medium' : 'low',
-        assumptions: ['Layer boxes were read by seedream-5.5, not by the measurer role.'],
+        assumptions: ['Layer boxes were read by seedream-5.5, a generation model, and are approximate: they are padded around the object and can sit tens of pixels off. The measurer must verify each box on the picture before it is trusted.'],
         canvas,
         elements,
         regions,
@@ -342,7 +407,7 @@ function buildPartialSheet({ base, layers, ocr, baseImageBytes }, sourcePath) {
  * @returns {Promise<{ sheet: object|null, cropPaths: string[], layers: object[], warnings: string[] }>}
  * @ai.hint io
  */
-export async function advancedMeasurePhase1({ root, workId, client, referencePath, prompt = LAYER_PROMPT,
+export async function advancedMeasurePhase1({ root, workId, client, referencePath, prompt = null,
     size = 'auto', maxLayers = 16, model = null, config, signal, notify }) {
     const warnings = [];
     const layers = [];
@@ -382,7 +447,7 @@ export async function advancedMeasurePhase1({ root, workId, client, referencePat
     try {
         decomposition = await decomposeLayers({
             client, channels, model: seedreamModel, source: { bytes: refBytes, mime: refMime },
-            prompt: prompt || LAYER_PROMPT, size, maxImages: maxLayers, textRecognition: true, signal, onPoll: (data) => {
+            prompt, size, maxImages: maxLayers, textRecognition: true, signal, onPoll: (data) => {
                 notify?.({ type: 'measure.progress', phase: 'decomposition', status: data.status, polls: data.polls, elapsedMs: data.elapsedMs });
             }, onWarn: (message) => notify?.({ type: 'warning', message }),
         });
@@ -398,21 +463,32 @@ export async function advancedMeasurePhase1({ root, workId, client, referencePat
         return { sheet: null, cropPaths, layers, warnings };
     }
 
-    // The boxes arrive in the frame of the returned base image, which the tier may have rescaled;
-    // every crop in this pipeline is cut from the reference file, so the geometry moves into that frame.
-    const { layers: placed, scale } = toReferenceFrame(decomposition.layers, decomposition.base?.size ?? null, refPixels ?? null);
-    if (!scale && decomposition.base?.size?.width && refPixels?.width
-        && (decomposition.base.size.width !== refPixels.width || decomposition.base.size.height !== refPixels.height)) {
-        warnings.push(`Размер базового изображения (${decomposition.base.size.width}x${decomposition.base.size.height}) не совпадает с референсом `
-            + `(${refPixels.width}x${refPixels.height}) и рамки слоёв не пересчитаны — кропы могут быть смещены.`);
+    // The boxes are read in the frame of the picture that was sent, so they are used as they arrive;
+    // the base PNG the task returns is only a rescaled copy of it, and its size is worth reporting
+    // because it tells the reader that the two frames of one answer are not the same picture.
+    const offFrame = frameMismatch(decomposition.base?.size ?? null, refPixels ?? null);
+    if (offFrame) {
+        warnings.push(`Базовое изображение разложения ${offFrame.width}x${offFrame.height}, референс ${refPixels.width}x${refPixels.height}: `
+            + 'рамки не совпадают, боксы слоёв остаются в кадре референса и требуют проверки по картинке.');
     }
     // The label is what reaches the file names, the sheet and the coder, so it stays readable ASCII.
-    const named = placed.map((layer) => ({
-        ...layer,
-        name: layerLabel(layer.name, layer.index),
-        description: undefined,
-        text: layer.text ? { text: layer.text.text, lines: layer.text.lines } : null,
-    }));
+    // A text layer is narrowed here, once, to the union of its OCR line frames: the layer's own box is
+    // padded around the object and that padding is what a coder ends up writing as spacing. The tighter
+    // frame is what the sheet, the layer list and the crops must all agree on.
+    const named = decomposition.layers.map((layer) => {
+        const lines = Array.isArray(layer.text?.lines) ? layer.text.lines : [];
+        const isText = layer.text && String(layer.text.text).trim();
+        const tight = isText ? textBoxUnion(lines, layer.box ?? {}) : null;
+        return {
+            ...layer,
+            name: layerLabel(layer.name, layer.index),
+            description: undefined,
+            box: tight ?? layer.box,
+            tightened: Boolean(tight),
+            typography: isText ? typographyFromLines(lines) : null,
+            text: layer.text ? { text: layer.text.text, lines: layer.text.lines } : null,
+        };
+    });
     const base = decomposition.base ? { ...decomposition.base, size: refPixels ?? decomposition.base.size } : null;
 
     // Download layers and save them.
@@ -448,9 +524,9 @@ export async function advancedMeasurePhase1({ root, workId, client, referencePat
 
     // Build partial sheet from layer geometry.
     const sheet = buildPartialSheet({ base, layers: named, ocr: decomposition.ocr ?? [], baseImageBytes: refBytes }, referencePath);
-    if (scale) {
-        sheet.assumptions.push(`Layer boxes were rescaled from the ${decomposition.base.size.width}x${decomposition.base.size.height} `
-            + `base image into the ${refPixels.width}x${refPixels.height} reference frame.`);
+    if (offFrame) {
+        sheet.assumptions.push(`The base image the task returned is ${offFrame.width}x${offFrame.height} while the reference file is `
+            + `${refPixels.width}x${refPixels.height}; the layer boxes belong to the reference frame and are approximate.`);
     }
 
     notify?.({ type: 'measure.pass', pass: 1, phase: 'advanced-decomposition', layers: layers.length, crops: cropPaths.length });
@@ -550,11 +626,12 @@ export function advancedMeasurerProfile(config) {
 export async function advancedMeasure({ root, workId, referencePath, plan = '', config,
     client, signal, notify }) {
     const seedreamModel = advancedImageModel(config ?? {});
-    // The plan is deliberately not sent to the decomposition call: the vision model answers in the
-    // language of the prompt, and a long Russian brief is what filled the layer names with CJK text.
+    // The decomposition runs without a brief: `text_recognition` is on, and the vendor warns that a
+    // prompt alongside it can cost the OCR — which is where the line frames and the font style come
+    // from. The plan is read by the measurer in the second pass, where it belongs.
     const result = await advancedMeasurePhase1({
         root, workId, client, referencePath,
-        prompt: LAYER_PROMPT,
+        prompt: null,
         size: 'auto',
         maxLayers: config.agent.advancedMaxLayers ?? 32,
         model: seedreamModel,

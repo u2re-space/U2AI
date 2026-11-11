@@ -470,6 +470,9 @@ export const defaults = Object.freeze({
          * the first phase produced count towards it. Advanced mode is slow, can be expensive, is
          * capped at no crop limit, and is not always available; when it is not, the run falls back to
          * `standard` and says so. The word `advanced` is printed red everywhere it appears.
+         * It turns on only when the user asks for it — by this key or by `--measurer-mode advanced`.
+         * Nothing in the harness ever picks it on its own, and any trouble on any of its stages hands
+         * the measurement back to `standard` instead of continuing with unverified numbers.
          */
         measurerMode: 'standard',       // standard | advanced
         advancedMaxLayers: 32,          // PNG layers one seedream-5.5 decomposition may return

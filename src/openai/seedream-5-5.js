@@ -199,9 +199,17 @@ function taskData(result) {
 
 /**
  * Read one layer's box in base-image pixels, from either box shape the vendor sends.
- * `absolute` is `[left, top, right, bottom]` in base pixels; `normalized` is the same frame on a
- * 0–1000 scale, which becomes pixels through the base size. A file's own pixel size is NOT the
- * base frame (every layer is rescaled to its tier independently), so it never enters here.
+ * `absolute` is `[left, top, right, bottom]`; `normalized` is the same frame on a 0–1000 scale, which
+ * becomes pixels through `baseFrame` (`x = left / 1000 * width`, per the documented formula).
+ *
+ * Which frame that is deserves a note, because the docs and a measured answer disagree. The docs say
+ * `absolute` is in pixels of the base image; the base PNG the task returns is rescaled to the tier
+ * (`size: auto` grows an input under 1K to 1K, so a 1024×768 page answers 1182×887). Measured on that
+ * page, a layer naming the right-hand panel reported left=829 while the panel starts at x=830 of the
+ * 1024-wide file — the box belongs to the frame of the picture that was SENT, not to the 1182-wide
+ * base file. Dividing by the base ratio moved every crop 13% up and left, so `absolute` is taken as it
+ * arrives and the file's own size never enters here. Both frames stay approximate: the measurer
+ * verifies the geometry on the picture.
  * @param {object|null|undefined} box
  * @param {{ width: number, height: number }|null} baseFrame
  * @returns {{ x: number, y: number, width: number, height: number }|null}
@@ -247,6 +255,34 @@ function parseSizes(value) {
 }
 
 /**
+ * The OCR of one text layer, kept close to the shape the vendor sends.
+ * `lines[].bounding_box` matters more than it looks: it is a tight frame around the glyphs, while the
+ * layer's own box is padded around the whole object. The line frames are the only coordinates in this
+ * answer that hug the content, so they are what the measurer can actually read a font size off.
+ * `runs[].style` carries the font family guess, the colour and the bold/italic flags — the fields the
+ * measurer would otherwise have to invent.
+ * @param {object|null|undefined} recognition
+ * @param {{ width: number, height: number }|null} baseFrame
+ * @returns {{text:string, lines: object[]}|null}
+ * @ai.hint pure
+ */
+function parseTextRecognition(recognition, baseFrame) {
+    if (!recognition || typeof recognition !== 'object') return null;
+    const lines = Array.isArray(recognition.lines) ? recognition.lines : [];
+    return {
+        text: String(recognition.text ?? ''),
+        lines: lines.map((line) => ({
+            text: String(line?.text ?? ''),
+            box: normalizeLayerBox(line?.bounding_box, baseFrame),
+            runs: (Array.isArray(line?.runs) ? line.runs : []).map((run) => ({
+                text: String(run?.text ?? ''),
+                style: run?.style && typeof run.style === 'object' ? run.style : null,
+            })),
+        })),
+    };
+}
+
+/**
  * Flatten one completed decomposition answer into layer records.
  * `url[]`, `sizes[]` and `layers[]` are index-aligned per the API contract; index 0 of `url` is the
  * base image and index 0 of `layers` carries its z_index (0). Metadata arrays may be absent when
@@ -272,9 +308,7 @@ export function parseLayerDecomposition(result) {
         out.base ??= { url: urls[0], size: baseFrame ?? { width: null, height: null } };
         for (let index = 1; index < urls.length; index++) {
             const layer = meta?.[index] ?? null;
-            const textRecognition = layer?.text_recognition && typeof layer.text_recognition === 'object'
-                ? { text: String(layer.text_recognition.text ?? ''), lines: Array.isArray(layer.text_recognition.lines) ? layer.text_recognition.lines : [] }
-                : null;
+            const textRecognition = parseTextRecognition(layer?.text_recognition, out.base.size);
             out.layers.push({
                 index,
                 z: Number.isFinite(layer?.z_index) ? layer.z_index : index,

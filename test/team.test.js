@@ -15,6 +15,7 @@ import { enabledToolNames } from '../src/agent/tool-specs.js';
 import { diffHunk, describeChangeSet } from '../src/agent/diff.js';
 import { overridesFrom } from '../src/commands/shared.js';
 import { startMockServer, TINY_PNG } from './helpers/mock-server.js';
+import { pngOf } from './helpers/png.js';
 import { encodeArtifacts } from '../src/encode/encode.ts';
 
 let server;
@@ -2528,7 +2529,7 @@ test('advanced measurer mode decomposes the reference first and verifies the she
     const events = [];
     const measureBodies = [];
     const imageBodies = [];
-    const picture = Buffer.from(TINY_PNG, 'base64');
+    const picture = pngOf(1000, 800);
     await writeFile(path.join(dir, 'mockup.png'), picture);
     // Layers travel as data URIs, so the test does not need a CDN to download them from.
     const layerUrl = `data:image/png;base64,${TINY_PNG}`;
@@ -2614,14 +2615,15 @@ test('advanced measurer mode decomposes the reference first and verifies the she
         assert.match(prompt, /Decomposed layers \(JSON\)/);
         assert.match(prompt, /Big headline/, 'the OCR of a layer reaches the measurer');
         assert.match(prompt, /"input_image"/, 'the cut layers are attached for verification');
+        const generations = imageBodies.filter((body) => !body.layer_decomposition);
         // Two layers plus, when ImageMagick is installed, the enhanced transparent crops.
         const attached = verify.input.flatMap((item) => item.content ?? []).filter((part) => part.type === 'input_image').length;
         assert.ok(attached >= 2, `both decomposed layers travel to the measurer, got ${attached}`);
+        if (generations.length) assert.ok(attached >= 3, 'enhanced crops were added to the measurer input');
         assert.ok(imageBodies.some((body) => body.layer_decomposition === true), 'the reference was decomposed by seedream-5.5');
         // The enhanced crops are generations, and a generation of this model answers a task: the day
         // they went back through the synchronous images route, every crop died on «не содержит ни
         // b64_json, ни url», so the absence of that warning is the regression this asserts.
-        const generations = imageBodies.filter((body) => !body.layer_decomposition);
         for (const body of generations) {
             assert.equal(body.background, 'transparent', 'a crop is asked for as a transparent cut');
             assert.equal(body.output_format, 'png');
@@ -2809,6 +2811,92 @@ test('advanced measurer mode falls back to the standard passes when decompositio
         assert.ok(events.some((event) => event.type === 'warning' && /перехожу на обычные проходы/.test(event.message)));
         assert.ok(events.some((event) => event.type === 'measure.pass' && event.phase === 'overview'), 'the standard pass still measures the reference');
         assert.equal(measureBodies.length, 1);
+    } finally {
+        await rm(dir, { recursive: true, force: true });
+    }
+});
+
+test('advanced measurer mode falls back to the standard passes when the verification pass returns no sheet', async () => {
+    // The decomposition is paid for and the layers are on disk, but an unverified sheet of a
+    // generation model's guesses is not a measurement: the ordinary passes have to run anyway.
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-measure-advanced-verify-'));
+    const events = [];
+    const measureBodies = [];
+    await writeFile(path.join(dir, 'mockup.png'), pngOf(1000, 800));
+    const layerUrl = `data:image/png;base64,${TINY_PNG}`;
+    imageScript = (body) => (body.layer_decomposition
+        ? { data: [{ task_id: 'task-adv' }] }
+        : { code: 200, data: [{ status: 'pending', task_id: 'task-crop' }] });
+    taskScript = ({ taskId }) => (taskId !== 'task-adv'
+        ? { data: { status: 'completed', result: { images: [{ url: [layerUrl], sizes: ['1024x1024'] }] } } }
+        : {
+            data: {
+                status: 'completed',
+                result: {
+                    images: [{
+                        url: [layerUrl, layerUrl],
+                        sizes: ['1000x800', '400x100'],
+                        layers: [
+                            { z_index: 0, name: 'base', background: 'opaque' },
+                            { z_index: 1, name: 'headline', background: 'transparent', bounding_box: { absolute: [40, 20, 440, 120] } },
+                        ],
+                    }],
+                },
+            },
+        });
+    detectCoder = true;
+    script = (body) => {
+        const role = roleOf(body);
+        if (role === 'answer') return { text: 'Нужен план.\nroute: plan' };
+        if (role === 'classifier') return { text: JSON.stringify({ label: 'normal' }) };
+        if (role === 'planner') {
+            return { text: JSON.stringify({ summary: 'стили по референсу', complexity: 'normal', steps: [{ goal: 'Создать styles.scss', details: '', verify: 'прочитать styles.scss' }], filesOfInterest: [], searchQueries: [], questionsForCollector: [], acceptanceCriteria: [], needsReview: false, imageNotes: null, risks: [] }) };
+        }
+        if (role === 'measurer') {
+            measureBodies.push(body);
+            if (String(body.instructions ?? '').includes('advanced mode')) return { text: 'Я посмотрел слои, но лист не вернул.' };
+            return { text: JSON.stringify({
+                summary: 's', source: 'mockup.png', unit: 'px',
+                units: { source: 'px', rootFontSize: 16, scale: null, preferred: ['rem'], notes: '' },
+                confidence: 'medium', assumptions: [], canvas: { x: 0, y: 0, width: 1000, height: 800 },
+                elements: [{
+                    name: 'headline', kind: 'text', box: { x: 40, y: 20, width: 400, height: 100 }, rotation: 0,
+                    borders: '', radius: null,
+                    padding: { top: null, right: null, bottom: null, left: null },
+                    margin: { top: null, right: null, bottom: null, left: null }, gap: null,
+                    spacing: '', placement: '', css: '', use: '', typography: null,
+                    confidence: 'medium', notes: '', crop: null,
+                }],
+                regions: [], rules: [], notes: '',
+            }) };
+        }
+        if (role === 'collector') return { text: JSON.stringify({ findings: [], answers: [], conventions: [], notes: '' }) };
+        if (role === 'memory') return { text: JSON.stringify({ taskSummary: 'x', memories: [] }) };
+        return { text: 'ok' };
+    };
+    const config = baseConfig();
+    config.memory = { ...defaults.memory, enabled: false };
+    config.imageModel = 'seedream-5.5';
+    config.agent = { ...config.agent, measurerMode: 'advanced', measurerPasses: 1 };
+    try {
+        const result = await runTeam({
+            client: client(), config, ledger: createLedger(), task: 'стили по референсу',
+            root: dir, approvalLevel: 'read', referencePaths: ['mockup.png'],
+            parts: [{ type: 'input_image', image: { path: 'mockup.png' } }],
+            emit: (event) => events.push(event),
+        });
+        assert.equal(result.status, 'completed', result.error?.message);
+        // The verification pass may be retried by the runner before it gives up; what matters is that
+        // the run did not stop on the unverified decomposition sheet and reached the ordinary pass.
+        const advancedCalls = measureBodies.filter((body) => /advanced mode/.test(String(body.instructions ?? '')));
+        const ordinaryCalls = measureBodies.filter((body) => !/advanced mode/.test(String(body.instructions ?? '')));
+        assert.ok(advancedCalls.length >= 1, 'the advanced verification pass ran first');
+        assert.ok(ordinaryCalls.length >= 1, `the ordinary pass ran after the verification failed: ${measureBodies.length} measurer calls`);
+        assert.match(JSON.stringify(ordinaryCalls[0].input), /Measurement pass 1/);
+        assert.ok(events.some((event) => event.type === 'warning' && /Проверка листа разложения не завершилась/.test(event.message)),
+            events.filter((e) => e.type === 'warning').map((e) => e.message).join(' / '));
+        const savedSheet = JSON.parse(await readFile(path.join(dir, '.tmp', result.workId, 'measurements.json'), 'utf8'));
+        assert.equal(savedSheet.elements[0].name, 'headline', 'the sheet of the ordinary pass is the one that is kept');
     } finally {
         await rm(dir, { recursive: true, force: true });
     }

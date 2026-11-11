@@ -28,7 +28,18 @@ function completedAnswer() {
                         {
                             z_index: 1, name: 'headline', background: 'transparent',
                             bounding_box: { absolute: [40, 20, 440, 120] },
-                            text_recognition: { text: 'Big headline', lines: [{ text: 'Big headline' }] },
+                            text_recognition: {
+                                text: 'Big headline',
+                                lines: [{
+                                    text: 'Big headline',
+                                    bounding_box: { absolute: [48, 24, 300, 64] },
+                                    runs: [{ text: 'Big headline', style: { similar_font_family: 'Inter', bold: true, foreground_color: '#FFFFFF' } }],
+                                }, {
+                                    text: 'second line',
+                                    bounding_box: { absolute: [48, 68, 300, 108] },
+                                    runs: [{ text: 'second line', style: { similar_font_family: 'Inter', bold: true } }],
+                                }],
+                            },
                         },
                         {
                             z_index: 2, name: 'badge', background: 'transparent',
@@ -89,14 +100,24 @@ test('a completed answer flattens into a base, layers with boxes, and OCR rows',
     const parsed = parseLayerDecomposition(completedAnswer());
     assert.deepEqual(parsed.base, { url: 'https://cdn.test/base.png', size: { width: 1000, height: 800 } });
     assert.equal(parsed.layers.length, 2);
-    assert.deepEqual(parsed.layers[0], {
-        index: 1, z: 1, name: 'headline', description: '', url: 'https://cdn.test/layer-1.png',
-        size: { width: 500, height: 400 }, background: 'transparent',
-        box: { x: 40, y: 20, width: 400, height: 100 },
-        text: { text: 'Big headline', lines: [{ text: 'Big headline' }] },
-    });
-    assert.deepEqual(parsed.layers[1].box, { x: 500, y: 400, width: 400, height: 200 });
-    assert.deepEqual(parsed.ocr, [{ layer: 1, text: 'Big headline', lines: [{ text: 'Big headline' }] }]);
+    assert.deepEqual(parsed.layers[0].box, { x: 40, y: 20, width: 400, height: 100 });
+    // The line frames and the run styles are what the measurer measures typography off, so they have to
+    // survive parsing in pixels and not as raw vendor objects.
+    assert.deepEqual(parsed.layers[0].text.lines.map((line) => line.box), [
+        { x: 48, y: 24, width: 252, height: 40 },
+        { x: 48, y: 68, width: 252, height: 40 },
+    ]);
+    assert.equal(parsed.layers[0].text.lines[0].runs[0].style.similar_font_family, 'Inter');
+    assert.equal(parsed.layers[0].text.lines[0].runs[0].style.bold, true);
+    assert.equal(parsed.layers[1].box.x, 500, 'a normalized box becomes pixels through the base frame');
+    assert.deepEqual(parsed.ocr.map((row) => row.text), ['Big headline']);
+});
+
+test('OCR lines without a frame or a style still parse, as nulls rather than guesses', () => {
+    const answer = completedAnswer();
+    answer.data.result.images[0].layers[1].text_recognition = { text: 'plain', lines: [{ text: 'plain' }] };
+    const line = parseLayerDecomposition(answer).layers[0].text.lines[0];
+    assert.deepEqual(line, { text: 'plain', box: null, runs: [] });
 });
 
 test('a layer whose metadata array does not line up keeps a null box instead of a guess', () => {

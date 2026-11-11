@@ -1410,7 +1410,6 @@ export async function runTeam({
                                 }
                             }
                             if (advanced?.sheet) {
-                                sheet = advanced.sheet;
                                 for (const warning of advanced.warnings ?? []) notify({ type: 'warning', message: warning });
                                 // The layer images come first, in the order of the list below: attached
                                 // pictures carry no names, so the sheet can only match them by position.
@@ -1426,7 +1425,7 @@ export async function runTeam({
                                         continue;
                                     }
                                     const box = layer.box ?? {};
-                                    layerLines.push(`- attachment ${layerParts.length}: layer ${layer.index} (z=${layer.z}${layer.name ? `, "${layer.name}"` : ''}) — ${layer.localPath} (${box.width ?? '?'}×${box.height ?? '?'} at ${box.x ?? '?'},${box.y ?? '?'})${layer.text?.text ? `; text: ${String(layer.text.text).slice(0, 80)}` : ''}`);
+                                    layerLines.push(`- attachment ${layerParts.length}: layer ${layer.index} (z=${layer.z}${layer.name ? `, "${layer.name}"` : ''}) — ${layer.localPath} (${box.width ?? '?'}×${box.height ?? '?'} at ${box.x ?? '?'},${box.y ?? '?'}; ${layer.tightened ? 'box tightened to the OCR line frames' : 'box approximate: verify it on the picture'})${layer.text?.text ? `; text: ${String(layer.text.text).slice(0, 80)}` : ''}`);
                                 }
                                 const enhancedLines = [];
                                 for (const crop of advanced.cropPaths ?? []) {
@@ -1445,30 +1444,43 @@ export async function runTeam({
                                             layerLines.length ? `# Decomposed layers (JSON)\n${JSON.stringify(advanced.sheet)}\n\n# Layer images, in attachment order\n${layerLines.join('\n')}` : '',
                                             enhancedLines.length ? `\n# Enhanced transparent crops\n${enhancedLines.join('\n')}` : '',
                                         ].filter(Boolean).join('\n');
-                                notify({ type: 'measure.pass', pass: 2, phase: 'advanced-verify', layers: layerLines.length, enhanced: enhancedLines.length, reasoningMode: proReasoning ? 'pro' : null });
-                                measured = await measureRun({
-                                    pass: 2,
-                                    instructions: ROLE_INSTRUCTIONS.measurerAdvanced,
-                                    reasoningMode: proReasoning ? 'pro' : null,
-                                    parts: layerParts.length ? layerParts : attachments.parts,
-                                    text: `${measureContext}\n\n# Advanced measurement pass — verification\n${measurePlan}\n\n` +
-                                        'The reference has already been decomposed into layers by Seedream 5.5; the sheet above carries the boxes it read. ' +
-                                        'Verify every box against the layer image it names, keep the numbers that hold, correct the ones that do not, and fill ' +
-                                        'the fields decomposition cannot know (typography, padding, gaps, radius, CSS). Add the elements the decomposition missed ' +
-                                        'and mark a semi-transparent layer that needs redrawing with crop_image. Return the complete final sheet, not a delta.' +
-                                        attachmentBlock + subReferenceBlock + layerBlock,
-                                    maxTurns: fragmentTurns,
-                                    session: createSession({ store: false, model }),
-                                });
-                                if (HARD_STOP.has(measured.status) && measured.status !== 'failed') return { exit: stop(measured, 'замеры') };
-                                // A failed verification pass must not throw away the decomposition sheet.
-                                if (measured.data) sheet = measured.data;
-                                else if (measured.status !== 'completed') notify({ type: 'warning', message: `Проверка листа разложения не завершена (${measured.status}); остаётся лист seedream-5.5.` });
-                                stagedCrops = await stageMeasurementCrops({
-                                    root, workId: work.id, sheet, referencePaths,
-                                    subReferences: screenReferences.files, measureSource, config,
-                                    maxCrops: advancedCropLimit, signal,
-                                });
+                                if (!layerParts.length) {
+                                    // A sheet whose layers never reached the model cannot be verified by
+                                    // looking at anything, so the advanced branch stops here and the
+                                    // ordinary passes take the measurement.
+                                    notify({ type: 'warning', message: 'Advanced-режим замеров: ни один слой не приложен проверщику — перехожу на обычные проходы.' });
+                                } else {
+                                    notify({ type: 'measure.pass', pass: 2, phase: 'advanced-verify', layers: layerLines.length, enhanced: enhancedLines.length, reasoningMode: proReasoning ? 'pro' : null });
+                                    measured = await measureRun({
+                                        pass: 2,
+                                        instructions: ROLE_INSTRUCTIONS.measurerAdvanced,
+                                        reasoningMode: proReasoning ? 'pro' : null,
+                                        parts: layerParts,
+                                        text: `${measureContext}\n\n# Advanced measurement pass — verification\n${measurePlan}\n\n` +
+                                            'The reference has already been decomposed into layers by Seedream 5.5; the sheet above carries the areas it read. ' +
+                                            'Those areas are approximate — a generation model drew them, they are padded around the object and can sit tens of pixels off. ' +
+                                            'Verify every box on the picture with view_image or crop_image before you keep it, correct the ones that do not line up, and fill ' +
+                                            'the fields decomposition cannot know (typography, padding, gaps, radius, CSS). Add the elements the decomposition missed ' +
+                                            'and mark a semi-transparent layer that needs redrawing with crop_image. Return the complete final sheet, not a delta.' +
+                                            attachmentBlock + subReferenceBlock + layerBlock,
+                                        maxTurns: fragmentTurns,
+                                        session: createSession({ store: false, model }),
+                                    });
+                                    if (HARD_STOP.has(measured.status) && measured.status !== 'failed') return { exit: stop(measured, 'замеры') };
+                                    // The verified sheet is the only thing the advanced branch hands on. An
+                                    // unverified decomposition sheet is a paid experiment, not a measurement,
+                                    // so the run falls back to the ordinary passes instead of shipping it.
+                                    if (measured.data) {
+                                        sheet = measured.data;
+                                        stagedCrops = await stageMeasurementCrops({
+                                            root, workId: work.id, sheet, referencePaths,
+                                            subReferences: screenReferences.files, measureSource, config,
+                                            maxCrops: advancedCropLimit, signal,
+                                        });
+                                    } else {
+                                        notify({ type: 'warning', message: `Проверка листа разложения не завершилась (${measured.status}); перехожу на обычные проходы.` });
+                                    }
+                                }
                             } else if (attachments.parts.length) {
                                 notify({ type: 'warning', message: 'Advanced-режим замеров не вернул лист — перехожу на обычные проходы.' });
                             }

@@ -4,7 +4,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
-import { canRunAdvanced, advancedImageModel, shouldUseReasoningPro, advancedMeasurerProfile, advancedMeasurePhase1, advancedEnhanceCrops, advancedMeasure, LAYER_PROMPT } from '../src/agent/advanced.js';
+import { canRunAdvanced, advancedImageModel, shouldUseReasoningPro, advancedMeasurerProfile, advancedMeasurePhase1, advancedEnhanceCrops, advancedMeasure } from '../src/agent/advanced.js';
 import { detectMagick } from '../src/agent/image-magick.js';
 import { SEEDREAM_MODEL } from '../src/openai/seedream-5-5.js';
 import { TINY_PNG } from './helpers/mock-server.js';
@@ -102,10 +102,11 @@ test('phase 1 turns one decomposition answer into a sheet, layer files, and OCR 
         assert.equal(sheet.elements.length + sheet.regions.length, 2);
         const headline = [...sheet.elements, ...sheet.regions].find((item) => item.name === 'headline');
         assert.deepEqual(headline.box, { x: 40, y: 20, width: 400, height: 100 });
-        assert.equal(headline.confidence, 'high', 'the box was read by the decomposition model');
+        assert.equal(headline.confidence, 'medium', 'a box a generation model drew is a hint, not a measurement');
+        assert.match(headline.notes, /box approximate/);
         assert.match(headline.notes, /text: Big headline/);
         assert.match(sheet.notes, /OCR на нескольких слоях/);
-        assert.deepEqual(sheet.assumptions, ['Layer boxes were read by seedream-5.5, not by the measurer role.']);
+        assert.match(sheet.assumptions[0], /approximate/);
         assert.ok(events.some((event) => event.type === 'measure.pass' && event.phase === 'advanced-decomposition'));
     } finally {
         server.close();
@@ -268,7 +269,7 @@ test('phase 1 warns instead of throwing when the reference is missing or the tas
     }
 });
 
-test('phase 1 maps the boxes into the reference frame and keeps every name ASCII', async () => {
+test('phase 1 keeps the boxes in the reference frame and every name ASCII', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-advanced-frame-'));
     const bodies = [];
     const server = http.createServer((_req, res) => {
@@ -276,8 +277,9 @@ test('phase 1 maps the boxes into the reference frame and keeps every name ASCII
         res.end(TINY_PNG);
     });
     try {
-        // The file on disk is 500×400 while the tier answers about a 1000×800 base it rescaled the
-        // page to. Crops are cut from the file, so the boxes have to travel into that frame first.
+        // The file on disk is 500×400 while the tier answers a 1000×800 base it rescaled the page to.
+        // The boxes belong to the picture that was sent, so they stay where they are and the two
+        // frames are only reported: scaling them by 1000/500 moved every crop off its object.
         await writeFile(path.join(dir, 'ref.png'), pngOf(500, 400));
         await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
         const origin = `http://127.0.0.1:${server.address().port}`;
@@ -312,14 +314,15 @@ test('phase 1 maps the boxes into the reference frame and keeps every name ASCII
             root: dir, workId: 'w', client, referencePath: 'ref.png',
             config: { agent: { advancedMaxLayers: 12 } }, notify: () => {},
         });
-        assert.equal(bodies[0].prompt, LAYER_PROMPT, 'with no brief of its own the call asks for a layer decomposition in English');
+        assert.equal('prompt' in bodies[0], false, 'OCR is asked for, so no prompt travels with the decomposition');
         assert.equal(result.sheet.canvas.width, 500);
         assert.equal(result.sheet.canvas.height, 400);
         const item = [...result.sheet.elements, ...result.sheet.regions][0];
-        assert.deepEqual(item.box, { x: 100, y: 75, width: 300, height: 100 }, 'the box was halved into the frame of the file');
+        assert.deepEqual(item.box, { x: 200, y: 150, width: 600, height: 200 }, 'the box is used exactly as the model sent it');
         assert.match(item.name, /^[a-z0-9][a-z0-9-]*$/, 'a CJK layer name does not reach the sheet');
         for (const rel of result.cropPaths) assert.match(rel, /^\.tmp\/[\w./-]+$/, 'file names stay ASCII');
-        assert.match(result.sheet.assumptions.join(' '), /rescaled/);
+        assert.match(result.warnings.join(' '), /рамки не совпадают/);
+        assert.match(result.sheet.assumptions.join(' '), /base image the task returned is 1000x800/);
         assert.match(result.sheet.notes, /Купить/, 'the text the layer carries stays as evidence');
     } finally {
         server.close();
@@ -327,7 +330,7 @@ test('phase 1 maps the boxes into the reference frame and keeps every name ASCII
     }
 });
 
-test('advanced measure sends the English layer brief, never the Russian plan', async () => {
+test('advanced measure never sends the Russian plan to the decomposition call', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-advanced-prompt-'));
     const bodies = [];
     const server = http.createServer((_req, res) => {
@@ -353,8 +356,83 @@ test('advanced measure sends the English layer brief, never the Russian plan', a
             config: { agent: {} }, client, notify: () => {},
         });
         assert.ok(result.sheet);
-        assert.equal(bodies[0].prompt, LAYER_PROMPT, 'the decomposition brief is the fixed English one');
-        assert.doesNotMatch(bodies[0].prompt, /[\u0400-\u04FF]/, 'no Cyrillic reaches the vision model');
+        assert.equal('prompt' in bodies[0], false, 'the plan stays out of the vision call, which is what put Cyrillic into the layer names');
+    } finally {
+        server.close();
+        await rm(dir, { recursive: true, force: true });
+    }
+});
+
+test('a text layer is narrowed to its OCR lines and carries the style the OCR measured', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-advanced-tight-'));
+    const server = http.createServer((_req, res) => {
+        res.writeHead(200, { 'content-type': 'image/png' });
+        res.end(TINY_PNG);
+    });
+    try {
+        await writeFile(path.join(dir, 'ref.png'), pngOf(1000, 800));
+        await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+        const origin = `http://127.0.0.1:${server.address().port}`;
+        const client = {
+            async call(route) {
+                return route === 'images/generations'
+                    ? { data: [{ task_id: 'task-1' }] }
+                    : {
+                        data: {
+                            status: 'completed',
+                            result: {
+                                images: [{
+                                    url: [`${origin}/base.png`, `${origin}/hero.png`, `${origin}/note.png`],
+                                    sizes: ['1000x800', '600x400', '300x120'],
+                                    layers: [
+                                        { z_index: 0, name: 'base', background: 'opaque' },
+                                        {
+                                            // The area the generation model drew is padded around the glyphs by
+                                            // a quarter on each side; the line frames are the real geometry.
+                                            z_index: 1, name: 'hero-heading', background: 'transparent',
+                                            bounding_box: { absolute: [200, 100, 800, 620] },
+                                            text_recognition: {
+                                                text: 'Brand\nand Design',
+                                                lines: [
+                                                    {
+                                                        text: 'Brand', bounding_box: { absolute: [300, 150, 700, 250] },
+                                                        runs: [{ text: 'Brand', style: { similar_font_family: 'Inter', bold: true } }],
+                                                    },
+                                                    {
+                                                        text: 'and Design', bounding_box: { absolute: [300, 320, 760, 420] },
+                                                        runs: [{ text: 'and Design', style: { similar_font_family: 'Inter', bold: true } }],
+                                                    },
+                                                ],
+                                            },
+                                        },
+                                        {
+                                            z_index: 2, name: 'note', background: 'transparent',
+                                            bounding_box: { absolute: [100, 100, 400, 220] },
+                                            // A line frame outside the layer box means the two disagree, and
+                                            // guessing which is right would invent geometry.
+                                            text_recognition: { text: 'stray', lines: [{ text: 'stray', bounding_box: { absolute: [900, 700, 980, 760] } }] },
+                                        },
+                                    ],
+                                }],
+                            },
+                        },
+                    };
+            },
+        };
+        const result = await advancedMeasurePhase1({
+            root: dir, workId: 'w', client, referencePath: 'ref.png',
+            config: { agent: { advancedMaxLayers: 12 } }, notify: () => {},
+        });
+        const [hero, note] = result.sheet.elements;
+        assert.equal(hero.name, 'hero-heading');
+        assert.deepEqual(hero.box, { x: 300, y: 150, width: 460, height: 270 }, 'the padded area gave way to the union of the two lines');
+        assert.match(hero.notes, /box tightened to the OCR line frames/);
+        assert.equal(hero.typography.fontSize, 100, 'a line of glyphs is 100 px tall');
+        assert.equal(hero.typography.lineHeight, 170, 'the step between the two line tops');
+        assert.equal(hero.typography.weight, 700, 'bold came from the style flags');
+        assert.equal(hero.typography.family, 'Inter');
+        assert.deepEqual(note.box, { x: 100, y: 100, width: 300, height: 120 }, 'a layer whose lines leave its box keeps the box');
+        assert.match(note.notes, /box approximate/);
     } finally {
         server.close();
         await rm(dir, { recursive: true, force: true });

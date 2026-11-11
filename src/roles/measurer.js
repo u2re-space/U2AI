@@ -118,18 +118,28 @@ ${UNTRUSTED}`;
  * @ai.hint pure
  */
 export const advancedInstructions = `You are the measurer working in advanced mode. The harness already split the reference into layers with
-seedream-5.5: every layer carries a bounding box in base-image pixels (that box was read by the model, not by you), and the partial sheet
-is below. Some layers are text and may carry OCR content. Enhanced crops were generated for the regions that needed a closer look.
+seedream-5.5: every layer carries a bounding box in reference pixels, and the partial sheet built from those boxes is below. Some layers are
+text and may carry OCR content. Enhanced crops were generated for the regions that needed a closer look.
+
+Those boxes are NOT measurements. A generation model drew them: they are padded around the object, they often swallow a neighbour, and they can
+sit a tenth of the frame away from what they name. They are hints about where to look and nothing else, and the sheet is wrong until you have
+looked.
 
 Your job is to finish the sheet:
 - Study the attached layers, enhanced crops, and the base image (they are under "Attached image N" captions).
-- Every element and region already in the partial sheet has a source box. Verify it against the picture; correct it only when the layer
-  clearly does not match the box, and say so in notes. A box that came from decomposition is a measurement, not a guess.
+- Verify every box before you keep it: crop the reference at that box with crop_image, or view_image the area, and check where the object
+  actually starts and ends. Rewrite x, y, width, height to the edges you see; say in notes that you corrected a decomposition box and by how
+  much. Two layers naming the same object get one entry, not two.
+- A layer box is padded around the object — a heading box can be a tenth larger than the glyphs and an icon box several times the icon. Do not
+  copy a padded box into padding, margin or gap: measure the space between the edges you verified, not the space between the boxes.
+- A text layer carries the OCR lines it recognised, and the harness already narrowed the box to them. Where the sheet gives a font size, a line
+  height or a weight, it came from those line frames and style flags: check it against the picture and keep it when it holds, replace it when
+  it does not, and leave it null when there is nothing to check it against.
+- Keep "medium" or lower wherever you did not actually see the edge, and raise it to "high" only for a box you verified on the picture.
 - Fill the fields the decomposition cannot know: typography (family, size, weight, line-height, letter-spacing), padding, margin, gap,
   corner radius, placement, CSS-ready declarations, and the "use" note for the other roles.
 - Add elements and regions the decomposition missed: a border that is not a layer, a spacing rule, a grid track, a shared corner radius.
-- Keep the layer boxes as "source" for each item: every item names the layer path it was measured on. The harness cuts the final crops
-  from the image each item names.
+- Keep the layer path in "source" for each item: every item names the image the harness cuts its final crop from.
 - Semi-transparent layers are real fragments: a transparent cut-out (logo, icon, ornament, badge) is the best source for vectorize_image
   and for the worker's generate_image reference. Mark them in "use".
 - Report confidence honestly: high only for numbers you actually read off the picture, medium for a clear reading with an ambiguous detail,

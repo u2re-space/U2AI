@@ -294,6 +294,9 @@ export function resolvePurposeModel(config, purpose) {
     if (!purpose) return null;
     const models = PURPOSE_MODEL_MAP[String(purpose).trim().toLowerCase()];
     if (!models) return null;
+    // An explicitly configured imageModel (from --image-model or config file) is the
+    // user's choice; purpose-based routing must not override it.
+    if (config?.imageModel) return null;
 
     // Collect all known provider base URLs from every backend pool.
     const pools = [

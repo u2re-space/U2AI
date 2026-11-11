@@ -337,7 +337,8 @@ export const defaults = Object.freeze({
         decomposer       : r({ model: 'moonshotai/kimi-k3.1-pro', effort: 'xhigh' }),
         designer         : r({ model: 'moonshotai/kimi-k3.1-pro', effort: 'xhigh' }),
         worker           : r({ model: 'moonshotai/kimi-k3.1-pro', effort: 'xhigh' }),
-        'image-processor': r({ model: "moonshotai/kimi-k3.1-pro", effort: 'xhigh' }),
+        //'image-processor': r({ model: "moonshotai/kimi-k3.1-pro", effort: 'xhigh' }),
+        'image-processor': r({ model: "gpt-6-luna", effort: 'xhigh' }),
         reviewer : r({ model: "gpt-6.1-terra",
             tiers: [
                 { model: 'gpt-6.1-terra', effort: ['medium', 'high', 'xhigh'] }, // check (review tier)

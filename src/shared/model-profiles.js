@@ -181,21 +181,21 @@ export const PURPOSE_MODEL_MAP = Object.freeze({
     decompose: Object.freeze([
         PROXY_RIVERFLOW_MODEL,   // fallback if gpt-image-2.6-* refuses
         PROXY_IMAGE_MODEL,  // default
-        SEEDREAM_5_5,    // if available
+        'seedream-5-5',    // if available
     ]),
     isolate: Object.freeze([
-        SEEDREAM_5_5,    // best at subject isolation
+        'seedream-5-5',    // best at subject isolation
         PROXY_IMAGE_MODEL,  // min 655360 px or seedream unavailable
         PROXY_RIVERFLOW_MODEL,   // only if explicitly enabled
     ]),
     upscale: Object.freeze([
         PROXY_IMAGE_MODEL,  // when target is 655360+ px or 1K+
-        SEEDREAM_5_5,    // around 512×512 or < 655360
+        'seedream-5-5',    // around 512×512 or < 655360
         PROXY_RIVERFLOW_MODEL,   // fallback when opaque + seedream unavailable
     ]),
     generate: Object.freeze([
         PROXY_RIVERFLOW_MODEL,   // mainly for opaque output
         PROXY_IMAGE_MODEL,  // from 1K resolution
-        SEEDREAM_5_5,    // if available
+        'seedream-5-5',    // if available
     ]),
 });

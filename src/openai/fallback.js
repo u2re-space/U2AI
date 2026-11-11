@@ -67,7 +67,7 @@ export function modelMissing(error) {
     const code = String(error?.apiCode ?? '');
     if (/model_not_found|model_not_available|invalid_model|unknown_model/i.test(code)) return true;
     if (error?.param === 'model') return true;
-    return /model.{0,40}(not found|does not exist|unavailable|unknown|недоступ|не найден)/i.test(String(error?.message ?? ''));
+    return /model.{0,40}(not found|does not exist|unavailable|unknown|недоступ|не найден|not allowed|not supported|не поддержив)/i.test(String(error?.message ?? ''));
 }
 
 /**
@@ -80,6 +80,40 @@ export function modelMissing(error) {
 export function providerDown(error) {
     if (['NETWORK_ERROR', 'TIMEOUT', 'CONNECT_TIMEOUT'].includes(error?.code)) return true;
     return [401, 402, 403, 404, 408, 425, 429, 500, 502, 503, 504].includes(error?.status);
+}
+
+/**
+ * A reasoning item encrypted by one host cannot be decrypted by another: the item travels in the
+ * replayed history, so a conversation started on host A fails on host B with a 400 that names the
+ * item id. The reply is not a provider failure and not a missing model — it is the request carrying
+ * something only the first host can read.
+ * @param {Error & { status?: number }} error
+ * @returns {boolean}
+ * @exports
+ * @ai.hint pure
+ */
+export function encryptedContentRejected(error) {
+    return /encrypted content/i.test(String(error?.message ?? ''))
+        && /could not be (verified|decrypted|parsed)|failed to decrypt|unable to decrypt|not decryptable/i.test(String(error?.message ?? ''));
+}
+
+/**
+ * The request body with everything only its origin host can read taken out: the encrypted reasoning
+ * items of the replayed history and the response id that points at them. The conversation keeps its
+ * text, tool calls and pictures — only the encrypted reasoning chain is dropped, which costs the
+ * model its own earlier thinking and nothing the user asked for.
+ * @param {object} body
+ * @returns {object}
+ * @exports
+ * @ai.hint pure
+ */
+export function dropEncryptedReasoning(body) {
+    const next = { ...body };
+    delete next.previous_response_id;
+    if (Array.isArray(next.input)) {
+        next.input = next.input.filter((item) => !(item?.type === 'reasoning' && item.encrypted_content));
+    }
+    return next;
 }
 
 /**
@@ -308,7 +342,15 @@ export async function attemptChain({ endpoints, model, map, send, onWarn = () =>
  */
 function adaptBody(body, model, switchedHost) {
     const next = { ...body, model };
-    if (switchedHost) delete next.previous_response_id;
+    if (switchedHost) {
+        delete next.previous_response_id;
+        // A reasoning item encrypted by one host cannot be decrypted by another:
+        // the item travels in the replayed history, so a conversation started on
+        // host A fails on host B with a 400 that names the item id.
+        if (Array.isArray(next.input)) {
+            next.input = next.input.filter((item) => !(item?.type === 'reasoning' && item.encrypted_content));
+        }
+    }
     if (!isReasoningModel(model)) delete next.reasoning;
     if (next.text && typeof next.text === 'object' && !supportsVerbosity(model)) {
         const text = { ...next.text };
@@ -456,19 +498,52 @@ export function createFallbackClient(config, { create = createClient } = {}) {
             model: body?.model ?? config.model,
             map,
             onWarn: (message) => { try { options?.onEvent?.({ type: 'warning', message }); } catch { /* observer */ } },
-            send: (endpoint, model, switchedHost) => {
+            send: async (endpoint, model, switchedHost) => {
                 active = endpoint.client;
                 const next = adaptBody(body ?? {}, model, switchedHost);
                 next.model = rewriteModel(model, endpoint.modelRewrite);
                 if (kind === 'images') return endpoint.client.images.generate({ ...next, signal: options?.signal });
                 if (kind === 'images-edit') return endpoint.client.images.edit({ ...next, signal: options?.signal });
                 if (kind === 'images-vector') return endpoint.client.images.vectorize({ ...next, signal: options?.signal });
-                return endpoint.client.responses.create(next, options);
+                // Responses: a replayed reasoning item encrypted by another host (or by an earlier
+                // key of this same host) is refused with a 400 that names the item id. `switchedHost`
+                // already dropped those items; this retry covers a session resumed from disk, where
+                // the first host in the chain is not the host that encrypted the items.
+                try {
+                    return await endpoint.client.responses.create(next, options);
+                } catch (error) {
+                    if (!encryptedContentRejected(error)) throw error;
+                    try {
+                        options?.onEvent?.({ type: 'warning', message: 'Зашифрованные reasoning-предметы из истории отклонены хостом; повторяю без них.' });
+                    } catch { /* observer */ }
+                    return endpoint.client.responses.create(dropEncryptedReasoning(next), options);
+                }
             },
         });
     };
     const seedreamImage = async (args, edit = false) => {
+        // Route seedream through the primary client so padding, div16, and size-hint
+        // logic in `client.js` runs before `generateTransparentLayer` is called.
+        // The primary client already knows about the model profile and applies
+        // pre-padding / remove-padding correctly.
         const { generateTransparentLayer } = await import('./seedream-5-5.js');
+        if (edit && (args.files?.length)) {
+            // Build the channel chain from modelsBackends (or the images pool) so the
+            // request walks every backend that can serve seedream, not just the primary.
+            const channels = endpoints('images', args.model).map((endpoint) => ({
+                label: endpoint.label, client: endpoint.client,
+                modelFor: (name) => rewriteModel(name, endpoint.modelRewrite),
+            }));
+            // Call the primary client's edit which applies padding first, then
+            // delegates to generateTransparentLayer for seedream internally.
+            // `channels` is forwarded so the seedream task walks the host chain.
+            return primary.images.edit({
+                model: args.model, prompt: args.prompt, files: args.files,
+                size: args.size, format: args.format, background: args.background, signal: args.signal,
+                channels, onWarn: (message) => { try { args.onEvent?.({ type: 'warning', message }); } catch { /* observer */ } },
+            });
+        }
+        // Generation path (no source image): apply padding manually then delegate.
         const references = edit
             ? (args.files ?? []).map((file) => `data:${file.mime || 'image/png'};base64,${Buffer.from(file.bytes).toString('base64')}`)
             : (Array.isArray(args.references) ? args.references : []);

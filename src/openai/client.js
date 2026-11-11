@@ -725,7 +725,7 @@ export function createClient({
             return vector ? payloads : fitPayloadsToFrame(payloads, size);
         },
         /** POST /images/edits as multipart form data. `files` are { filename, mime, bytes }. */
-        async edit({ model, prompt, files, size, format, background, complexity, resolution, signal } = {}) {
+        async edit({ model, prompt, files, size, format, background, complexity, resolution, signal, channels = null, onWarn = null } = {}) {
             const vector = isSvgRequest({ model, format });
             let requestFiles = files;
             let padding = null;
@@ -777,8 +777,18 @@ export function createClient({
             }
             if (isSeedream55(model)) {
                 const references = (requestFiles ?? []).map((file) => `data:${file.mime || 'image/png'};base64,${Buffer.from(file.bytes).toString('base64')}`);
+                // Seedream draws a free frame and does not reliably upscale a small source: asked for a
+                // bigger canvas it can leave the object at its own size in the top-left and paint the
+                // rest. When the source was padded to the model floor, say so in the prompt: the padding
+                // is cut off the reply again, so the object keeps its scale and nothing is resampled.
+                let seedreamPrompt = String(prompt ?? '');
+                if (padding?.padded) {
+                    seedreamPrompt = `${seedreamPrompt}\n\nKeep the source artwork at its original scale and position in the top-left corner `
+                        + `(${padding.originalWidth}x${padding.originalHeight} of a ${padding.width}x${padding.height} canvas); `
+                        + 'do not upscale, stretch, or recenter it. The empty area is padding and will be cropped away.';
+                }
                 const payloads = await generateTransparentLayer({
-                    client: { call }, model, prompt, references, size: requestedFrame, background, format, signal,
+                    client: { call }, channels, model, prompt: seedreamPrompt, references, size: requestedFrame, background, format, signal, onWarn,
                 });
                 if (!padding) return fitPayloadsToFrame(payloads, size);
                 const restored = await Promise.all(payloads.map(async (payload) => {

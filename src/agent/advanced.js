@@ -53,7 +53,7 @@ import { isSeedream55, decomposeLayers, generateTransparentLayer, downloadImageB
 import { imageModelFor } from '../openai/images.js';
 import { detectMagick, magickCrop, magickPadImageBytes, magickRemoveImagePadding, magickTrimImage } from './image-magick.js';
 import { rasterPadImageBytes, rasterRemoveImagePadding, rasterTrim } from './image-raster.js';
-import { paddedSizeToMinPixels } from '../shared/images.js';
+import { paddedSizeToMinPixels, paddedSizeToMinPixelsByResolution } from '../shared/images.js';
 import { readImageSize } from '../shared/images.js';
 
 /** Subdirectory where the advanced measurer writes decomposition artefacts. */
@@ -352,7 +352,7 @@ async function downloadLayerImage(url, signal) {
 async function padSeedreamInput(bytes, model, config, signal) {
     const original = readImageSize(bytes);
     if (!original?.width || !original?.height) return null;
-    const floor = paddedSizeToMinPixels(original, model);
+    const floor = paddedSizeToMinPixelsByResolution(original, model); // TODO! support not only 1k, but 2k canvas...
     const width = Math.max(Math.ceil(original.width / 16) * 16, floor?.width ?? 0);
     const height = Math.max(Math.ceil(original.height / 16) * 16, floor?.height ?? 0);
     if (width === original.width && height === original.height) {

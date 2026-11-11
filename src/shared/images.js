@@ -242,6 +242,158 @@ export function paddedSizeToMinPixels(size, model = null) {
     return { width, height, originalWidth: source.width, originalHeight: source.height };
 }
 
+//
+const PAD_RESOLUTIONS = ["512", "1k", "1.5k", "2k", "3k", "4k"];
+const PAD_ASPECT_RATIOS = [
+    "1:1",
+    "4:3",
+    "3:4",
+    "16:9",
+    "9:16",
+    "3:2",
+    "2:3",
+    "21:9",
+    "2:1",
+    "1:2"
+];
+
+/**
+ * Выбирает разрешённый aspect-ratio и resolution для кадра,
+ * в который исходник помещается без масштабирования.
+ *
+ * При одинаковой площади предпочтение отдаётся кадру, чьё фактическое
+ * соотношение сторон ближе к исходному.
+ *
+ * null означает: padding не нужен, вход некорректен или подходящий
+ * кадр найти не удалось.
+ *
+ * @param {string|{width:number,height:number}|null|undefined} size
+ * @param {string|null} [model]
+ * @param {string|null} [resolution] Tier или "auto"
+ * @returns {{
+ *   width:number,
+ *   height:number,
+ *   originalWidth:number,
+ *   originalHeight:number,
+ *   aspectRatio:string,
+ *   resolution:string
+ * }|null}
+ */
+export function paddedSizeToMinPixelsByResolution(
+    size,
+    model = null,
+    resolution = "1k"
+) {
+    const source = typeof size === "object" && size
+        ? { width: Number(size.width), height: Number(size.height) }
+        : parseImageSize(String(size ?? "").trim().replace(/\s+/g, ""));
+
+    if (
+        !source
+        || !Number.isSafeInteger(source.width)
+        || !Number.isSafeInteger(source.height)
+        || source.width <= 0
+        || source.height <= 0
+        || !Number.isSafeInteger(source.width * source.height)
+    ) {
+        return null;
+    }
+
+    const caps = imageModelProfile(model);
+    const sourceArea = source.width * source.height;
+
+    // Сохраняем семантику paddedSizeToMinPixels.
+    if (
+        !caps
+        || !Number.isFinite(caps.minPixels)
+        || caps.minPixels <= 0
+        || sourceArea >= caps.minPixels
+    ) {
+        return null;
+    }
+
+    const requestedResolution = String(resolution ?? "")
+        .trim()
+        .toLowerCase();
+
+    const isAuto = !requestedResolution || requestedResolution === "auto";
+
+    if (!isAuto && !PAD_RESOLUTIONS.includes(requestedResolution)) {
+        return null;
+    }
+
+    // Не даём normalizeImageSize незаметно подменить неподдерживаемый
+    // tier своим fallback на 1k.
+    const resolutions = (isAuto ? PAD_RESOLUTIONS : [requestedResolution])
+        .filter(tier => tierFromToken(tier, model));
+
+    if (!resolutions.length) return null;
+
+    const sourceRatio = source.width / source.height;
+    let best = null;
+
+    for (const tier of resolutions) {
+        for (const aspectRatio of PAD_ASPECT_RATIOS) {
+            const normalized = normalizeImageSize(aspectRatio, tier, model);
+            const frame = normalized ? parseImageSize(normalized) : null;
+
+            if (
+                !frame
+                || !Number.isSafeInteger(frame.width)
+                || !Number.isSafeInteger(frame.height)
+                || frame.width <= 0
+                || frame.height <= 0
+            ) {
+                continue;
+            }
+
+            const area = frame.width * frame.height;
+
+            if (
+                !Number.isSafeInteger(area)
+                || frame.width < source.width
+                || frame.height < source.height
+                || area < caps.minPixels
+                || area > caps.maxPixels
+                || Math.max(frame.width, frame.height) > caps.maxEdge
+                || Math.max(frame.width, frame.height)
+                    / Math.min(frame.width, frame.height) > caps.maxRatio
+            ) {
+                continue;
+            }
+
+            // Логарифм даёт симметричную оценку расхождения пропорций.
+            const ratioDistance = Math.abs(
+                Math.log((frame.width / frame.height) / sourceRatio)
+            );
+
+            if (
+                !best
+                || area < best.area
+                || (area === best.area && ratioDistance < best.ratioDistance)
+            ) {
+                best = {
+                    width: frame.width,
+                    height: frame.height,
+                    originalWidth: source.width,
+                    originalHeight: source.height,
+                    aspectRatio,
+                    resolution: tier,
+                    area,
+                    ratioDistance
+                };
+            }
+        }
+    }
+
+    if (!best) return null;
+
+    const { area, ratioDistance, ...result } = best;
+    return result;
+}
+
+
+
 export function parseImageSize(value) {
     const match = /^(\d+)\s*x\s*(\d+)$/.exec(value);
     if (!match) return null;

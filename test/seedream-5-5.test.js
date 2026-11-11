@@ -115,6 +115,11 @@ test('a completed answer flattens into a base, layers with boxes, and OCR rows',
     assert.equal(parsed.layers[0].text.lines[0].runs[0].style.bold, true);
     assert.equal(parsed.layers[1].box.x, 500, 'a normalized box becomes pixels through the base frame');
     assert.deepEqual(parsed.ocr.map((row) => row.text), ['Big headline']);
+    const padded = parseLayerDecomposition(completedAnswer(), { width: 1200, height: 960 });
+    assert.deepEqual(padded.layers[1].box, { x: 600, y: 480, width: 480, height: 240 },
+        'normalized boundary boxes use the verified padded request frame');
+    assert.deepEqual(padded.layers[0].box, parsed.layers[0].box,
+        'absolute pixel boxes stay in the original coordinate system');
 });
 
 test('OCR lines without a frame or a style still parse, as nulls rather than guesses', () => {

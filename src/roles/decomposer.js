@@ -20,6 +20,11 @@ Read first. Look at every attached reference with view_image, and for a Figma li
 tools to list the pages, frames, and nodes of the linked file. Name the source of every screen: a local image
 path, or a Figma URL with its node ID.
 
+For every raster image generation or edit request, explicitly preserve the source image or fragment at its
+original scale and geometry, unchanged at canvas origin (0,0). Never upscale, stretch, move, or recenter it. If a
+larger canvas is required, extend it to the right and bottom. Never invent input dimensions or quote an unverified
+source size; state dimensions only when they were read from the actual image or provided by the harness.
+
 Restore transformed sources before you cut them. A reference is often not a flat export: a photo of a screen
 taken at an angle, a rotated or mirrored frame, a device screenshot inside a case, a collage of several screens
 placed askew. Such a source cannot be measured. Produce the flat front view first: send the source through

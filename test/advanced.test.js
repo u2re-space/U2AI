@@ -79,7 +79,7 @@ test('phase 1 turns one decomposition answer into a sheet, layer files, and OCR 
         res.end(TINY_PNG);
     });
     try {
-        await writeFile(path.join(dir, 'ref.png'), TINY_PNG);
+        await writeFile(path.join(dir, 'ref.png'), pngOf(1000, 800));
         await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
         const origin = `http://127.0.0.1:${server.address().port}`;
         const client = {
@@ -91,7 +91,7 @@ test('phase 1 turns one decomposition answer into a sheet, layer files, and OCR 
             root: dir, workId: 'w', client, referencePath: 'ref.png',
             config: { agent: { advancedMaxLayers: 12 } }, notify: (event) => events.push(event),
         });
-        assert.deepEqual(result.warnings, []);
+        assert.match(result.warnings.join(' '), /Вход Seedream локально дополнен справа и снизу/);
         assert.equal(result.layers.length, 2, 'both layers carry a box, so both are kept');
         assert.equal(result.cropPaths.length, 2);
         for (const rel of result.cropPaths) {
@@ -122,7 +122,7 @@ test('phase 1 asks the backend that serves seedream, not the primary host', asyn
         res.end(TINY_PNG);
     });
     try {
-        await writeFile(path.join(dir, 'ref.png'), TINY_PNG);
+        await writeFile(path.join(dir, 'ref.png'), pngOf(1000, 800));
         await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
         const origin = `http://127.0.0.1:${server.address().port}`;
         const serving = {
@@ -251,7 +251,7 @@ test('phase 1 warns instead of throwing when the reference is missing or the tas
         assert.equal(missing.sheet, null);
         assert.match(missing.warnings.join('\n'), /Референс не найден|Файл референса не найден/);
 
-        await writeFile(path.join(dir, 'ref.png'), TINY_PNG);
+        await writeFile(path.join(dir, 'ref.png'), pngOf(1000, 800));
         const failed = await advancedMeasurePhase1({
             root: dir, workId: 'w',
             client: {
@@ -391,14 +391,16 @@ test('phase 1 keeps the boxes in the reference frame and every name ASCII', asyn
             root: dir, workId: 'w', client, referencePath: 'ref.png',
             config: { agent: { advancedMaxLayers: 12 } }, notify: () => {},
         });
-        assert.equal('prompt' in bodies[0], false, 'OCR is asked for, so no prompt travels with the decomposition');
+        assert.equal('prompt' in bodies[0], true, 'the generation request carries a source-geometry guard');
+        assert.match(bodies[0].prompt, /Preserve the source image or fragment at its original scale and geometry/);
+        assert.match(bodies[0].prompt, /500x400 pixels on a 1088x864 canvas/);
         assert.equal(result.sheet.canvas.width, 500);
         assert.equal(result.sheet.canvas.height, 400);
         const item = [...result.sheet.elements, ...result.sheet.regions][0];
         assert.deepEqual(item.box, { x: 200, y: 150, width: 600, height: 200 }, 'the box is used exactly as the model sent it');
         assert.match(item.name, /^[a-z0-9][a-z0-9-]*$/, 'a CJK layer name does not reach the sheet');
         for (const rel of result.cropPaths) assert.match(rel, /^\.tmp\/[\w./-]+$/, 'file names stay ASCII');
-        assert.match(result.warnings.join(' '), /рамки не совпадают/);
+        assert.match(result.warnings.join(' '), /Вход Seedream локально дополнен справа и снизу/);
         assert.match(result.sheet.assumptions.join(' '), /base image the task returned is 1000x800/);
         assert.match(result.sheet.notes, /Купить/, 'the text the layer carries stays as evidence');
     } finally {
@@ -407,7 +409,7 @@ test('phase 1 keeps the boxes in the reference frame and every name ASCII', asyn
     }
 });
 
-test('advanced measure never sends the Russian plan to the decomposition call', async () => {
+test('advanced measure sends only the source-geometry guard and never the Russian plan', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-advanced-prompt-'));
     const bodies = [];
     const server = http.createServer((_req, res) => {
@@ -433,7 +435,9 @@ test('advanced measure never sends the Russian plan to the decomposition call', 
             config: { agent: {} }, client, notify: () => {},
         });
         assert.ok(result.sheet);
-        assert.equal('prompt' in bodies[0], false, 'the plan stays out of the vision call, which is what put Cyrillic into the layer names');
+        assert.equal('prompt' in bodies[0], true, 'the geometry guard is sent even though the plan stays out');
+        assert.match(bodies[0].prompt, /Never guess or state unverified source dimensions/);
+        assert.doesNotMatch(bodies[0].prompt, /Русский план страницы/);
     } finally {
         server.close();
         await rm(dir, { recursive: true, force: true });

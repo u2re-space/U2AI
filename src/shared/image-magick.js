@@ -181,17 +181,21 @@ export async function magickPadImageBytes({ exe, bytes, signal, targetWidth = nu
     }
 }
 
-/** Remove only a matching right/bottom padding border; never resize generated pixels. */
-export async function magickRemoveImagePadding({ exe, bytes, width, height, originalWidth, originalHeight, signal }) {
+/** Remove the known right/bottom padding by its normalized boundary; never resize generated pixels. */
+export async function magickRemoveImagePadding({ exe, bytes, width, height, originalWidth, originalHeight, signal, normalized = false }) {
     if (width === originalWidth && height === originalHeight) return bytes;
     const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-image-unpad-'));
     const input = path.join(dir, 'input');
     try {
         await writeFile(input, bytes);
         const info = await magickIdentify({ exe, input, cwd: dir, signal });
-        if (info.width !== width || info.height !== height || originalWidth > width || originalHeight > height) return bytes;
+        if ((!normalized && (info.width !== width || info.height !== height))
+            || !info.width || !info.height || originalWidth > width || originalHeight > height) return bytes;
+        const cropWidth = normalized ? Math.round(info.width * originalWidth / width) : originalWidth;
+        const cropHeight = normalized ? Math.round(info.height * originalHeight / height) : originalHeight;
+        if (!cropWidth || !cropHeight || cropWidth > info.width || cropHeight > info.height) return bytes;
         const output = path.join(dir, `unpadded.${info.format.toLowerCase() || 'png'}`);
-        await magickRun(exe, [input, '-crop', `${originalWidth}x${originalHeight}+0+0`, '+repage', output], { cwd: dir, signal });
+        await magickRun(exe, [input, '-crop', `${cropWidth}x${cropHeight}+0+0`, '+repage', output], { cwd: dir, signal });
         return await readFile(output);
     } finally {
         await rm(dir, { recursive: true, force: true });

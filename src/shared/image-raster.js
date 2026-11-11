@@ -932,7 +932,7 @@ export async function rasterFitToSourceFrame({ bytes, width, height, engine = 'a
  * @exports
  * @ai.hint io
  */
-export async function rasterTrim({ input, output = input, cwd, signal, fuzz = 6, engine = 'auto' }) {
+export async function rasterTrim({ input, output = input, cwd, signal, fuzz = 6, engine = 'auto', transparentOnly = false }) {
     const before = await rasterInfo(input, { cwd, engine }).catch(() => null);
     if (!before?.width || !before.height) return { changed: false, reason: 'unreadable' };
     const frame = await decodeRgba(await readFile(toAbs(cwd, input)), engine);
@@ -941,6 +941,7 @@ export async function rasterTrim({ input, output = input, cwd, signal, fuzz = 6,
     const edge = { r: frame.data[0], g: frame.data[1], b: frame.data[2], a: frame.data[3] };
     const matches = (index) => {
         const a = frame.data[index + 3];
+        if (transparentOnly) return a === 0;
         if (edge.a === 0 || a === 0) return a === edge.a || (a <= tolerance && edge.a <= tolerance);
         return Math.abs(frame.data[index] - edge.r) <= tolerance
             && Math.abs(frame.data[index + 1] - edge.g) <= tolerance
@@ -1034,19 +1035,23 @@ export async function rasterPadImageBytes({ bytes, engine = 'auto', targetWidth 
  * @exports
  * @ai.hint io
  */
-export async function rasterRemoveImagePadding({ bytes, width, height, originalWidth, originalHeight, engine = 'auto' }) {
+export async function rasterRemoveImagePadding({ bytes, width, height, originalWidth, originalHeight, engine = 'auto', normalized = false }) {
     if (width === originalWidth && height === originalHeight) return bytes;
     const active = await getEngine(engine);
     if (!active) return null;
     const info = await rasterInfoFromBytes(bytes, active);
-    if (info.width !== width || info.height !== height || originalWidth > width || originalHeight > height) return bytes;
+    if ((!normalized && (info.width !== width || info.height !== height))
+        || !info.width || !info.height || originalWidth > width || originalHeight > height) return bytes;
+    const cropWidth = normalized ? Math.round(info.width * originalWidth / width) : originalWidth;
+    const cropHeight = normalized ? Math.round(info.height * originalHeight / height) : originalHeight;
+    if (!cropWidth || !cropHeight || cropWidth > info.width || cropHeight > info.height) return bytes;
     if (active.name === 'sharp') {
-        return await active.lib(bytes).extract({ left: 0, top: 0, width: originalWidth, height: originalHeight }).png().toBuffer();
+        return await active.lib(bytes).extract({ left: 0, top: 0, width: cropWidth, height: cropHeight }).png().toBuffer();
     }
     const frame = await decodeRgba(bytes, active.name);
-    const data = Buffer.alloc(originalWidth * originalHeight * 4);
-    for (let row = 0; row < originalHeight; row++) frame.data.copy(data, row * originalWidth * 4, row * width * 4, row * width * 4 + originalWidth * 4);
-    return await encodePng({ width: originalWidth, height: originalHeight, data }, active.name);
+    const data = Buffer.alloc(cropWidth * cropHeight * 4);
+    for (let row = 0; row < cropHeight; row++) frame.data.copy(data, row * cropWidth * 4, row * info.width * 4, row * info.width * 4 + cropWidth * 4);
+    return await encodePng({ width: cropWidth, height: cropHeight, data }, active.name);
 }
 
 /** Metadata of a buffer using an already-selected native engine. */

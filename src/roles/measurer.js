@@ -123,13 +123,16 @@ text and may carry OCR content. Enhanced crops were generated for the regions th
 
 Those boxes are NOT measurements. A generation model drew them: they are padded around the object, they often swallow a neighbour, and they can
 sit a tenth of the frame away from what they name. They are hints about where to look and nothing else, and the sheet is wrong until you have
-looked.
+looked. Once verified, actively tighten every approximate box to the object's actual visible outer edges: move each side inward wherever the
+box contains padding, background, or a neighboring object, and move it outward only where the visible object was clipped. Do not preserve a loose
+model box just because it contains the object; do not crop away real shadows, antialiasing, or connected details that belong to that object.
 
 Your job is to finish the sheet:
 - Study the attached layers, enhanced crops, and the base image (they are under "Attached image N" captions).
 - Verify every box before you keep it: crop the reference at that box with crop_image, or view_image the area, and check where the object
-  actually starts and ends. Rewrite x, y, width, height to the edges you see; say in notes that you corrected a decomposition box and by how
-  much. Two layers naming the same object get one entry, not two.
+  actually starts and ends. Then tighten all four sides to the object's actual visible outer edges, excluding surrounding empty/background
+  pixels and unrelated neighbours while retaining connected details and visible antialiasing. Rewrite x, y, width, height to those verified
+  edges; say in notes that you corrected a decomposition box and by how much. Two layers naming the same object get one entry, not two.
 - A layer box is padded around the object — a heading box can be a tenth larger than the glyphs and an icon box several times the icon. Do not
   copy a padded box into padding, margin or gap: measure the space between the edges you verified, not the space between the boxes.
 - A text layer carries the OCR lines it recognised, and the harness already narrowed the box to them. Where the sheet gives a font size, a line

@@ -51,7 +51,9 @@ import { mkdir, writeFile, readFile, stat } from 'node:fs/promises';
 import { resolveInside } from './paths.js';
 import { isSeedream55, decomposeLayers, generateTransparentLayer, downloadImageBytes, isContentRejection, contentRejectionNotice, SEEDREAM_MODEL, SEEDREAM_INPUT_MAX_BYTES, SEEDREAM_INPUT_MAX_PIXELS } from '../openai/seedream-5-5.js';
 import { imageModelFor } from '../openai/images.js';
-import { detectMagick, magickCrop } from './image-magick.js';
+import { detectMagick, magickCrop, magickPadImageBytes, magickRemoveImagePadding, magickTrimImage } from './image-magick.js';
+import { rasterPadImageBytes, rasterRemoveImagePadding, rasterTrim } from './image-raster.js';
+import { paddedSizeToMinPixels } from '../shared/images.js';
 import { readImageSize } from '../shared/images.js';
 
 /** Subdirectory where the advanced measurer writes decomposition artefacts. */
@@ -67,6 +69,10 @@ const ADVANCED_DIR = '.tmp/_advanced-measure/';
 export const LAYER_PROMPT = 'Split this interface screenshot into its visual layers: background, panels, cards, images, icons, and every text block on its own. '
     + 'Name and describe each layer in English, using Latin letters, digits and hyphens only (nav-logo, hero-badge, price-card-1). '
     + 'Never write Chinese, Cyrillic or any other non-Latin script in names or descriptions.';
+
+const SOURCE_GEOMETRY_PROMPT = 'Preserve the source image or fragment at its original scale and geometry, unchanged at canvas origin (0,0). '
+    + 'Do not upscale, stretch, move, or recenter it. If a larger canvas is required, extend it to the right and bottom. '
+    + 'Never guess or state unverified source dimensions.';
 
 /** A region this small is not an object, and seedream cannot cut anything out of it. */
 const MIN_CROP_SIDE = 32;
@@ -334,6 +340,80 @@ async function downloadLayerImage(url, signal) {
 }
 
 /**
+ * Add only the transparent frame Seedream requires; the verified source dimensions remain metadata
+ * for cropping its reply back to the original top-left coordinate system.
+ * @param {Buffer} bytes
+ * @param {string} model
+ * @param {object} config
+ * @param {AbortSignal} signal
+ * @returns {Promise<object|null>}
+ * @ai.hint io
+ */
+async function padSeedreamInput(bytes, model, config, signal) {
+    const original = readImageSize(bytes);
+    if (!original?.width || !original?.height) return null;
+    const floor = paddedSizeToMinPixels(original, model);
+    const width = Math.max(Math.ceil(original.width / 16) * 16, floor?.width ?? 0);
+    const height = Math.max(Math.ceil(original.height / 16) * 16, floor?.height ?? 0);
+    if (width === original.width && height === original.height) {
+        return { bytes, width, height, originalWidth: width, originalHeight: height, padded: false, engine: null };
+    }
+    const options = { bytes, engine: config?.image?.rasterEngine ?? 'auto',
+        targetWidth: floor?.width ?? null, targetHeight: floor?.height ?? null };
+    let frame = null;
+    try { frame = await rasterPadImageBytes(options); } catch { /* try ImageMagick */ }
+    if (frame) return frame;
+    const exe = await detectMagick({ magickPath: config?.magickPath ?? null });
+    if (!exe) throw new Error('Для padding входа Seedream требуется sharp, canvas или ImageMagick.');
+    frame = await magickPadImageBytes({ exe, bytes, signal, targetWidth: options.targetWidth, targetHeight: options.targetHeight });
+    return { ...frame, engine: 'magick', exe };
+}
+
+/**
+ * Remove the known right/bottom frame added before a Seedream request, only when the returned image
+ * has that exact frame. This preserves content coordinates and never rescales model output.
+ * @param {Buffer} bytes
+ * @param {object} padding
+ * @param {AbortSignal} signal
+ * @returns {Promise<Buffer>}
+ * @ai.hint io
+ */
+async function unpadSeedreamOutput(bytes, padding, signal) {
+    if (!padding?.padded) return bytes;
+    const actual = readImageSize(bytes);
+    if (!actual?.width || !actual?.height
+        || Math.abs(actual.width / actual.height - padding.width / padding.height) > (padding.width / padding.height) * 0.02) return bytes;
+    try {
+        if (padding.engine === 'magick') {
+            return await magickRemoveImagePadding({ ...padding, bytes, signal, normalized: true });
+        }
+        return await rasterRemoveImagePadding({ ...padding, bytes, engine: padding.engine, normalized: true }) ?? bytes;
+    } catch {
+        return bytes;
+    }
+}
+
+/**
+ * Trim transparent padding from an individual generated layer asset without changing its reference box.
+ * @param {string} abs
+ * @param {object} config
+ * @param {AbortSignal} signal
+ * @param {string|null} exe
+ * @returns {Promise<void>}
+ * @ai.hint io
+ */
+async function trimLayerAsset(abs, config, signal) {
+    try {
+        const exe = await detectMagick({ magickPath: config?.magickPath ?? null });
+        if (exe) {
+            await magickTrimImage({ exe, input: abs, cwd: path.dirname(abs), signal });
+            return;
+        }
+        await rasterTrim({ input: abs, cwd: path.dirname(abs), signal, fuzz: 0, engine: config?.image?.rasterEngine ?? 'auto', transparentOnly: true });
+    } catch { /* trimming an auxiliary layer is best-effort */ }
+}
+
+/**
  * Build a partial measurement sheet from layer decomposition data.
  * The model read the bounding boxes itself — these are real measurements, not the measurer's.
  * @param {{ base: object|null, layers: object[], ocr: object[], baseImageBytes?: Buffer }} decomposition
@@ -445,15 +525,27 @@ export async function advancedMeasurePhase1({ root, workId, client, referencePat
         return { sheet: null, cropPaths, layers, warnings };
     }
 
-    const refMime = refAbs.endsWith('.jpg') || refAbs.endsWith('.jpeg') ? 'image/jpeg' : 'image/png';
+    const inputPadding = await padSeedreamInput(refBytes, seedreamModel, config, signal).catch((error) => {
+        warnings.push(`Padding входа Seedream не выполнен: ${error.message ?? String(error)}`);
+        return null;
+    });
+    if (!inputPadding) return { sheet: null, cropPaths, layers, warnings };
+    const inputBytes = inputPadding.bytes;
+    const inputFrame = { width: inputPadding.width, height: inputPadding.height };
+    const refMime = inputPadding.padded || refAbs.endsWith('.png') ? 'image/png'
+        : (refAbs.endsWith('.jpg') || refAbs.endsWith('.jpeg') ? 'image/jpeg' : 'image/png');
+    const geometryPrompt = `${prompt ?? ''}\n\n${SOURCE_GEOMETRY_PROMPT}`
+        + (inputPadding.padded
+            ? ` The verified source is ${inputPadding.originalWidth}x${inputPadding.originalHeight} pixels on a ${inputPadding.width}x${inputPadding.height} canvas; the added area is padding.`
+            : '');
 
     // Decompose. The host chain is resolved per model, because the gateway that serves seedream is
     // usually not the primary one, and `modelsBackends` is the only place that says which is which.
     let decomposition;
     try {
         decomposition = await decomposeLayers({
-            client, channels, model: seedreamModel, source: { bytes: refBytes, mime: refMime },
-            prompt, size, maxImages: maxLayers, textRecognition: true, signal, onPoll: (data) => {
+            client, channels, model: seedreamModel, source: { bytes: inputBytes, mime: refMime },
+            prompt: geometryPrompt, coordinateFrame: inputFrame, size, maxImages: maxLayers, textRecognition: true, signal, onPoll: (data) => {
                 notify?.({ type: 'measure.progress', phase: 'decomposition', status: data.status, polls: data.polls, elapsedMs: data.elapsedMs });
             }, onWarn: (message) => notify?.({ type: 'warning', message }),
         });
@@ -481,11 +573,16 @@ export async function advancedMeasurePhase1({ root, workId, client, referencePat
     // The boxes are read in the frame of the picture that was sent, so they are used as they arrive;
     // the base PNG the task returns is only a rescaled copy of it, and its size is worth reporting
     // because it tells the reader that the two frames of one answer are not the same picture.
-    const offFrame = frameMismatch(decomposition.base?.size ?? null, refPixels ?? null);
-    if (offFrame) {
-        warnings.push(`Базовое изображение разложения ${offFrame.width}x${offFrame.height}, референс ${refPixels.width}x${refPixels.height}: `
-            + 'рамки не совпадают, боксы слоёв остаются в кадре референса и требуют проверки по картинке.');
+    const offFrame = frameMismatch(decomposition.base?.size ?? null, inputFrame);
+    if (inputPadding.padded) {
+        warnings.push(`Вход Seedream локально дополнен справа и снизу с ${inputPadding.originalWidth}x${inputPadding.originalHeight} до ${inputPadding.width}x${inputPadding.height}; `
+            + 'файлы ассетов будут обрезаны обратно, а боксы остаются в координатах исходного референса.');
     }
+    if (offFrame) {
+        warnings.push(`Базовое изображение разложения ${offFrame.width}x${offFrame.height}, кадр запроса ${inputFrame.width}x${inputFrame.height}: `
+            + 'рамки не совпадают, normalized boundary boxes приведены к кадру запроса, absolute боксы остаются в исходных координатах.');
+    }
+
     // The label is what reaches the file names, the sheet and the coder, so it stays readable ASCII.
     // A text layer is narrowed here, once, to the union of its OCR line frames: the layer's own box is
     // padded around the object and that padding is what a coder ends up writing as spacing. The tighter
@@ -504,7 +601,7 @@ export async function advancedMeasurePhase1({ root, workId, client, referencePat
             text: layer.text ? { text: layer.text.text, lines: layer.text.lines } : null,
         };
     });
-    const base = decomposition.base ? { ...decomposition.base, size: refPixels ?? decomposition.base.size } : null;
+    const base = decomposition.base ? { ...decomposition.base, size: inputFrame } : null;
 
     // Download layers and save them.
     let serial = 1;
@@ -521,8 +618,10 @@ export async function advancedMeasurePhase1({ root, workId, client, referencePat
         if (layerBytes) {
             const abs = path.join(root, rel);
             await writeFile(abs, layerBytes).catch(() => {});
+            await trimLayerAsset(abs, config, signal);
             cropPaths.push(rel);
         }
+
         // A layer without pixels still carries its box, so it stays in the list for the second pass.
         layers.push({ ...layer, localPath: layerBytes ? rel : null, bytes: layerBytes });
         serial += 1;
@@ -532,16 +631,20 @@ export async function advancedMeasurePhase1({ root, workId, client, referencePat
     const baseRel = `${cropDir}00-base.png`;
     const baseAbs = path.join(root, baseRel);
     if (base?.url) {
-        const baseBytes = await downloadLayerImage(base.url, signal);
-        if (baseBytes) await writeFile(baseAbs, baseBytes).catch(() => {});
+        const downloadedBase = await downloadLayerImage(base.url, signal);
+        if (downloadedBase) {
+            const restored = await unpadSeedreamOutput(downloadedBase, inputPadding, signal);
+            await writeFile(baseAbs, restored).catch(() => {});
+        }
         else warnings.push('Базовое изображение разложения не скачано.');
     }
 
     // Build partial sheet from layer geometry.
     const sheet = buildPartialSheet({ base, layers: named, ocr: decomposition.ocr ?? [], baseImageBytes: refBytes }, referencePath);
+    sheet.canvas = refPixels ? { x: 0, y: 0, width: refPixels.width, height: refPixels.height } : sheet.canvas;
     if (offFrame) {
-        sheet.assumptions.push(`The base image the task returned is ${offFrame.width}x${offFrame.height} while the reference file is `
-            + `${refPixels.width}x${refPixels.height}; the layer boxes belong to the reference frame and are approximate.`);
+        sheet.assumptions.push(`The base image the task returned is ${offFrame.width}x${offFrame.height} while the padded request frame is `
+            + `${inputFrame.width}x${inputFrame.height}; layer boxes are mapped to the original reference frame and remain approximate.`);
     }
 
     notify?.({ type: 'measure.pass', pass: 1, phase: 'advanced-decomposition', layers: layers.length, crops: cropPaths.length });
@@ -595,10 +698,15 @@ export async function advancedEnhanceCrops({ root, client, referencePath, cropPa
 
             // Generate transparent version. The task route owns both the host chain and the
             // `image_urls` field this model reads, so the crop travels as bytes and comes back as base64.
+            const enhancedPadding = await padSeedreamInput(rawBytes, seedreamModel, config, signal);
             const b64 = await generateTransparentLayer({
                 client, channels, model: seedreamModel,
-                prompt: 'Extract the foreground object from this region with a transparent background. Remove any background, shadows, or artifacts. Keep only the object.',
-                bytes: rawBytes, mime: 'image/png', signal,
+                prompt: 'Extract the foreground object from this region with a transparent background. Remove any background, shadows, or artifacts. Keep only the object. '
+                    + SOURCE_GEOMETRY_PROMPT
+                    + (enhancedPadding?.padded
+                        ? ` The verified source fragment is ${enhancedPadding.originalWidth}x${enhancedPadding.originalHeight} pixels on a ${enhancedPadding.width}x${enhancedPadding.height} canvas; the added area is padding.`
+                        : ''),
+                bytes: enhancedPadding?.bytes ?? rawBytes, mime: 'image/png', signal,
                 onWarn: (message) => notify?.({ type: 'warning', message }),
             });
 
@@ -606,7 +714,9 @@ export async function advancedEnhanceCrops({ root, client, referencePath, cropPa
                 const enhancedRel = `${ADVANCED_DIR}enhanced-${String(serial).padStart(2, '0')}-${layerSlug(target.name, serial)}.png`;
                 const enhancedAbs = path.join(root, enhancedRel);
                 await mkdir(path.dirname(enhancedAbs), { recursive: true }).catch(() => {});
-                await writeFile(enhancedAbs, Buffer.from(b64[0], 'base64')).catch(() => {});
+                const enhancedOutput = await unpadSeedreamOutput(Buffer.from(b64[0], 'base64'), enhancedPadding, signal);
+                await writeFile(enhancedAbs, enhancedOutput).catch(() => {});
+                await trimLayerAsset(enhancedAbs, config, signal);
                 enhancedPaths.push(enhancedRel);
                 serial += 1;
             }

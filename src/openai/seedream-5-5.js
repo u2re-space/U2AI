@@ -340,7 +340,7 @@ function parseTextRecognition(recognition, baseFrame) {
  * @exports
  * @ai.hint pure
  */
-export function parseLayerDecomposition(result) {
+export function parseLayerDecomposition(result, coordinateFrame = null) {
     const rows = taskData(result)?.images ?? [];
     const out = { base: null, layers: [], ocr: [] };
     for (const row of rows) {
@@ -348,8 +348,10 @@ export function parseLayerDecomposition(result) {
         if (!urls.length) continue;
         const sizes = parseSizes(row.sizes);
         const meta = Array.isArray(row.layers) && row.layers.length === urls.length ? row.layers : null;
-        const baseFrame = sizes[0]?.width ? { width: sizes[0].width, height: sizes[0].height } : null;
-        out.base ??= { url: urls[0], size: baseFrame ?? { width: null, height: null } };
+        const baseFrame = coordinateFrame?.width && coordinateFrame?.height
+            ? coordinateFrame
+            : (sizes[0]?.width ? { width: sizes[0].width, height: sizes[0].height } : null);
+        out.base ??= { url: urls[0], size: sizes[0]?.width ? { width: sizes[0].width, height: sizes[0].height } : { width: null, height: null } };
         for (let index = 1; index < urls.length; index++) {
             const layer = meta?.[index] ?? null;
             const textRecognition = parseTextRecognition(layer?.text_recognition, out.base.size);
@@ -361,7 +363,7 @@ export function parseLayerDecomposition(result) {
                 url: urls[index],
                 size: sizes[index] ?? { width: null, height: null },
                 background: String(layer?.background ?? (Array.isArray(row.backgrounds) ? row.backgrounds[index] : '') ?? '').trim(),
-                box: normalizeLayerBox(layer?.bounding_box, out.base.size),
+                box: normalizeLayerBox(layer?.bounding_box, baseFrame),
                 text: textRecognition,
             });
             if (textRecognition) out.ocr.push({ layer: index, ...textRecognition });
@@ -540,13 +542,15 @@ export async function downloadImageBytes(url, signal) {
  * @param {{ client?: { call: Function }, channels?: Array<{ client: { call: Function }, modelFor?: Function, label?: string }>,
  *   source: { bytes: Buffer, mime?: string }, model?: string,
  *   prompt?: string|null, size?: string|null, maxImages?: number|null, textRecognition?: boolean,
- *   signal?: AbortSignal, timeoutMs?: number, onPoll?: Function, onWarn?: Function }} options
+  *   coordinateFrame?: { width: number, height: number }|null,
+  *   signal?: AbortSignal, timeoutMs?: number, onPoll?: Function, onWarn?: Function }} options
+
  * @returns {Promise<{ base: object|null, layers: object[], ocr: object[], raw: object, taskId: string|null }>}
  * @exports
  * @ai.hint io
  */
 export async function decomposeLayers({ client = null, channels = null, source, model = SEEDREAM_MODEL, prompt = null,
-    size = 'auto', maxImages = null, textRecognition = true, signal, timeoutMs, onPoll = null, onWarn = null }) {
+    size = 'auto', maxImages = null, textRecognition = true, coordinateFrame = null, signal, timeoutMs, onPoll = null, onWarn = null }) {
     if (Buffer.byteLength(source?.bytes ?? '') > SEEDREAM_INPUT_MAX_BYTES) {
         throw new ApiError(`Вход разложения больше ${SEEDREAM_INPUT_MAX_BYTES} байт — уменьшите изображение.`, { code: 'IMAGE_TOO_LARGE' });
     }
@@ -556,7 +560,7 @@ export async function decomposeLayers({ client = null, channels = null, source, 
         what: 'Разложение слоёв',
         noResult: 'Ответ seedream-5.5 не содержит ни task_id, ни результатов разложения.',
     });
-    return { ...parseLayerDecomposition(raw), raw, taskId, host };
+    return { ...parseLayerDecomposition(raw, coordinateFrame), raw, taskId, host };
 }
 
 /**

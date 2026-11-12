@@ -1,0 +1,682 @@
+{
+  "savedAt": "2026-11-12T06:39:10.104Z",
+  "route": "seedream-decomposition",
+  "model": "seedream-5-5",
+  "host": "https://api.apimart.ai/v1",
+  "provider": null,
+  "taskId": "task_01M777NF74MFHM2X9DVK9C9ZMK",
+  "response": {
+    "code": 200,
+    "data": {
+      "actual_time": 32,
+      "billing_status": "settled",
+      "completed": 1794465544,
+      "cost": 0.1352,
+      "created": 1794465512,
+      "credits_cost": 1.3519999999999999,
+      "estimated_time": 60,
+      "id": "task_01M777NF74MFHM2X9DVK9C9ZMK",
+      "progress": 100,
+      "result": {
+        "images": [
+          {
+            "backgrounds": [
+              "opaque",
+              "transparent",
+              "transparent",
+              "transparent",
+              "transparent",
+              "transparent",
+              "transparent",
+              "transparent",
+              "transparent",
+              "transparent"
+            ],
+            "expires_at": 1794551944,
+            "layer_decomposition": true,
+            "layers": [
+              {
+                "background": "opaque",
+                "output_format": "png",
+                "size": "1258x833",
+                "z_index": 0
+              },
+              {
+                "background": "transparent",
+                "bounding_box": {
+                  "absolute": [
+                    0,
+                    0,
+                    255,
+                    183
+                  ],
+                  "normalized": [
+                    0,
+                    0,
+                    203,
+                    220
+                  ]
+                },
+                "description": "白色圆角矩形Hubfolio品牌标识，内有黑色文字“Hubfolio®”",
+                "name": "白色圆角矩形Hubfolio品牌标识，内有黑色文字“Hubfolio®”",
+                "output_format": "png",
+                "size": "1210x867",
+                "text_recognition": {
+                  "lines": [
+                    {
+                      "bounding_box": {
+                        "absolute": [
+                          68,
+                          38,
+                          155,
+                          64
+                        ],
+                        "normalized": [
+                          54,
+                          46,
+                          123,
+                          77
+                        ]
+                      },
+                      "runs": [
+                        {
+                          "style": {
+                            "bold": true,
+                            "foreground_color": "#000000",
+                            "italic": false,
+                            "shadow": false,
+                            "similar_font_family": "Courier New",
+                            "strikethrough": false,
+                            "translucent": false,
+                            "underline": false
+                          },
+                          "text": "Hubfolio"
+                        }
+                      ]
+                    },
+                    {
+                      "bounding_box": {
+                        "absolute": [
+                          158,
+                          36,
+                          170,
+                          52
+                        ],
+                        "normalized": [
+                          126,
+                          43,
+                          135,
+                          62
+                        ]
+                      },
+                      "runs": [
+                        {
+                          "style": {
+                            "bold": true,
+                            "foreground_color": "#000000",
+                            "italic": false,
+                            "shadow": false,
+                            "similar_font_family": "Courier New",
+                            "strikethrough": false,
+                            "translucent": false,
+                            "underline": false
+                          },
+                          "text": "®"
+                        }
+                      ]
+                    }
+                  ],
+                  "text": "Hubfolio\n®"
+                },
+                "z_index": 1
+              },
+              {
+                "background": "transparent",
+                "bounding_box": {
+                  "absolute": [
+                    198,
+                    0,
+                    470,
+                    181
+                  ],
+                  "normalized": [
+                    157,
+                    0,
+                    374,
+                    217
+                  ]
+                },
+                "description": "黑色背景上的白色三横线汉堡菜单图标",
+                "name": "黑色背景上的白色三横线汉堡菜单图标",
+                "output_format": "png",
+                "size": "1257x834",
+                "z_index": 2
+              },
+              {
+                "background": "transparent",
+                "bounding_box": {
+                  "absolute": [
+                    38,
+                    74,
+                    357,
+                    392
+                  ],
+                  "normalized": [
+                    30,
+                    89,
+                    284,
+                    471
+                  ]
+                },
+                "description": "黑色圆形徽章，环绕白色弧形文字“AWARD WINNING AGENCY - SINCE 2022”，中心是白色H形品牌图标",
+                "name": "黑色圆形徽章，环绕白色弧形文字“AWARD WINNING AGENCY - SINCE 2022”，中心是白色H形品牌图标",
+                "output_format": "png",
+                "size": "1026x1022",
+                "text_recognition": {
+                  "lines": [
+                    {
+                      "bounding_box": {
+                        "absolute": [
+                          97,
+                          130,
+                          189,
+                          217
+                        ],
+                        "normalized": [
+                          77,
+                          156,
+                          150,
+                          261
+                        ]
+                      },
+                      "runs": [
+                        {
+                          "style": {
+                            "bold": false,
+                            "foreground_color": "#FFFFFF",
+                            "italic": false,
+                            "shadow": false,
+                            "similar_font_family": "Calibri",
+                            "strikethrough": false,
+                            "translucent": false,
+                            "underline": false
+                          },
+                          "text": "WI NNI NG"
+                        }
+                      ]
+                    },
+                    {
+                      "bounding_box": {
+                        "absolute": [
+                          197,
+                          127,
+                          284,
+                          185
+                        ],
+                        "normalized": [
+                          157,
+                          152,
+                          226,
+                          222
+                        ]
+                      },
+                      "runs": [
+                        {
+                          "style": {
+                            "bold": false,
+                            "foreground_color": "#FFFFFF",
+                            "italic": false,
+                            "shadow": false,
+                            "similar_font_family": "Calibri",
+                            "strikethrough": false,
+                            "translucent": false,
+                            "underline": false
+                          },
+                          "text": "AGENCY"
+                        }
+                      ]
+                    },
+                    {
+                      "bounding_box": {
+                        "absolute": [
+                          90,
+                          222,
+                          131,
+                          296
+                        ],
+                        "normalized": [
+                          72,
+                          267,
+                          104,
+                          355
+                        ]
+                      },
+                      "runs": [
+                        {
+                          "style": {
+                            "bold": false,
+                            "foreground_color": "#FFFFFF",
+                            "italic": false,
+                            "shadow": false,
+                            "similar_font_family": "Calibri",
+                            "strikethrough": false,
+                            "translucent": false,
+                            "underline": false
+                          },
+                          "text": "AWARD"
+                        }
+                      ]
+                    },
+                    {
+                      "bounding_box": {
+                        "absolute": [
+                          250,
+                          244,
+                          305,
+                          318
+                        ],
+                        "normalized": [
+                          199,
+                          293,
+                          242,
+                          382
+                        ]
+                      },
+                      "runs": [
+                        {
+                          "style": {
+                            "bold": false,
+                            "foreground_color": "#FFFFFF",
+                            "italic": false,
+                            "shadow": false,
+                            "similar_font_family": "Calibri",
+                            "strikethrough": false,
+                            "translucent": false,
+                            "underline": false
+                          },
+                          "text": "S I NCE"
+                        }
+                      ]
+                    },
+                    {
+                      "bounding_box": {
+                        "absolute": [
+                          182,
+                          309,
+                          246,
+                          345
+                        ],
+                        "normalized": [
+                          145,
+                          371,
+                          196,
+                          414
+                        ]
+                      },
+                      "runs": [
+                        {
+                          "style": {
+                            "bold": false,
+                            "foreground_color": "#FFFFFF",
+                            "italic": false,
+                            "shadow": false,
+                            "similar_font_family": "Calibri",
+                            "strikethrough": false,
+                            "translucent": false,
+                            "underline": false
+                          },
+                          "text": "2022"
+                        }
+                      ]
+                    }
+                  ],
+                  "text": "WI NNI NG\nAGENCY\nAWARD\nS I NCE\n2022"
+                },
+                "z_index": 3
+              },
+              {
+                "background": "transparent",
+                "bounding_box": {
+                  "absolute": [
+                    33,
+                    306,
+                    368,
+                    578
+                  ],
+                  "normalized": [
+                    26,
+                    367,
+                    293,
+                    694
+                  ]
+                },
+                "description": "左栏白色联系信息文字：“hello@hubfolio.agency”、“(+010) 523 68 69”、“Based in Sanfrancisco, CA”",
+                "name": "左栏白色联系信息文字：“hello@hubfolio.agency”、“(+010) 523 68 69”、“Based in Sanfrancisco, CA”",
+                "output_format": "png",
+                "size": "1136x923",
+                "text_recognition": {
+                  "lines": [
+                    {
+                      "bounding_box": {
+                        "absolute": [
+                          95,
+                          397,
+                          303,
+                          421
+                        ],
+                        "normalized": [
+                          76,
+                          477,
+                          241,
+                          505
+                        ]
+                      },
+                      "runs": [
+                        {
+                          "style": {
+                            "bold": false,
+                            "foreground_color": "#F2F2F2",
+                            "italic": false,
+                            "shadow": false,
+                            "similar_font_family": "TikTok Sans",
+                            "strikethrough": false,
+                            "translucent": false,
+                            "underline": false
+                          },
+                          "text": "hello@hubfolio.agency"
+                        }
+                      ]
+                    },
+                    {
+                      "bounding_box": {
+                        "absolute": [
+                          121,
+                          430,
+                          277,
+                          455
+                        ],
+                        "normalized": [
+                          96,
+                          516,
+                          220,
+                          546
+                        ]
+                      },
+                      "runs": [
+                        {
+                          "style": {
+                            "bold": false,
+                            "foreground_color": "#F2F2F2",
+                            "italic": false,
+                            "shadow": false,
+                            "similar_font_family": "TikTok Sans",
+                            "strikethrough": false,
+                            "translucent": false,
+                            "underline": false
+                          },
+                          "text": "(+010) 523 68 69"
+                        }
+                      ]
+                    },
+                    {
+                      "bounding_box": {
+                        "absolute": [
+                          78,
+                          465,
+                          319,
+                          489
+                        ],
+                        "normalized": [
+                          62,
+                          558,
+                          254,
+                          587
+                        ]
+                      },
+                      "runs": [
+                        {
+                          "style": {
+                            "bold": false,
+                            "foreground_color": "#F2F2F2",
+                            "italic": false,
+                            "shadow": false,
+                            "similar_font_family": "TikTok Sans",
+                            "strikethrough": false,
+                            "translucent": false,
+                            "underline": false
+                          },
+                          "text": "Based in Sanfrancisco, CA"
+                        }
+                      ]
+                    }
+                  ],
+                  "text": "hello@hubfolio.agency\n(+010) 523 68 69\nBased in Sanfrancisco, CA"
+                },
+                "z_index": 4
+              },
+              {
+                "background": "transparent",
+                "bounding_box": {
+                  "absolute": [
+                    62,
+                    480,
+                    334,
+                    752
+                  ],
+                  "normalized": [
+                    49,
+                    576,
+                    266,
+                    903
+                  ]
+                },
+                "description": "三个并排的黑色圆形社交图标，分别带有白色X、Instagram、地球图案",
+                "name": "三个并排的黑色圆形社交图标，分别带有白色X、Instagram、地球图案",
+                "output_format": "png",
+                "size": "1024x1024",
+                "z_index": 5
+              },
+              {
+                "background": "transparent",
+                "bounding_box": {
+                  "absolute": [
+                    2,
+                    635,
+                    395,
+                    833
+                  ],
+                  "normalized": [
+                    2,
+                    762,
+                    314,
+                    1000
+                  ]
+                },
+                "description": "底部带白色信封图标的圆角按钮，内有白色文字“Work With Us”",
+                "name": "底部带白色信封图标的圆角按钮，内有白色文字“Work With Us”",
+                "output_format": "png",
+                "size": "1444x726",
+                "text_recognition": {
+                  "lines": [
+                    {
+                      "bounding_box": {
+                        "absolute": [
+                          165,
+                          762,
+                          262,
+                          783
+                        ],
+                        "normalized": [
+                          131,
+                          915,
+                          208,
+                          940
+                        ]
+                      },
+                      "runs": [
+                        {
+                          "style": {
+                            "bold": false,
+                            "foreground_color": "#F2F2F2",
+                            "italic": false,
+                            "shadow": false,
+                            "similar_font_family": "Calibri",
+                            "strikethrough": false,
+                            "translucent": false,
+                            "underline": false
+                          },
+                          "text": "Work With Us"
+                        }
+                      ]
+                    }
+                  ],
+                  "text": "Work With Us"
+                },
+                "z_index": 6
+              },
+              {
+                "background": "transparent",
+                "bounding_box": {
+                  "absolute": [
+                    240,
+                    0,
+                    1042,
+                    833
+                  ],
+                  "normalized": [
+                    191,
+                    0,
+                    828,
+                    1000
+                  ]
+                },
+                "description": "中间主视觉卡片：灰色渐变背景，大号白色标题文字“Brand and Design”，下方白色小字“Hubfolio, small agency with big ideas”，搭配倾斜的黑色国际象棋兵棋子和带数字5、6的木质棋盘块",
+                "name": "中间主视觉卡片：灰色渐变背景，大号白色标题文字“Brand and Design”，下方白色小字“Hubfolio, small agency with big ideas”，搭配倾斜的黑色国际象棋兵棋子和带数字5、6的木质棋盘块",
+                "output_format": "png",
+                "size": "1005x1043",
+                "z_index": 7
+              },
+              {
+                "background": "transparent",
+                "bounding_box": {
+                  "absolute": [
+                    764,
+                    0,
+                    1219,
+                    833
+                  ],
+                  "normalized": [
+                    607,
+                    0,
+                    969,
+                    1000
+                  ]
+                },
+                "description": "右侧白色圆角竖栏，内有黑色介绍文字\"Based in Boston, MA. We're an agency that focus on crafting design & development digital products.“，搭配斜向浅紫色标签”Branding“、红色圆角标签”UI/UX Design“、白色圆形箭头图标、黑色圆形分享图标、浅紫色标签”SEO/Marketing“、黑色圆角标签”Motion\"",
+                "name": "右侧白色圆角竖栏，内有黑色介绍文字\"Based in Boston, MA. We're an agency that focus on crafting design & development digital products.“，搭配斜向浅紫色标签”Branding“、红色圆角标签”UI/UX Design“、白色圆形箭头图标、黑色圆形分享图标、浅紫色标签”SEO/Marketing“、黑色圆角标签”Motion\"",
+                "output_format": "png",
+                "size": "757x1386",
+                "z_index": 8
+              },
+              {
+                "background": "transparent",
+                "bounding_box": {
+                  "absolute": [
+                    854,
+                    176,
+                    1126,
+                    448
+                  ],
+                  "normalized": [
+                    679,
+                    211,
+                    895,
+                    538
+                  ]
+                },
+                "description": "红色圆角矩形标签，内有白色文字“UI/UX Design”",
+                "name": "红色圆角矩形标签，内有白色文字“UI/UX Design”",
+                "output_format": "png",
+                "size": "1024x1024",
+                "text_recognition": {
+                  "lines": [
+                    {
+                      "bounding_box": {
+                        "absolute": [
+                          937,
+                          298,
+                          1049,
+                          327
+                        ],
+                        "normalized": [
+                          745,
+                          358,
+                          834,
+                          393
+                        ]
+                      },
+                      "runs": [
+                        {
+                          "style": {
+                            "bold": false,
+                            "foreground_color": "#FCE3D5",
+                            "italic": false,
+                            "shadow": false,
+                            "similar_font_family": "Microsoft Sans Serif",
+                            "strikethrough": false,
+                            "translucent": false,
+                            "underline": false
+                          },
+                          "text": "UI/UX Design"
+                        }
+                      ]
+                    }
+                  ],
+                  "text": "UI/UX Design"
+                },
+                "z_index": 9
+              }
+            ],
+            "output_formats": [
+              "png",
+              "png",
+              "png",
+              "png",
+              "png",
+              "png",
+              "png",
+              "png",
+              "png",
+              "png"
+            ],
+            "sizes": [
+              "1258x833",
+              "1210x867",
+              "1257x834",
+              "1026x1022",
+              "1136x923",
+              "1024x1024",
+              "1444x726",
+              "1005x1043",
+              "757x1386",
+              "1024x1024"
+            ],
+            "url": [
+              "https://getapib.org/image/9998205534456157-fb028a95-8dca-4c93-968f-bf286fd89e17-image_task_01M777PDM3317D4BSWFRHQAGXP_0.png",
+              "https://getapib.org/image/9998205534456109-4c7bb116-864a-473c-aa9e-27e01e0caa3b-image_task_01M777PDM3317D4BSWFRHQAGXP_1.png",
+              "https://getapib.org/image/9998205534456064-e4c8b8d6-d65f-4d6e-ac7e-73381b15daa7-image_task_01M777PDM3317D4BSWFRHQAGXP_2.png",
+              "https://getapib.org/image/9998205534456016-6e90edbd-e489-491a-81c4-3c2b698ecc3e-image_task_01M777PDM3317D4BSWFRHQAGXP_3.png",
+              "https://getapib.org/image/9998205534455959-16016f57-686c-4451-8027-d5bf1a9e019f-image_task_01M777PDM3317D4BSWFRHQAGXP_4.png",
+              "https://getapib.org/image/9998205534455914-e29557b7-dedc-4288-8ff7-def4337f99b2-image_task_01M777PDM3317D4BSWFRHQAGXP_5.png",
+              "https://getapib.org/image/9998205534455867-14a04ff5-cc91-42c9-b8b2-bee5f2c18ae1-image_task_01M777PDM3317D4BSWFRHQAGXP_6.png",
+              "https://getapib.org/image/9998205534455817-a91b00e5-2e3b-4e7c-9ba7-851ac9d2ba99-image_task_01M777PDM3317D4BSWFRHQAGXP_7.png",
+              "https://getapib.org/image/9998205534455750-6f29f6f8-d458-4e2e-92eb-b2cc64adeab0-image_task_01M777PDM3317D4BSWFRHQAGXP_8.png",
+              "https://getapib.org/image/9998205534455702-88e6e548-b2bb-496d-bcdc-1fee42b48db3-image_task_01M777PDM3317D4BSWFRHQAGXP_9.png"
+            ]
+          }
+        ]
+      },
+      "status": "completed"
+    }
+  }
+}

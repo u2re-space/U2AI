@@ -34,6 +34,14 @@
  *   `text_recognition.lines[].bounding_box`, and the line frames plus `runs[].style` fill the font
  *   size, line step, weight and family instead of leaving them null. The decomposition now runs
  *   without a prompt, because the vendor states a prompt alongside `text_recognition` can cost the OCR.
+ * @changed 2026-11-12 Each downloaded layer PNG is resized to its bounding-box content size using
+ *   fitLayerToBox: the API generates each layer at ~1K canvas with the same aspect as its bounding_box,
+ *   so the file is down-scaled to box.width×box.height (vendor docs: `приведите слой к w×h`).
+ *   The original bounding box is preserved as bbox in the named mapping (the box field may be
+ *   tightened to OCR line frames for text layers, which is a measurement, not a crop). The
+ *   SOURCE_GEOMETRY_PROMPT is no longer sent to decomposition — layers are independently scaled
+ *   by the model and resized locally.
+ *   may be tightened to OCR line frames for text layers, which is a measurement, not a crop).
  *
  * How advanced differs from standard:
  *   - standard: the model reads the reference and returns boxes; the harness cuts the crops.
@@ -52,7 +60,7 @@ import { resolveInside } from './paths.js';
 import { isSeedream55, decomposeLayers, generateTransparentLayer, downloadImageBytes, isContentRejection, contentRejectionNotice, SEEDREAM_MODEL, SEEDREAM_INPUT_MAX_BYTES, SEEDREAM_INPUT_MAX_PIXELS } from '../openai/seedream-5-5.js';
 import { imageModelFor } from '../openai/images.js';
 import { detectMagick, magickCrop, magickPadImageBytes, magickRemoveImagePadding, magickTrimImage } from './image-magick.js';
-import { rasterPadImageBytes, rasterRemoveImagePadding, rasterTrim } from './image-raster.js';
+import { rasterPadImageBytes, rasterRemoveImagePadding, rasterTrim, rasterFitToSourceFrame } from './image-raster.js';
 import { paddedSizeToMinPixels, paddedSizeToMinPixelsByResolution } from '../shared/images.js';
 import { readImageSize, inferResolution } from '../shared/images.js';
 
@@ -138,6 +146,57 @@ function typographyFromLines(lines) {
     };
 }
 
+/**
+ * Resize a downloaded layer PNG to its bounding-box content size.
+ * The API generates each layer at a ~1K canvas with the same aspect ratio as its bounding_box,
+ * so the file is down-scaled to `box.width × box.height` (vendor docs: "приведите слой к w×h").
+ * The original bounding box is preserved as `bbox` in the named mapping.
+ * @param {string} abs absolute path to the layer PNG (overwritten with resized result)
+ * @param {{ width: number, height: number }} box the bounding-box size to fit to
+ * @param {AbortSignal} signal
+ * @returns {Promise<boolean>} true when the resize succeeded
+ * @ai.hint io
+ */
+async function fitLayerToBox(abs, box, signal) {
+    const targetW = Math.round(box.width);
+    const targetH = Math.round(box.height);
+    if (!(targetW > 0) || !(targetH > 0)) return false;
+
+    const bytes = await readFile(abs).catch(() => null);
+    if (!bytes?.length) return false;
+
+    const actual = readImageSize(bytes);
+    if (!actual?.width || !actual?.height) return false;
+    if (actual.width === targetW && actual.height === targetH) return false;
+
+    // Aspect guard: model generates layer canvas with same aspect as bounding_box.
+    // If mismatch > 5% the resize would distort content — report but still proceed.
+    const srcAspect = actual.width / actual.height;
+    const dstAspect = targetW / targetH;
+    const aspectDiff = Math.abs(srcAspect - dstAspect) / dstAspect;
+    if (aspectDiff > 0.05) {
+        console.warn(`fitLayerToBox: aspect mismatch ${(aspectDiff * 100).toFixed(1)}% for ${abs} (src ${srcAspect.toFixed(3)} vs dst ${dstAspect.toFixed(3)})`);
+    }
+
+    try {
+        const fitted = await rasterFitToSourceFrame({ bytes, width: targetW, height: targetH, engine: 'auto' });
+        if (fitted) {
+            await writeFile(abs, fitted);
+            return true;
+        }
+    } catch { /* fall through to ImageMagick */ }
+
+    const exe = await detectMagick({ magickPath: null });
+    if (exe) {
+        try {
+            // '!' forces exact resize (no aspect preservation).
+            // Layer canvas aspect ≈ box aspect (vendor-generated), so exact is safe.
+            await magickResize({ exe, input: abs, output: abs, width: targetW, height: targetH, cwd: path.dirname(abs), signal });
+            return true;
+        } catch { /* fall through */ }
+    }
+    return false;
+}
 /**
  * A file-name slug both the filesystem and the model can read. The gateway names layers in any script
  * it likes, and stripping a Chinese name down to `[a-z0-9]` used to leave a file called `01-.png`.
@@ -539,10 +598,11 @@ export async function advancedMeasurePhase1({ root, workId, client, referencePat
     const inputFrame = { width: inputPadding.width, height: inputPadding.height };
     const refMime = inputPadding.padded || refAbs.endsWith('.png') ? 'image/png'
         : (refAbs.endsWith('.jpg') || refAbs.endsWith('.jpeg') ? 'image/jpeg' : 'image/png');
-    const geometryPrompt = `${prompt ?? ''}\n\n${SOURCE_GEOMETRY_PROMPT}`
-        + (inputPadding.padded
-            ? ` The verified source is ${inputPadding.originalWidth}x${inputPadding.originalHeight} pixels on a ${inputPadding.width}x${inputPadding.height} canvas; the added area is padding.`
-            : '');
+    // The decomposition mode does not accept size/prompt geometry hints — the vendor
+    // states that each layer is independently scaled to the chosen level. Sending a
+    // prompt alongside text_recognition can also degrade OCR quality. Let the model
+    // return layers at ~1K canvas and resize them locally to the bounding-box size.
+    const geometryPrompt = prompt ?? null;
 
     // Decompose. The host chain is resolved per model, because the gateway that serves seedream is
     // usually not the primary one, and `modelsBackends` is the only place that says which is which.
@@ -600,6 +660,7 @@ export async function advancedMeasurePhase1({ root, workId, client, referencePat
             ...layer,
             name: layerLabel(layer.name, layer.index),
             description: undefined,
+            bbox: layer.box,
             box: tight ?? layer.box,
             tightened: Boolean(tight),
             typography: isText ? typographyFromLines(lines) : null,
@@ -623,7 +684,16 @@ export async function advancedMeasurePhase1({ root, workId, client, referencePat
         if (layerBytes) {
             const abs = path.join(root, rel);
             await writeFile(abs, layerBytes).catch(() => {});
-            await trimLayerAsset(abs, config, signal);
+            // Resize the layer PNG to its bounding-box content size.
+            // Vendor docs: "Каждый слой масштабируется отдельно... приведите слой к w×h".
+            // The PNG canvas is ~1K with the same aspect as the box — exact downscale.
+            if (layer.bbox) {
+                await fitLayerToBox(abs, layer.bbox, signal).catch(() => {});
+            }
+            // trim only when fit was not applied — fit already gives exact content size.
+            if (!layer.bbox) {
+                await trimLayerAsset(abs, config, signal);
+            }
             cropPaths.push(rel);
         }
 

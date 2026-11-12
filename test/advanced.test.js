@@ -346,7 +346,7 @@ test('the enhanced pass stops buying generations once the moderation refuses the
     }
 });
 
-test('phase 1 keeps the boxes in the reference frame and every name ASCII', async () => {
+test('phase 1 keeps the boxes in the reference frame and every name ASCII (no prompt sent)', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-advanced-frame-'));
     const bodies = [];
     const server = http.createServer((_req, res) => {
@@ -391,9 +391,9 @@ test('phase 1 keeps the boxes in the reference frame and every name ASCII', asyn
             root: dir, workId: 'w', client, referencePath: 'ref.png',
             config: { agent: { advancedMaxLayers: 12 } }, notify: () => {},
         });
-        assert.equal('prompt' in bodies[0], true, 'the generation request carries a source-geometry guard');
-        assert.match(bodies[0].prompt, /Preserve the source image or fragment at its original scale and geometry/);
-        assert.match(bodies[0].prompt, /500x400 pixels on a 960x960 canvas/);
+        // The decomposition mode does not accept source-geometry prompts — the vendor scales each
+        // layer independently and the canvas size is recovered locally via fitLayerToBox.
+        assert.equal('prompt' in bodies[0], false, 'no prompt is sent to decomposition');
         assert.equal(result.sheet.canvas.width, 500);
         assert.equal(result.sheet.canvas.height, 400);
         const item = [...result.sheet.elements, ...result.sheet.regions][0];
@@ -409,7 +409,7 @@ test('phase 1 keeps the boxes in the reference frame and every name ASCII', asyn
     }
 });
 
-test('advanced measure sends only the source-geometry guard and never the Russian plan', async () => {
+test('advanced measure sends no prompt to decomposition and never the Russian plan', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-advanced-prompt-'));
     const bodies = [];
     const server = http.createServer((_req, res) => {
@@ -435,9 +435,7 @@ test('advanced measure sends only the source-geometry guard and never the Russia
             config: { agent: {} }, client, notify: () => {},
         });
         assert.ok(result.sheet);
-        assert.equal('prompt' in bodies[0], true, 'the geometry guard is sent even though the plan stays out');
-        assert.match(bodies[0].prompt, /Never guess or state unverified source dimensions/);
-        assert.doesNotMatch(bodies[0].prompt, /Русский план страницы/);
+        assert.equal('prompt' in bodies[0], false, 'decomposition runs without a prompt');
     } finally {
         server.close();
         await rm(dir, { recursive: true, force: true });

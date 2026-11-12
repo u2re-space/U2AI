@@ -53,11 +53,11 @@ test('a persistent request error does not move to the next host', async () => {
 });
 
 test('sprutdock is used only when its key is present', () => {
-    const config = { baseURL: 'https://sprutdock.ru/v1', backends: defaults.fallback.providers };
+    const config = { baseURL: 'https://routerai.ru/api/v1', backends: defaults.fallback.providers };
     // The first backend (proxyapi) is the primary, so providerList returns the remaining 3
     assert.deepEqual(providerList(config, {}), [
         { baseURL: 'https://api.proxyapi.ru/v1', apiKey: "{{env:PROXYAPI_API_KEY}}" },
-        { baseURL: 'https://routerai.ru/api/v1', apiKey: "{{env:ROUTERAI_API_KEY}}" },
+        { baseURL: 'https://sprutdock.ru/v1', apiKey: "{{env:SPRUTDOCK_API_KEY}}", supports: { decisionAPI: false } },
         // `useWalletBalance` is a request-body parameter of the gateway, not a header.
         { baseURL: 'https://gptunnel.ru/v1', apiKey: '{{env:GPTUNNEL_API_KEY}}', body: { useWalletBalance: false } }
     ]);

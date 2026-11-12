@@ -63,17 +63,18 @@ const r = (overrides) => ({ ...ROLE_FIELDS, ...overrides });
  */
 let currentProviders = [];
 let defaultProviders = [
-    { baseURL: 'https://sprutdock.ru/v1', apiKey: "{{env:SPRUTDOCK_API_KEY}}", supports: { decisionAPI: false }, env: 'SPRUTDOCK_API_KEY' },
-    { baseURL: 'https://api.proxyapi.ru/v1', apiKey: "{{env:PROXYAPI_API_KEY}}", env: 'PROXYAPI_API_KEY' },
     { baseURL: 'https://routerai.ru/api/v1', apiKey: "{{env:ROUTERAI_API_KEY}}", env: 'ROUTERAI_API_KEY' },
-    { baseURL: 'https://gptunnel.ru/v1', apiKey: '{{env:GPTUNNEL_API_KEY}}', body: { useWalletBalance: false }, env: 'GPTUNNEL_API_KEY' }
+    { baseURL: 'https://api.proxyapi.ru/v1', apiKey: "{{env:PROXYAPI_API_KEY}}", env: 'PROXYAPI_API_KEY' },
+    { baseURL: 'https://sprutdock.ru/v1', apiKey: "{{env:SPRUTDOCK_API_KEY}}", supports: { decisionAPI: false }, env: 'SPRUTDOCK_API_KEY' },
+    { baseURL: 'https://gptunnel.ru/v1', apiKey: '{{env:GPTUNNEL_API_KEY}}', body: { useWalletBalance: false }, env: 'GPTUNNEL_API_KEY' },
+    //{ baseURL: 'https://api.apimart.ai/v1', apiKey: '{{env:APIMART_API_KEY}}', env: 'APIMART_API_KEY' }
 ];
 let providersRef = null;
 export const defaults = Object.freeze({
     model: 'moonshotai/kimi-k3.1-pro',
     imageModel: 'openai/gpt-image-2.6-sunburst',                 // null → gpt-image-2.6 (flare for generation, sunburst for edits) on the images API
-    baseURL: "https://sprutdock.ru/v1",                    // null → OPENAI_BASE_URL or https://api.openai.com/v1/
-    apiKey: "{{env:SPRUTDOCK_API_KEY}}",                     // prefer the OPENAI_API_KEY environment variable
+    baseURL: "https://routerai.ru/api/v1",                    // null → OPENAI_BASE_URL or https://api.openai.com/v1/
+    apiKey: "{{env:ROUTERAI_API_KEY}}",                     // prefer the OPENAI_API_KEY environment variable
     /**
      * Ordered OpenAI-compatible backends — the default pool for every route. The first entry with a
      * URL and a key is the primary host; the rest are tried when it is down. An entry accepts

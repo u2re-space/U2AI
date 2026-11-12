@@ -187,9 +187,9 @@ export const MODEL_FALLBACKS = Object.freeze({
  */
 export const PURPOSE_MODEL_MAP = Object.freeze({
     decompose: Object.freeze([
+        'seedream-5-5',    // if available
         PROXY_RIVERFLOW_MODEL,   // fallback if gpt-image-2.6-* refuses
         PROXY_IMAGE_MODEL,  // default
-        'seedream-5-5',    // if available
     ]),
     isolate: Object.freeze([
         'seedream-5-5',    // best at subject isolation

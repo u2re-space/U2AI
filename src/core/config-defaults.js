@@ -329,20 +329,21 @@ export const defaults = Object.freeze({
     roles: {
         default          : r({}),
         planner          : r({ model: 'gpt-6.1-terra', effort: 'xhigh' }),
-        architect        : r({ model: 'gpt-6.1-terra', effort: 'xhigh' }),
         orchestrator     : r({ model: 'gpt-6.1-terra', effort: 'xhigh', verbosity: 'high' }),
         encoder          : r({ model: "gpt-6.1-terra", effort: 'xhigh', verbosity: 'low' }),
         classifier       : r({ model: "gpt-6.1-terra", effort: 'xhigh' }),
         installer        : r({ model: 'gpt-6.1-terra', effort: 'xhigh' }),
+        architect        : r({ model: 'moonshotai/kimi-k3.1-pro', effort: 'xhigh' }),
         decomposer       : r({ model: 'moonshotai/kimi-k3.1-pro', effort: 'xhigh' }),
         designer         : r({ model: 'moonshotai/kimi-k3.1-pro', effort: 'xhigh' }),
         worker           : r({ model: 'moonshotai/kimi-k3.1-pro', effort: 'xhigh' }),
         'image-processor': r({ model: "moonshotai/kimi-k3.1-pro", effort: 'xhigh' }), // will be fixed in 0.2.16, I was too hurry when used `gpt-6-luna` in 0.2.15 release
-        reviewer : r({ model: "gpt-6.1-terra",
+        reviewer : r({ 
+            model: "moonshotai/kimi-k3.1-pro",
             tiers: [
-                { model: 'gpt-6.1-terra', effort: ['medium', 'high', 'xhigh'] }, // check (review tier)
-                { model: 'gpt-6.1-terra', effort: ['medium', 'high', 'xhigh'] }, // vision: trivial and normal images
-                { model: 'gpt-6.1-terra', effort: ['medium', 'high', 'xhigh'] }, // vision: screenshots and large images
+                { model: 'moonshotai/kimi-k3.1-pro', effort: ['medium', 'high', 'xhigh'] }, // check (review tier)
+                { model: 'moonshotai/kimi-k3.1-pro', effort: ['medium', 'high', 'xhigh'] }, // vision: trivial and normal images
+                { model: 'moonshotai/kimi-k3.1-pro', effort: ['medium', 'high', 'xhigh'] }, // vision: screenshots and large images
             ],
         }),
         solver: r({
@@ -389,8 +390,8 @@ export const defaults = Object.freeze({
                 { model: 'moonshotai/kimi-k3.1-pro', effort: ['medium', 'high', 'xhigh'] },
             ],
         }),
-        clicker          : r({ model: "gpt-6.1-terra", effort: 'low' }),
-        typer            : r({ model: "gpt-6.1-terra", effort: 'low' }),
+        clicker: r({ model: "gpt-6.1-terra", effort: 'low' }),
+        typer  : r({ model: "gpt-6.1-terra", effort: 'low' }),
     },
     /** Multi-role orchestration used by `ai run`. */
     agent: {

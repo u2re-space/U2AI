@@ -78,7 +78,7 @@ test('the shipped reviewer tiers stay on one model', () => {
     assert.equal(resolveRole(defaults, 'reviewer', 'trivial').effort, 'medium');
     assert.equal(resolveRole(defaults, 'reviewer', 'normal' ).effort, 'high');
     assert.equal(resolveRole(defaults, 'reviewer', 'complex').effort, 'xhigh');
-    assert.equal(resolveRole(defaults, 'reviewer', 'complex').model, 'gpt-6.1-terra');
+    assert.equal(resolveRole(defaults, 'reviewer', 'complex').model, 'moonshotai/kimi-k3.1-pro');
 });
 
 test('the shipped measurer tiers keep the cheap model for normal work', () => {

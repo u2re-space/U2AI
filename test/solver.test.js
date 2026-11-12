@@ -54,8 +54,8 @@ test('reviewer effort and model follow the image long side, and a screenshot sta
 
     assert.equal(resolveRole(defaults, 'reviewer', imageTier(400)).effort, 'medium');
     assert.equal(resolveRole(defaults, 'reviewer', imageTier(800)).effort, 'high');
-    assert.equal(resolveRole(defaults, 'reviewer', imageTier(1281)).model, 'gpt-6.1-terra');
-    assert.equal(resolveRole(defaults, 'reviewer', imageTier(80, { screen: true })).model, 'gpt-6.1-terra');
+    assert.equal(resolveRole(defaults, 'reviewer', imageTier(1281)).model, 'moonshotai/kimi-k3.1-pro');
+    assert.equal(resolveRole(defaults, 'reviewer', imageTier(80, { screen: true })).model, 'moonshotai/kimi-k3.1-pro');
 });
 
 test('an explicit reviewer model and effort replace the tier', () => {

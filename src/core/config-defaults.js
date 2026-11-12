@@ -439,7 +439,7 @@ export const defaults = Object.freeze({
          * `.tmp/<id>/decomposition.json`, images to `.tmp/<id>/decomposition/`.
          */
         decompose: 'auto',              // off | auto | always
-        decomposerMaxTurns: 12,         // tool turns used to identify screens and to cut or restore their sub-references
+        decomposerMaxTurns: 32,         // tool turns used to identify screens and to cut or restore their sub-references
         /**
          * Whether the decomposer must produce sub-reference images. auto = produce them when the
          * sources need it (collages, rotated or perspective shots) and the tools allow it;

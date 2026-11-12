@@ -1234,7 +1234,7 @@ export async function runTeam({
                         }),
                         builtin: builtinTools(config, { web: config.tools.web }).filter((tool) => tool.type === 'mcp' || (config.tools.web && tool.type === 'web_search')),
                         schema: DECOMPOSER_SCHEMA, schemaName: 'decomposition',
-                        maxTurns: config.agent.decomposerMaxTurns ?? 12, model,
+                        maxTurns: config.agent.decomposerMaxTurns ?? 32, model,
                         ...(role.effort ? { effort: role.effort } : {}),
                     });
                     if (result.status === 'cancelled' || result.status === 'budget') return { exit: stop(result, 'разбиение экранов') };

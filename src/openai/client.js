@@ -20,7 +20,7 @@ import { CHAT_PATH, chatGaps, createChatStreamReducer, droppedTools, normalizeCh
 import { envValue } from '../core/runtime-env.js';
 import { detectMagick, magickPadImageBytes, magickRemoveImagePadding } from '../agent/image-magick.js';
 import { rasterPadImageBytes, rasterRemoveImagePadding } from '../agent/image-raster.js';
-import { backgroundValue, encodeMultipart, generationBody, imageFormatField, imageModelProfile, imageSizeAttempts, imageSizeFields, readImageSize, imageComplexityValue, imageSources, isImageSizeError, isSvgRequest, needsDiv16Padding, needsMinPixelsPadding, paddedSizeToMinPixels, normalizeVectorRatio, parseImageSize, resolveImageFormat, withSizeHint, svgConversionModel, normalizeImageSize } from './images.js';
+import { backgroundValue, encodeMultipart, generationBody, imageFormatField, imageModelProfile, imageSizeAttempts, imageSizeFields, readImageSize, imageComplexityValue, imageSources, isImageSizeError, isSvgRequest, needsDiv16Padding, needsMinPixelsPadding, paddedSizeToMinPixels, normalizeVectorRatio, parseImageSize, resolveImageFormat, sameAspectImageSize, withSizeHint, svgConversionModel } from './images.js';
 import { rasterFitToSourceFrame } from '../agent/image-raster.js';
 import { isSeedream55, generateTransparentLayer } from './seedream-5-5.js';
 import { saveImageResponse } from './image-diagnostics.js';
@@ -864,11 +864,15 @@ export function createClient({
                     fields[imageFormatField(model)] = 'svg';
                     // ProxyAPI demands an `svg` object next to `output_format: svg` for the
                     // gpt-image family — the raster model paints the picture and this model
-                    // writes the document. Without it the host refuses the whole call.
-                    // For the multipart route it must be JSON-encoded.
+                    // writes the document. Without it the host refuses the whole call
+                    // (`SVG generation requires 'svg.model'`). A form field is a string, so
+                    // `encodeMultipart` carries the object in the `svg[model]` bracket notation
+                    // the host parses back into an object; a JSON string there is refused.
                     const svgModel = svgConversionModel(model);
-                    fields.size = normalizeImageSize(fields.size, model) || fields.size;
-                    if (svgModel) fields.svg = JSON.stringify(svgModel);
+                    if (svgModel) fields.svg = svgModel;
+                    // The gateway validates the frame of a vector call too, so snap it to the
+                    // model's legal grid; the returned SVG keeps its own geometry regardless.
+                    if (fields.size) fields.size = sameAspectImageSize(fields.size, model) || fields.size;
                 } else {
                     const sizeFields = imageSizeFields(attemptSize, model, resolution);
                     if (sizeFields.size) fields.size = sizeFields.size;

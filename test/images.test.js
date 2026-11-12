@@ -112,6 +112,15 @@ test('proxyapi uses the images API and omits Responses-only image fields', () =>
     assert.match(form.contentType, /multipart\/form-data; boundary=/);
     assert.ok(form.body.includes(png));
     assert.match(form.body.toString('latin1'), /filename="shot.png"/);
+    // A nested field is a JSON shape on the generations route and a string on this one, so the
+    // encoder flattens it into the bracket notation the gateway parses back into an object.
+    const nested = encodeMultipart({
+        fields: { model: 'openai/gpt-image-2.6-sunburst', output_format: 'svg', svg: { model: 'gpt-6.1-terra' }, empty: { skip: '' } },
+        files: [{ filename: 'shot.png', mime: 'image/png', bytes: png }],
+    }).body.toString('latin1');
+    assert.match(nested, /name="svg\[model\]"\r\n\r\ngpt-6\.1-terra\r\n/);
+    assert.doesNotMatch(nested, /\[object Object\]/);
+    assert.doesNotMatch(nested, /name="empty/);
     assert.equal(sniffImage(png).mime, 'image/png');
     assert.equal(pngHasAlphaChannel(png), true);
     assert.equal(pngHasAlphaChannel(Buffer.from(RGB_PNG, 'base64')), false);
@@ -425,15 +434,18 @@ test('vector model uses aspect_ratio and svg output', () => {
     assert.equal('background' in vectorBody, false);
     assert.equal('input_references' in vectorBody, false);
     // A free-frame family answers `size`, so a frame it is given stays a frame — no ratio collapse,
-    // no 16-pixel rounding, and none of the raster tuning fields.
+    // no raster tuning fields. The gateway still validates the frame, so sub-minimum or non-16
+    // frames are snapped to the nearest legal same-ratio size; the returned SVG keeps its own
+    // geometry. The nested `svg.model` is the bare id: the upstream provider resolves
+    // `gpt-6.1-terra` and refuses `openai/gpt-6.1-terra`.
     assert.deepEqual(
         generationBody({ model: 'openai/gpt-image-2.6-sunburst', prompt: 'логотип', size: '160x120', format: 'svg', complexity: 'high', background: 'transparent' }),
-        { model: 'openai/gpt-image-2.6-sunburst', prompt: 'логотип', size: '160x120', output_format: 'svg', svg: { model: 'openai/gpt-6.1-terra' } },
+        { model: 'openai/gpt-image-2.6-sunburst', prompt: 'логотип', size: '960x720', output_format: 'svg', svg: { model: 'gpt-6.1-terra' } },
     );
     // A shape that names no pixels reaches the same family as the ratio it names.
     assert.deepEqual(
         generationBody({ model: 'openai/gpt-image-2.6-sunburst', prompt: 'логотип', size: '16:9', format: 'svg' }),
-        { model: 'openai/gpt-image-2.6-sunburst', prompt: 'логотип', aspect_ratio: '16:9', output_format: 'svg', svg: { model: 'openai/gpt-6.1-terra' } },
+        { model: 'openai/gpt-image-2.6-sunburst', prompt: 'логотип', aspect_ratio: '16:9', output_format: 'svg', svg: { model: 'gpt-6.1-terra' } },
     );
     assert.equal(sniffImage(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>')).mime, 'image/svg+xml');
     assert.equal(sniffImage(Buffer.from('<?xml version="1.0"?><svg></svg>')).ext, 'svg');
@@ -460,9 +472,16 @@ test('images client vectorize posts the source as a multipart edit and the tool 
             assert.match(form, /name="model"\r\n\r\nopenai\/gpt-image-2\.6-sunburst\r\n/);
             assert.match(form, /name="output_format"\r\n\r\nsvg\r\n/);
             assert.match(form, /name="image"; filename="logo\.png"/);
-            // The source frame goes verbatim: a document is not put on the 16-pixel grid, so a 1x1
-            // source asks for 1x1 rather than the 16x16 a raster edit would get.
-            //assert.match(form, /name="size"\r\n\r\n1x1\r\n/);
+            // The vector writer travels in the bracket notation a form can carry: the host parses
+            // `svg[model]` back into the object `output_format: svg` demands, while `[object Object]`
+            // or a JSON string both come back as "expected an object, but got a string".
+            assert.match(form, /name="svg\[model\]"\r\n\r\ngpt-6\.1-terra\r\n/);
+            assert.doesNotMatch(form, /\[object Object\]/);
+            assert.doesNotMatch(form, /name="svg"\r\n\r\n\{/);
+            // The source frame is the model's own frame: the gateway validates it like a raster one,
+            // so a 1x1 source is asked as the smallest legal frame of that shape rather than 1x1.
+            assert.match(form, /name="size"\r\n\r\n816x816\r\n/);
+            assert.doesNotMatch(form, /name="size"\r\n\r\n1x1\r\n/);
             assert.doesNotMatch(form, /name="aspect_ratio"/);
             assert.doesNotMatch(form, /name="background"/);
             res.end(JSON.stringify({ data: [{ b64_json: svgB64 }] }));

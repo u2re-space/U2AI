@@ -60,12 +60,39 @@ export function isSvgRequest({ model = null, format = null } = {}) {
     return normalizeImageFormat(format) === 'svg' || isVectorModel(model);
 }
 
+/**
+ * Form fields of a request, with nested objects flattened into the bracket notation the gateway
+ * reads back as an object: `svg: { model: 'gpt-6.1-terra' }` travels as `svg[model]`. A form value
+ * is a string, so a field that /images/generations sends as JSON has no other way through a
+ * multipart body — interpolated as it is, it reaches the host as `[object Object]` and is refused
+ * (`Invalid type for 'svg': expected an object, but got a string instead`), and a JSON string is
+ * refused the same way.
+ * @param {Record<string, unknown>} fields
+ * @returns {Array<[string, string]>}
+ * @ai.hint pure
+ */
+function formFields(fields) {
+    const pairs = [];
+    const keep = (value) => value !== undefined && value !== null && value !== '';
+    for (const [name, value] of Object.entries(fields)) {
+        if (!keep(value)) continue;
+        if (typeof value === 'object' && !Array.isArray(value)) {
+            for (const [key, nested] of Object.entries(value)) {
+                if (!keep(nested)) continue;
+                pairs.push([`${name}[${key}]`, String(nested)]);
+            }
+            continue;
+        }
+        pairs.push([name, String(value)]);
+    }
+    return pairs;
+}
+
 /** Encode the fields and files for POST /images/edits as multipart form data. */
 export function encodeMultipart({ fields, files }) {
     const boundary = `ai${randomBytes(12).toString('hex')}`;
     const chunks = [];
-    for (const [name, value] of Object.entries(fields)) {
-        if (value === undefined || value === null || value === '') continue;
+    for (const [name, value] of formFields(fields)) {
         chunks.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`));
     }
     for (const file of files) {
@@ -1107,7 +1134,9 @@ export function generationBody({ model, prompt, size = null, complexity = null, 
         const frame = /^\d+\s*x\s*\d+$/.test(asked) && imageModelProfile(model).customSizes
             ? asked.replace(/\s+/g, '')
             : null;
-        if (frame) body.size = frame;
+        // The frame is still the model's own frame: a vector call is validated like any other, so
+        // a source that names 810x810 is asked as 816x816. The document answers by its own geometry.
+        if (frame) body.size = sameAspectImageSize(frame, model) || frame;
         else {
             const aspect = normalizeVectorRatio(size);
             if (aspect) body.aspect_ratio = aspect;

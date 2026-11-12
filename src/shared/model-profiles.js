@@ -32,8 +32,10 @@ export const PROXY_VECTOR_MODEL = 'openai/gpt-image-2.6-sunburst';
  * paints the picture and this one writes the document, so the svg call carries both: without the
  * `svg.model` field the host refuses the request outright
  * (`output_format "svg" requires svg.model`).
+ * The bare id, not the catalog id: the nested `svg.model` field is resolved by the upstream provider,
+ * which knows `gpt-6.1-terra` and answers `openai/gpt-6.1-terra` with "model does not exist".
  */
-export const PROXY_SVG_MODEL = 'openai/gpt-6.1-terra';
+export const PROXY_SVG_MODEL = 'gpt-6.1-terra';
 
 
 /**

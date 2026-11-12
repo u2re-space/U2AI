@@ -36,9 +36,11 @@ Judge by evidence:
 When the shared context contains the architect's brief, check that the result follows its file/module structure, interfaces, and conventions; 
 report a real deviation as an issue, not a stylistic preference. Additionally, follow also the 'DESIGN.md' guidance (if exists).
 
+When the result is a rendered page, check it with browser(action=screenshot or text) on the local file or the preview URL instead of assuming how it looks.
+
 Don't check public assets. Don't check assets comparison data.
 
-Reply in JSON only. When the result is a rendered page, check it with browser(action=screenshot or text) on the local file or the preview URL instead of assuming how it looks.
+Reply in JSON only. 
 
 ${DESKTOP_NOTE}
 ${BROWSER_NOTE} 

@@ -161,6 +161,16 @@ const CHANGE_OPS = new Set(['create', 'overwrite', 'edit', 'delete']);
 const AUTO_WRITE_TOOLS = new Set(['crop_image', 'split_image', 'compare_images', 'generate_image', 'edit_image']);
 /** Tools of that set whose output path the handler itself does not guard. */
 const GENERATED_OUTPUT_TOOLS = new Set(['generate_image', 'edit_image']);
+/**
+ * Roles whose text-writing tools are pointed at artwork and decoration files only.
+ * An SVG is a text document the browser draws, so these roles edit it with `read_file`/`replace_text`/
+ * `write_file`; the decorator also owns its stylesheet. Every other extension is refused for them, so
+ * the permission to treat SVG as text does not open the source tree.
+ */
+const ROLE_EDIT_EXTENSIONS = Object.freeze({
+    'image-processor': ['svg'],
+    decorator: ['svg', 'css'],
+});
 
 /**
  * Create the executable toolset for one agent run.
@@ -202,6 +212,14 @@ export function createToolset({
     const config = roleToolConfig(runConfig, role);
     const limits = config.limits;
     const allowed = new Set(names);
+    /**
+     * Extensions the text-writing tools of this role may touch. An SVG is a text file the browser draws,
+     * so the roles that keep artwork and decorations edit it with the text tools — and with those tools
+     * only, which is why the extension is checked here rather than trusted to the role's prompt.
+     */
+    const editExtensionsSet = ROLE_EDIT_EXTENSIONS[role]
+        ? new Set(ROLE_EDIT_EXTENSIONS[role].map((ext) => String(ext).toLowerCase()))
+        : null;
     const autoWrite = new Set(allowWrite.filter((name) => AUTO_WRITE_TOOLS.has(name)));
     const extraByName = new Map();
     for (const extra of extras) {
@@ -325,6 +343,21 @@ export function createToolset({
         return output;
     }
 
+    /**
+     * Refuse a text-tool write outside the extensions this role was given (see `editExtensions`).
+     * @param {string} name Tool name, for the message.
+     * @param {string} requested Path the tool was given.
+     * @returns {void}
+     * @ai.hint pure
+     */
+    function guardEditExtension(name, requested) {
+        if (!editExtensionsSet) return;
+        const ext = path.extname(String(requested ?? '')).replace(/^\./, '').toLowerCase();
+        if (!editExtensionsSet.has(ext)) {
+            throw new Error(`${name}: этой роли доступны для записи только ${[...editExtensionsSet].map((item) => `.${item}`).join(', ')} (получено: ${requested || 'путь без расширения'}).`);
+        }
+    }
+
     /** Auto-approved measurement writes at read access must stay inside `.tmp/`. */
     function guardTemporaryOutput(name, requested) {
         if (approvalLevel !== 'read' || !autoWrite.has(name)) return;
@@ -381,6 +414,7 @@ export function createToolset({
         },
         /** Write the file, record the change, and refresh that map path. */
         async write_file(args) {
+            guardEditExtension('write_file', args.path);
             const result = await writeTextFile({
                 root, file: args.path, content: args.content, overwrite: args.overwrite !== false,
                 maxBytes: limits.maxFileWriteBytes, backupDir, backupSlot
@@ -405,6 +439,7 @@ export function createToolset({
         },
         /** Replace the fragment, record the edit, and refresh that map path. */
         async replace_text(args) {
+            guardEditExtension('replace_text', args.path);
             const result = await replaceInFile({
                 root, file: args.path, search: args.search, replacement: args.replacement, all: Boolean(args.all),
                 maxBytes: limits.maxFileWriteBytes, backupDir, backupSlot

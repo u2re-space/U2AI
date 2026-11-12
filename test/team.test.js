@@ -87,16 +87,17 @@ function roleOf(body) {
 
 test('image processor only sees enabled image, asset, and documentation-fetch tools', () => {
     const enabled = ['list_files', 'write_file', 'run_command', 'fetch_url', 'view_image', 'crop_image', 'split_image', 'compare_images', 'generate_image', 'edit_image', 'vectorize_image', 'generate_svg', 'download_font', 'download_icons', 'image_generation'];
-    assert.deepEqual(toolNamesForRole(enabled, 'image-processor'), ['fetch_url', 'view_image', 'crop_image', 'split_image', 'compare_images', 'generate_image', 'edit_image', 'vectorize_image', 'generate_svg', 'download_font', 'download_icons']);
+    // An SVG is a text file, so the role also carries the text tools; the toolset keeps them on `.svg`.
+    assert.deepEqual(toolNamesForRole(enabled, 'image-processor'), ['write_file', 'fetch_url', 'view_image', 'crop_image', 'split_image', 'compare_images', 'generate_image', 'edit_image', 'vectorize_image', 'generate_svg', 'download_font', 'download_icons']);
     const api = enabledToolNames({ ...defaults.tools, images: true, fetch: true, browser: true }, { imageApi: true });
     assert.ok(toolNamesForRole(api, 'reviewer').includes('browser'));
     assert.ok(toolNamesForRole(api, 'reviewer').includes('browser_drive'));
     assert.ok(toolNamesForRole(api, 'worker').includes('browser_drive'));
-    assert.deepEqual(toolNamesForRole(api, 'image-processor'), ['view_image', 'fetch_url', 'generate_image', 'edit_image', 'vectorize_image', 'split_image', 'crop_image', 'compare_images', 'generate_svg', 'download_font', 'download_icons']);
+    assert.deepEqual(toolNamesForRole(api, 'image-processor'), ['read_file', 'write_file', 'replace_text', 'view_image', 'fetch_url', 'generate_image', 'edit_image', 'vectorize_image', 'split_image', 'crop_image', 'compare_images', 'generate_svg', 'download_font', 'download_icons']);
     const noFetch = enabledToolNames({ ...defaults.tools, images: true, fetch: false }, { imageApi: false });
-    assert.deepEqual(toolNamesForRole(noFetch, 'image-processor'), ['view_image', 'split_image', 'crop_image', 'compare_images', 'generate_svg']);
+    assert.deepEqual(toolNamesForRole(noFetch, 'image-processor'), ['read_file', 'write_file', 'replace_text', 'view_image', 'split_image', 'crop_image', 'compare_images', 'generate_svg']);
     const noImages = enabledToolNames({ ...defaults.tools, images: false, fetch: false }, { imageApi: false });
-    assert.deepEqual(toolNamesForRole(noImages, 'image-processor'), ['view_image']);
+    assert.deepEqual(toolNamesForRole(noImages, 'image-processor'), ['read_file', 'write_file', 'replace_text', 'view_image']);
     const stylerEnabled = enabledToolNames({ ...defaults.tools, desktop: true, images: true, shell: true, subagents: true });
     const styler = toolNamesForRole(stylerEnabled, 'styler');
     assert.ok(styler.includes('read_file') && styler.includes('write_file'));
@@ -1476,8 +1477,9 @@ test('image processing runs before implementation and passes prepared assets in 
         assert.ok(processor.tools.some((tool) => tool.name === 'fetch_url'));
         assert.ok(processor.tools.some((tool) => tool.name === 'download_font'));
         assert.ok(processor.tools.some((tool) => tool.type === 'web_search'));
-        assert.deepEqual(toolNames.filter(Boolean), ['view_image', 'fetch_url', 'generate_image', 'edit_image', 'vectorize_image', 'split_image', 'crop_image', 'compare_images', 'generate_svg', 'download_font', 'download_icons']);
-        assert.equal(toolNames.some((name) => ['write_file', 'replace_text', 'run_command'].includes(name)), false);
+        assert.deepEqual(toolNames.filter(Boolean), ['read_file', 'write_file', 'replace_text', 'view_image', 'fetch_url', 'generate_image', 'edit_image', 'vectorize_image', 'split_image', 'crop_image', 'compare_images', 'generate_svg', 'download_font', 'download_icons']);
+        // The text tools are there to edit SVG as text; the shell is not part of this role.
+        assert.equal(toolNames.some((name) => ['run_command', 'run_script', 'delete_file'].includes(name)), false);
         const worker = seen.find((item) => item.role === 'worker').body;
         assert.match(worker.input[0].content[0].text, /Prepared images and visual assets/);
         assert.match(worker.input[0].content[0].text, /assets\/cover\.png/);

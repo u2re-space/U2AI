@@ -45,6 +45,7 @@ import { ensureProjectMap, loadProjectMap } from './map.js';
 import { draftTaskMap, filterTaskMap, formatDraft, formatMarks, formatScan } from './task-map.js';
 import { formatWorkspace, mergeTaskDraft, scanWorkspace } from './workspace-scan.js';
 import { SHELL_TOOL_NAMES, IMAGE_TOOL_NAMES } from './tool-specs.js';
+import { setImageDiagnostics } from '../openai/image-diagnostics.js';
 import { openMcpSources } from '../mcp/session.js';
 import { ANSWER_INSTRUCTIONS, chooseRoute, loadHandoff, openHandoff, readDirectory, saveHandoff, seedDirectory, seedTextFile, spillAnswer } from './handoff.js';
 import { applyFromStep, applyPlanUpdate, briefPlan, briefProgress, continuationText, createProgress, expandPlan, findResumable, loadWork, newWorkId, normalizeWorkId, parsePlanUpdate, pathsIn, recordStep, revisionClause, saveWork, syncProgress } from './work-plan.js';
@@ -142,7 +143,9 @@ export function toolNamesForRole(allNames, role, spec = null) {
     }
     if (role === 'image-processor' || role === 'measurer' || role === 'decomposer' || role === 'decorator' || role === 'designer') {
         const allowed = new Set(role === 'image-processor'
-            ? [...IMAGE_TOOL_NAMES, 'fetch_url']
+            // An SVG is a text file the browser draws, so this role edits vector artwork with the text
+            // tools; the toolset keeps those tools pointed at `.svg` (ROLE_EDIT_EXTENSIONS in tools.js).
+            ? [...IMAGE_TOOL_NAMES, 'read_file', 'write_file', 'replace_text', 'fetch_url']
             : role === 'measurer'
                 ? ['view_image', 'crop_image', 'split_image', 'fetch_url']
                 : role === 'decomposer'
@@ -670,6 +673,8 @@ export async function runTeam({
             work = { id: progress.id, plan, progress };
             if (expose) result.plan = plan;
             result.workId = work.id;
+            // The image archive follows the run: raw answers land in .tmp/<this id>/images/.
+            setImageDiagnostics({ root, workId: work.id });
             // Every role reads the shared context, so this is the one place where the run's work
             // id becomes known: role instructions write example paths as .tmp/<id>/..., and this
             // section states what <id> stands for in this run.

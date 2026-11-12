@@ -36,6 +36,8 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import { ApiError } from './errors.js';
 import { modelMissing, providerDown } from './fallback.js';
+import { saveImageResponse } from './image-diagnostics.js';
+import { parseImageResponseWithAI } from './image-response-fallback.js';
 import { SEEDREAM_5_5 } from '../shared/model-profiles.js';
 
 /** Default model id of the seedream-5.5 route on the proxy gateway. */
@@ -437,13 +439,17 @@ function channelChain(client, channels, what) {
  * nothing to the other backends.
  * @param {{ client?: object, channels?: Array<{ client: object, modelFor?: Function, label?: string }>,
  *   model: string, body: object, signal?: AbortSignal, timeoutMs?: number,
- *   onPoll?: Function, onWarn?: Function, what: string, noResult: string }} options
+ *   onPoll?: Function, onWarn?: Function, what: string, noResult: string,
+ *   route?: string, provider?: string|null }} options
  * @returns {Promise<{ raw: object, taskId: string|null, host: string|null }>}
  * @ai.hint io
  */
 async function runSeedreamTask({ client = null, channels = null, model, body, signal, timeoutMs,
-    onPoll = null, onWarn = null, what = 'Задача seedream-5.5', noResult = 'Ответ seedream-5.5 не содержит ни task_id, ни результатов.' }) {
+    onPoll = null, onWarn = null, what = 'Задача seedream-5.5', noResult = 'Ответ seedream-5.5 не содержит ни task_id, ни результатов.',
+    route = 'seedream/generations', provider = null }) {
     const chain = channelChain(client, channels, what);
+    /** Every answer this model gives is archived raw, task id or finished picture alike. */
+    const archive = (raw, taskId, host) => saveImageResponse(raw, { route, model, host: host ?? null, taskId, provider });
     let lastError = null;
     for (const [index, channel] of chain.entries()) {
         // Each host names the model its own way: `modelsBackends` may carry a vendor, prefix or suffix.
@@ -451,14 +457,20 @@ async function runSeedreamTask({ client = null, channels = null, model, body, si
         const sent = { ...body, model: id };
         try {
             const created = await channel.client.call('images/generations', { body: sent, signal });
-            if (taskData(created)?.status === 'completed') return { raw: created, taskId: null, host: channel.label ?? null };
+            if (taskData(created)?.status === 'completed') {
+                return { raw: created, taskId: null, host: channel.label ?? null, savedFile: await archive(created, null, channel.label) };
+            }
             const taskId = String(created?.data?.[0]?.task_id ?? created?.data?.task_id ?? created?.task_id ?? '').trim();
             if (!taskId) {
-                if (taskImageSources(created).length) return { raw: created, taskId: null, host: channel.label ?? null };
-                throw new ApiError(noResult, { code: 'INVALID_RESPONSE', details: { keys: Object.keys(created ?? {}) } });
+                const savedFile = await archive(created, null, channel.label);
+                if (taskImageSources(created).length) {
+                    return { raw: created, taskId: null, host: channel.label ?? null, savedFile };
+                }
+                throw new ApiError(noResult + (savedFile ? ` Сырой ответ сохранён: ${savedFile}.` : ''),
+                    { code: 'INVALID_RESPONSE', details: { keys: Object.keys(created ?? {}), savedFile } });
             }
             const settled = await pollTask(channel.client, taskId, { signal, timeoutMs, onPoll });
-            return { raw: settled, taskId, host: channel.label ?? null };
+            return { raw: settled, taskId, host: channel.label ?? null, savedFile: await archive(settled, taskId, channel.label) };
         } catch (error) {
             // A missing model or a dead host is this backend's answer, not the route's: try the next one.
             if (!modelMissing(error) && !providerDown(error)) throw error;
@@ -557,6 +569,7 @@ export async function decomposeLayers({ client = null, channels = null, source, 
     const body = layerDecompositionBody({ model, source, prompt, size, maxImages, textRecognition });
     const { raw, taskId, host } = await runSeedreamTask({
         client, channels, model, body, signal, timeoutMs, onPoll, onWarn,
+        route: 'seedream-decomposition',
         what: 'Разложение слоёв',
         noResult: 'Ответ seedream-5.5 не содержит ни task_id, ни результатов разложения.',
     });
@@ -582,23 +595,32 @@ export async function decomposeLayers({ client = null, channels = null, source, 
  */
 export async function generateTransparentLayer({ client = null, channels = null, model = SEEDREAM_MODEL, prompt,
     bytes = null, mime = 'image/png', references = null, size = '1K', background = 'transparent', format = 'png',
-    signal, timeoutMs, onPoll = null, onWarn = null }) {
+    signal, timeoutMs, onPoll = null, onWarn = null, parserModel = null, invoke = null, root = null, provider = null }) {
     const urls = Array.isArray(references) && references.length
         ? references
         : (bytes?.length ? [toDataUri(bytes, mime)] : []);
     const body = generationBody({ model, prompt, references: urls, size, background, format });
-    const { raw } = await runSeedreamTask({
+    const { raw, savedFile } = await runSeedreamTask({
         client, channels, model, body, signal, timeoutMs, onPoll, onWarn,
+        route: 'seedream-generation', provider,
         what: 'Генерация прозрачного слоя', noResult: 'Ответ seedream-5.5 не содержит ни task_id, ни результатов генерации.',
     });
+    let sources = taskImageSources(raw);
+    if (!sources.length) {
+        sources = (await parseImageResponseWithAI({
+            result: raw, route: 'seedream-generation', model, host: null, taskId: null,
+            invoke, parserModel, root, signal, onWarn, archive: false,
+        })) ?? [];
+    }
     const payloads = [];
-    for (const source of taskImageSources(raw)) {
+    for (const source of sources) {
         if (source.kind === 'b64') { payloads.push(source.value); continue; }
         const image = await downloadImageBytes(source.value, signal);
         if (image) payloads.push(image.toString('base64'));
     }
     if (!payloads.length) {
-        throw new ApiError('Задача seedream-5.5 завершилась без изображения.', { code: 'INVALID_RESPONSE', details: { keys: Object.keys(raw ?? {}) } });
+        throw new ApiError('Задача seedream-5.5 завершилась без изображения.'
+            + (savedFile ? ` Сырой ответ сохранён: ${savedFile}.` : ''), { code: 'INVALID_RESPONSE', details: { keys: Object.keys(raw ?? {}), savedFile } });
     }
     return payloads;
 }

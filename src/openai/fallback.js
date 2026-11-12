@@ -12,6 +12,7 @@
  */
 
 import { createClient } from './client.js';
+import { makeParserInvoke } from './image-response-fallback.js';
 import { ApiError } from './errors.js';
 import { isReasoningModel, supportsVerbosity } from '../core/config.js';
 import { envValue, liveEnv } from '../core/runtime-env.js';
@@ -413,9 +414,12 @@ export function createFallbackClient(config, { create = createClient } = {}) {
     /** Chat transport switches, shared by every host this router opens. */
     const primarySpec = primaryBackend(config, 'responses');
     const rasterOptions = { magickPath: config.magickPath ?? null, rasterEngine: config.image?.rasterEngine ?? 'auto', imageDiv16: config.image?.div16 ?? null, imagePadToMin: config.image?.padToMin ?? null, imageSizeHint: config.image?.sizeHint ?? 'auto' };
+    // The text model that writes the salvage parser for an unreadable image answer. Every host in the
+    // chain gets it: the salvage call goes through whichever client met the odd response.
+    const salvageOptions = { imageParserModel: config.model ?? null };
     const primary = create({
         apiKey: primarySpec.apiKey, baseURL: primarySpec.baseURL, headers: primarySpec.headers, body: primarySpec.body,
-        chat: chatOptionsFor(config, primarySpec.supports), ...timeouts, ...rasterOptions,
+        chat: chatOptionsFor(config, primarySpec.supports), ...timeouts, ...rasterOptions, ...salvageOptions,
     });
     const fallbackClients = new Map();
     /**
@@ -430,7 +434,7 @@ export function createFallbackClient(config, { create = createClient } = {}) {
         if (!c) {
             c = create({
                 apiKey: spec.apiKey, baseURL: spec.baseURL, headers: spec.headers, body: spec.body,
-                chat: chatOptionsFor(config, spec.supports), ...timeouts, ...rasterOptions,
+                chat: chatOptionsFor(config, spec.supports), ...timeouts, ...rasterOptions, ...salvageOptions,
             });
             fallbackClients.set(key, c);
         }
@@ -473,7 +477,7 @@ export function createFallbackClient(config, { create = createClient } = {}) {
                         client: create({
                             apiKey: item.apiKey, baseURL: item.baseURL, headers: item.headers, body: item.body,
                             chat: chatOptionsFor(config, item.supports), retries: config.retries,
-                            idleTimeoutMs: timeouts.idleTimeoutMs, connectTimeoutMs: timeouts.connectTimeoutMs, ...rasterOptions,
+                            idleTimeoutMs: timeouts.idleTimeoutMs, connectTimeoutMs: timeouts.connectTimeoutMs, ...rasterOptions, ...salvageOptions,
                         }),
                     };
                     opened.set(poolKey, found);
@@ -554,6 +558,7 @@ export function createFallbackClient(config, { create = createClient } = {}) {
             })),
             model: args.model, prompt: args.prompt, references, size: args.size,
             background: args.background, format: args.format, signal: args.signal,
+            parserModel: config.model ?? null, invoke: makeParserInvoke(primary), root: process.cwd(),
             onWarn: (message) => { try { args.onEvent?.({ type: 'warning', message }); } catch { /* observer */ } },
         });
     };

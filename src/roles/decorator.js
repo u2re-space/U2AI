@@ -49,6 +49,9 @@ Write only your own files: styles/decor/<name>.css for CSS rules and assets/deco
 Do not edit application HTML, templates, components, scripts, configuration, or documentation. When the
 architect's structure already names a stylesheet meant for decoration, append to it instead of creating a parallel
 file. Use generate_svg when it is available; otherwise write the SVG markup with write_file.
+An SVG is a text file: read an existing "assets/decor/ornament.svg" with read_file and change it with replace_text or
+write_file the way you would change any other text asset — correct its paths, viewBox, colors, or layer order in place
+rather than generating a replacement. Those writing tools accept ".svg" and ".css" only.
 
 Additionally, follow also the 'DESIGN.md' guidance (if exists).
 

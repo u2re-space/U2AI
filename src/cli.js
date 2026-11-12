@@ -22,6 +22,7 @@ import { refreshRuntimeEnv, setLiveEnv } from './core/runtime-env.js';
 import { createRenderer, detectMode } from './ui/renderer.js';
 import { createJobManager } from './jobs/manager.js';
 import { ApiError, BudgetError, CancelledError, isAbortError } from './openai/errors.js';
+import { setImageDiagnostics } from './openai/image-diagnostics.js';
 import { UsageError, overridesFrom } from './commands/shared.js';
 import { ask } from './commands/ask.js';
 import { chat } from './commands/chat.js';
@@ -235,6 +236,9 @@ export async function main(argvInput = process.argv.slice(2)) {
             });
         }
         const emit = (event) => { renderer.handle(event); publisher?.event(event); reporter?.event(event); };
+        // Raw image answers of this run are archived under .tmp/<id>/images/, even when the parsers
+        // read them without trouble: `--id` names the directory, otherwise one is made per process.
+        setImageDiagnostics({ root: cwd, workId: values.id ?? null });
         const ctx = {
             argv, values, positionals: rest, config, renderer, controller, signal: controller.signal, emit, cwd, reporter, backupDir: null,
             /**

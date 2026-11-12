@@ -23,6 +23,8 @@ import { rasterPadImageBytes, rasterRemoveImagePadding } from '../agent/image-ra
 import { backgroundValue, encodeMultipart, generationBody, imageFormatField, imageModelProfile, imageSizeAttempts, imageSizeFields, readImageSize, imageComplexityValue, imageSources, isImageSizeError, isSvgRequest, needsDiv16Padding, needsMinPixelsPadding, paddedSizeToMinPixels, normalizeVectorRatio, parseImageSize, resolveImageFormat, withSizeHint, svgConversionModel, normalizeImageSize } from './images.js';
 import { rasterFitToSourceFrame } from '../agent/image-raster.js';
 import { isSeedream55, generateTransparentLayer } from './seedream-5-5.js';
+import { saveImageResponse } from './image-diagnostics.js';
+import { parseImageResponseWithAI, makeParserInvoke } from './image-response-fallback.js';
 
 export { ApiError };
 
@@ -129,6 +131,7 @@ export function createClient({
     http, retries = defaults.retries, idleTimeoutMs, connectTimeoutMs, maxErrorBytes = defaults.maxErrorBytes,
     maxResponseBytes = defaults.maxResponseBytes, maxEventBytes = defaults.maxEventBytes,
     magickPath = null, rasterEngine = 'auto', imageDiv16 = null, imagePadToMin = null, imageSizeHint = 'auto',
+    imageParserModel = null, workspaceRoot = null,
     chat: chatSetting = null,
     onEvent: globalOnEvent,
 } = {}) {
@@ -506,17 +509,43 @@ export function createClient({
         });
     }
 
-    async function payloadList(result, signal, route) {
+    /**
+     * Ask a text model one question and return its text — the salvage route's only way of thinking.
+     * The getter keeps the reference lazy, because `responses` is built after this point.
+     */
+    const parserInvoke = makeParserInvoke({ get responses() { return responses; } });
+
+    /** What every salvage call of this client needs: the model to ask and the directory to write in. */
+    const salvageOptions = {
+        parserModel: imageParserModel ?? null,
+        invoke: imageParserModel ? parserInvoke : null,
+        root: workspaceRoot ?? process.cwd(),
+    };
+
+    async function payloadList(result, signal, route, meta = {}) {
         const imageError = imageErrorFromResult(result);
         if (imageError) throw imageError;
-        const sources = imageSources(result);
+        // The answer is archived before anything reads it: a shape the parsers cannot see is exactly
+        // the answer the user needs on disk, and the base64 inside it is the payload itself.
+        const savedFile = await saveImageResponse(result, { route, model: meta.model ?? null, host: root.href, taskId: meta.taskId ?? null });
+        let sources = imageSources(result);
         if (!sources.length) {
-            const keys = result && typeof result === 'object' && !Array.isArray(result) ? Object.keys(result) : [];
-            const rows = Array.isArray(result?.data) ? result.data : null;
-            const rowKeys = rows?.[0] && typeof rows[0] === 'object' ? Object.keys(rows[0]) : [];
-            throw new ApiError(`Ответ ${route} не содержит ни b64_json, ни url (поля ответа: ${keys.join(', ') || 'нет'}; data: ${rows ? `массив из ${rows.length}` : typeof result?.data}; поля первого результата: ${rowKeys.join(', ') || 'нет'}).`, {
-                code: 'INVALID_RESPONSE', details: { responseKeys: keys, dataType: Array.isArray(result?.data) ? 'array' : typeof result?.data, dataCount: rows?.length ?? null, firstResultKeys: rowKeys },
-            });
+            sources = (await parseImageResponseWithAI({
+                result, route, model: meta.model ?? null, host: root.href, taskId: meta.taskId ?? null,
+                signal, onWarn: meta.onWarn ?? null, archive: false, ...salvageOptions,
+            })) ?? [];
+            if (!sources.length) {
+                const keys = result && typeof result === 'object' && !Array.isArray(result) ? Object.keys(result) : [];
+                const rows = Array.isArray(result?.data) ? result.data : null;
+                const rowKeys = rows?.[0] && typeof rows[0] === 'object' ? Object.keys(rows[0]) : [];
+                throw new ApiError(`Ответ ${route} не содержит ни b64_json, ни url (поля ответа: ${keys.join(', ') || 'нет'}; data: ${rows ? `массив из ${rows.length}` : typeof result?.data}; поля первого результата: ${rowKeys.join(', ') || 'нет'}).`
+                    + `${savedFile ? ` Сырой ответ сохранён: ${savedFile}.` : ''}`
+                    + `${imageParserModel ? ' Резервный разбор по ответу ИИ не нашёл изображение.' : ''}`, {
+                    code: 'INVALID_RESPONSE',
+                    details: { responseKeys: keys, dataType: Array.isArray(result?.data) ? 'array' : typeof result?.data, dataCount: rows?.length ?? null, firstResultKeys: rowKeys, savedFile },
+                });
+            }
+            try { meta.onWarn?.(`Резервный разбор: изображение найдено в нестандартном поле ответа ${route}${savedFile ? ` (сырой ответ: ${savedFile})` : ''}.`); } catch { /* observer */ }
         }
         const out = [];
         for (const source of sources) {
@@ -703,7 +732,7 @@ export function createClient({
             const vector = isSvgRequest({ model, format });
             if (isSeedream55(model)) {
                 const payloads = await generateTransparentLayer({
-                    client: { call }, model, prompt, references, size, background, format, signal,
+                    client: { call }, model, prompt, references, size, background, format, signal, ...salvageOptions,
                 });
                 return vector ? payloads : fitPayloadsToFrame(payloads, size);
             }
@@ -720,7 +749,7 @@ export function createClient({
                     if (index >= attempts.length - 1 || !isImageSizeError(error)) throw error;
                 }
             }
-            const payloads = await payloadList(result, signal, 'images/generations');
+            const payloads = await payloadList(result, signal, 'images/generations', { model });
             // A reply is a document, not a raster: an SVG is never resampled to the asked frame.
             return vector ? payloads : fitPayloadsToFrame(payloads, size);
         },
@@ -789,6 +818,7 @@ export function createClient({
                 }
                 const payloads = await generateTransparentLayer({
                     client: { call }, channels, model, prompt: seedreamPrompt, references, size: requestedFrame, background, format, signal, onWarn,
+                    ...salvageOptions,
                 });
                 if (!padding) return fitPayloadsToFrame(payloads, size);
                 const restored = await Promise.all(payloads.map(async (payload) => {
@@ -869,7 +899,7 @@ export function createClient({
                     if (index >= attempts.length - 1 || !isImageSizeError(error)) throw error;
                 }
             }
-            const payloads = await payloadList(result, signal, 'images/edits');
+            const payloads = await payloadList(result, signal, 'images/edits', { model, onWarn });
             // A vector reply is the document the model drew: no padding to cut and no frame to scale
             // it back into — both corrections belong to a raster.
             if (vector) return payloads;

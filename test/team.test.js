@@ -86,16 +86,16 @@ function roleOf(body) {
 }
 
 test('image processor only sees enabled image, asset, and documentation-fetch tools', () => {
-    const enabled = ['list_files', 'write_file', 'run_command', 'fetch_url', 'view_image', 'crop_image', 'split_image', 'compare_images', 'generate_image', 'edit_image', 'vectorize_image', 'generate_svg', 'download_font', 'download_icons', 'image_generation'];
+    const enabled = ['list_files', 'write_file', 'run_command', 'fetch_url', 'view_image', 'crop_image', 'split_image', 'compare_images', 'generate_image', 'edit_image', 'vectorize_image', 'generate_svg', 'download_font', 'download_icons', 'correct_perspective', 'sample_colors'];
     // An SVG is a text file, so the role also carries the text tools; the toolset keeps them on `.svg`.
-    assert.deepEqual(toolNamesForRole(enabled, 'image-processor'), ['write_file', 'fetch_url', 'view_image', 'crop_image', 'split_image', 'compare_images', 'generate_image', 'edit_image', 'vectorize_image', 'generate_svg', 'download_font', 'download_icons']);
+    assert.deepEqual(toolNamesForRole(enabled, 'image-processor'), ['write_file', 'fetch_url', 'view_image', 'crop_image', 'split_image', 'compare_images', 'generate_image', 'edit_image', 'vectorize_image', 'generate_svg', 'download_font', 'download_icons', 'correct_perspective', 'sample_colors']);
     const api = enabledToolNames({ ...defaults.tools, images: true, fetch: true, browser: true }, { imageApi: true });
     assert.ok(toolNamesForRole(api, 'reviewer').includes('browser'));
     assert.ok(toolNamesForRole(api, 'reviewer').includes('browser_drive'));
     assert.ok(toolNamesForRole(api, 'worker').includes('browser_drive'));
-    assert.deepEqual(toolNamesForRole(api, 'image-processor'), ['read_file', 'write_file', 'replace_text', 'view_image', 'fetch_url', 'generate_image', 'edit_image', 'vectorize_image', 'split_image', 'crop_image', 'compare_images', 'generate_svg', 'download_font', 'download_icons']);
+    assert.deepEqual(toolNamesForRole(api, 'image-processor'), ['read_file', 'write_file', 'replace_text', 'view_image', 'fetch_url', 'generate_image', 'edit_image', 'vectorize_image', 'split_image', 'crop_image', 'compare_images', 'generate_svg', 'correct_perspective', 'sample_colors', 'download_font', 'download_icons']);
     const noFetch = enabledToolNames({ ...defaults.tools, images: true, fetch: false }, { imageApi: false });
-    assert.deepEqual(toolNamesForRole(noFetch, 'image-processor'), ['read_file', 'write_file', 'replace_text', 'view_image', 'split_image', 'crop_image', 'compare_images', 'generate_svg']);
+    assert.deepEqual(toolNamesForRole(noFetch, 'image-processor'), ['read_file', 'write_file', 'replace_text', 'view_image', 'split_image', 'crop_image', 'compare_images', 'generate_svg', 'correct_perspective', 'sample_colors']);
     const noImages = enabledToolNames({ ...defaults.tools, images: false, fetch: false }, { imageApi: false });
     assert.deepEqual(toolNamesForRole(noImages, 'image-processor'), ['read_file', 'write_file', 'replace_text', 'view_image']);
     const stylerEnabled = enabledToolNames({ ...defaults.tools, desktop: true, images: true, shell: true, subagents: true });
@@ -213,7 +213,7 @@ test('resolveRole merges role, default role and top-level settings; --role flags
         decomposerSubReferences: 'off', design: 'off',
     });
     assert.deepEqual(overridesFrom(parseArgv(['run', 'draw', '--no-web', '--no-tools']).values).tools,
-        { web: false, fs: false, shell: false, fetch: false, mcp: false, channels: false, subagents: false, browser: false, images: false, askUser: false, desktop: false });
+        { web: false, fs: false, shell: false, fetch: false, mcp: false, channels: false, subagents: false, browser: false, images: false, askUser: false, desktop: false, skills: false });
     assert.equal(Object.keys(overridesFrom({ role: ['all=cheap'] }).roles).length, 20);
     assert.equal(overridesFrom({ extract: 'always' }).agent.extract, 'always');
     assert.equal(overridesFrom({ 'no-extract': true }).agent.extract, 'off');
@@ -1477,7 +1477,7 @@ test('image processing runs before implementation and passes prepared assets in 
         assert.ok(processor.tools.some((tool) => tool.name === 'fetch_url'));
         assert.ok(processor.tools.some((tool) => tool.name === 'download_font'));
         assert.ok(processor.tools.some((tool) => tool.type === 'web_search'));
-        assert.deepEqual(toolNames.filter(Boolean), ['read_file', 'write_file', 'replace_text', 'view_image', 'fetch_url', 'generate_image', 'edit_image', 'vectorize_image', 'split_image', 'crop_image', 'compare_images', 'generate_svg', 'download_font', 'download_icons']);
+        assert.deepEqual(toolNames.filter(Boolean), ['read_file', 'write_file', 'replace_text', 'view_image', 'fetch_url', 'generate_image', 'edit_image', 'vectorize_image', 'split_image', 'crop_image', 'compare_images', 'generate_svg', 'correct_perspective', 'sample_colors', 'download_font', 'download_icons']);
         // The text tools are there to edit SVG as text; the shell is not part of this role.
         assert.equal(toolNames.some((name) => ['run_command', 'run_script', 'delete_file'].includes(name)), false);
         const worker = seen.find((item) => item.role === 'worker').body;
@@ -1802,7 +1802,7 @@ test('decomposer builds one clean sub-reference per screen before the measurer',
     for (const name of ['crop_image', 'split_image', 'compare_images', 'generate_image', 'edit_image']) {
         assert.ok(decomposerTools.includes(name), `the decomposer must own ${name}: ${decomposerTools.join(', ')}`);
     }
-    assert.match(userText(decomposeBodies[0]), /restore a flat front view/);
+    assert.match(userText(decomposeBodies[0]), /correct_perspective with the four corners/);
     const workDir = `.tmp/${result.workId}/decomposition`;
     const restored = await readFile(path.join(dir, workDir, '00-restored.png')).catch(() => null);
     assert.ok(restored?.length, 'the restored reference is written under the work directory');

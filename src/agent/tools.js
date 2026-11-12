@@ -34,6 +34,9 @@ import { createImageHandlers } from './image-tools.js';
 import { createChannelHandlers } from '../channels/tool-handlers.js';
 import { detectMagick, magickSplit, magickCrop, magickTrimImage, magickIdentify } from './image-magick.js';
 import { rasterEngine, rasterCompare, rasterCrop, rasterSplit, rasterTrim, rasterInfo } from './image-raster.js';
+import { perspectiveRectify } from './image-distort.js';
+import { sampleColors, contrastRatio } from './image-colors.js';
+import { readSkill, discoverSkills } from './skills.js';
 import { generateSvg, downloadFont, downloadIcons } from './assets.js';
 import {
     TOOL_SPECS,
@@ -330,6 +333,10 @@ export function createToolset({
             case 'run_subagent': return `Суб-агент ${args.kind}: ${truncate(args.task ?? '', 400)}`;
             case 'download_font': return `Шрифт: ${args.name || args.url || '?'} ${args.style || ''}\nВыход: ${args.output || 'авто'}`;
             case 'download_icons': return `Иконки: ${args.name || '?'}${args.icon ? `/${args.icon}` : ' (набор)'} ${args.variant || 'regular'}\nВыход: ${args.output || 'авто'}`;
+            case 'correct_perspective': return `Выпрямить перспективу ${args.path}\nУглы: ${truncate(args.corners_json ?? '', 300)}\nВыход: ${args.output || 'авто'}\nПричина: ${args.reason ?? '—'}`;
+            case 'sample_colors': return `Сэмплировать цвета ${args.path}${args.width ? `: ${args.width}×${args.height} в (${args.x ?? 0},${args.y ?? 0})` : ' (весь кадр)'}`;
+            case 'read_skill': return `Прочитать скилл ${args.skillName}`;
+            case 'run_skill': return `Скилл ${args.skillName}: ${truncate(args.args ?? '', 300)}`;
             default:
                 if (name.startsWith('mcp_')) return `${name} ${truncate(args.arguments_json ?? args.uri ?? '', 400, { singleLine: false })}`;
                 return `${name} ${JSON.stringify(args)}`;
@@ -810,6 +817,109 @@ export function createToolset({
                 output: `Скачано ${result.count} иконок:\n${result.paths.slice(0, 20).join('\n')}${result.paths.length > 20 ? `\n… ещё ${result.paths.length - 20}` : ''}`,
                 summary: `${result.count} иконок`,
             };
+        },
+        /**
+         * Deterministic perspective rectification: four corners of a photographed or skewed screen
+         * mapped to an upright rectangle via ImageMagick homography. No generation, no hallucination.
+         */
+        async correct_perspective(args) {
+            const { abs, rel } = await resolveInside(root, args.path, { allowRoot: false });
+            const info = await stat(abs).catch(() => null);
+            if (!info?.isFile()) throw new Error(`Файл не найден: ${args.path}`);
+            let quad;
+            try {
+                const parsed = JSON.parse(args.corners_json ?? '');
+                if (!Array.isArray(parsed) || parsed.length !== 4) throw new Error('нужен JSON-массив из 4 объектов {x,y}.');
+                quad = parsed;
+            } catch (error) {
+                throw new Error(`corners_json: ${error.message ?? error}`);
+            }
+            const requested = String(args.output ?? '').trim() || `.tmp/perspective-${Date.now()}.png`;
+            guardTemporaryOutput('correct_perspective', requested);
+            const output = (await resolveInside(root, requested, { forWrite: true, allowRoot: false })).rel;
+            const result = await perspectiveRectify({
+                input: abs, output, quad, cwd: root,
+                magickPath: config.magickPath ?? null, signal,
+            });
+            const err = result.quadError;
+            const note = err.aspectError > 0.06
+                ? `\nКвад не похож на прямоугольник (aspectError ${err.aspectError}): исходник был не просто скошен, а искажён или криво отмечен.`
+                : '';
+            return {
+                output: `Перспектива исправлена детерминированно (${result.engine}): ${rel} (${result.source.width}×${result.source.height}) → ${result.rel} (${result.width}×${result.height}, ${formatBytes(result.bytes)}).${note}`,
+                summary: `${result.rel} ${result.width}×${result.height}`,
+            };
+        },
+        /**
+         * Read the actual pixel colours of an image (or a region of it) as a deterministic palette.
+         * Reports sRGB hex, OKLCH, luminance, and WCAG contrast between the background and the
+         * dominant subject colour.
+         */
+        async sample_colors(args) {
+            const { abs, rel } = await resolveInside(root, args.path, { allowRoot: false });
+            const info = await stat(abs).catch(() => null);
+            if (!info?.isFile()) throw new Error(`Файл не найден: ${args.path}`);
+            const box = args.width && args.height
+                ? { x: args.x ?? 0, y: args.y ?? 0, width: args.width, height: args.height }
+                : null;
+            const result = await sampleColors({ abs, box, k: args.k ?? 5, engine: config.image?.rasterEngine ?? 'auto' });
+            if (!result.colors.length) return { output: `Цвета не найдены в ${rel}: ${result.warnings.join('; ') || 'пустое изображение'}`, summary: `${rel}: нет цветов`, ok: false };
+            const bg = result.background;
+            const subject = result.colors.find((c) => c !== bg) ?? result.colors[0];
+            const contrast = bg && subject
+                ? Number(contrastRatio({ r: parseInt(bg.hex.slice(1, 3), 16), g: parseInt(bg.hex.slice(3, 5), 16), b: parseInt(bg.hex.slice(5, 7), 16) }, { r: parseInt(subject.hex.slice(1, 3), 16), g: parseInt(subject.hex.slice(3, 5), 16), b: parseInt(subject.hex.slice(5, 7), 16) }).toFixed(2))
+                : null;
+            const lines = result.colors.map((c, i) => `  ${i + 1}. ${c.hex}  oklch: ${c.oklch}  hsl: ${c.hsl}  luminance: ${c.luminance}  share: ${c.share != null ? Math.round(c.share * 100) + '%' : '—'}`);
+            const scope = box ? `${box.width}×${box.height} в (${box.x},${box.y})` : 'весь кадр';
+            return {
+                output: [
+                    `Палитра ${rel} (${scope}, движок: пиксели):`,
+                    ...lines,
+                    bg ? `Фон (самый большой кластер): ${bg.hex}  oklch: ${bg.oklch}` : '',
+                    contrast != null ? `Контраст фон↔субъект (WCAG): ${contrast}:1` : '',
+                    `Цветовое пространство: ${result.colorSpace.working} — ${result.colorSpace.assumption}`,
+                    ...(result.warnings ?? []),
+                ].filter(Boolean).join('\n'),
+                summary: `${result.colors.length} цветов (${scope})`,
+            };
+        },
+        /**
+         * Read the SKILL.md body of an OpenClaw-compatible skill from the standard directories.
+         */
+        async read_skill(args) {
+            const found = await readSkill(args.skillName, root);
+            if (!found) {
+                const all = await discoverSkills(root);
+                return {
+                    output: `Скилл "${args.skillName}" не найден. Доступные: ${all.map((s) => s.name).join(', ') || '(нет)'}`,
+                    summary: `скилл ${args.skillName}: не найден`,
+                    ok: false,
+                };
+            }
+            return {
+                output: `# ${found.name}\n${found.body}`,
+                summary: `${found.name} (${found.body.length} символов)`,
+            };
+        },
+        /**
+         * Run a skill's CLI command (usually npx) in the working directory.
+         */
+        async run_skill(args) {
+            const all = await discoverSkills(root);
+            const skill = all.find((s) => s.name === args.skillName);
+            if (!skill) {
+                return { output: `Скилл "${args.skillName}" не найден. Доступные: ${all.map((s) => s.name).join(', ')}`, summary: `скилл ${args.skillName}: не найден`, ok: false };
+            }
+            const timeoutSeconds = Math.min(300, args.timeout_seconds ?? 60);
+            const command = args.args ? `${args.skillName} ${args.args}` : args.skillName;
+            const result = await runCommand({
+                command, cwd: root,
+                timeoutMs: timeoutSeconds * 1000,
+                maxOutputBytes: limits.maxCommandOutputBytes,
+                signal,
+                shell: config.shell ?? null,
+            });
+            return commandReport(result, timeoutSeconds * 1000, limits);
         },
         /** Start one nested agent on its own context and fold its tool stats into this run. */
         async run_subagent(args) {

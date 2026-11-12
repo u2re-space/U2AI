@@ -470,9 +470,53 @@ export const TOOL_SPECS = {
     },
     run_subagent: {
         category: 'read', group: 'subagents',
-        description: 'Start one sub-agent: a separate agent on a fresh context, with its own tools and turn cap, that works on the task and returns a report. It never sees this conversation, so the task must be self-contained — name the paths, the exact goal, and what the report must contain. coder, styler, iconifier, and worker change files; reviewer only checks and reports (including image descriptions); solver answers from the screen or an image; image-processor prepares assets; decorator builds decorative HTML+CSS or SVG. A sub-agent cannot start another sub-agent, and it can only write or run commands the caller itself is allowed to. Use delegate_role instead when the role should see this run’s context.',
+        description: 'Start one sub-agent: a separate agent on a fresh context, with its own tools and turn cap, that works on the task and returns a report. It never sees this conversation, so the task must be self-contained — name the paths, the exact goal, and what the report must contain. coder, styler, iconifier, and worker change files; reviewer only checks and reports (including image descriptions); solver answers from the screen or an image; image-processor prepares assets; decorator builds decorative HTML+CSS or SVG. A sub-agent cannot start another sub-agent, and it can only write or run commands the caller itself is allowed to. Use delegate_role instead when the role should see the shared context of this run.',
         parameters: schema({
             kind: { type: 'string', enum: ['coder', 'styler', 'iconifier', 'worker', 'reviewer', 'solver', 'image-processor', 'decorator'], description: 'Sub-agent to start; the name is also the role whose prompt and model are used.' },
+        }),
+    },
+
+    // ---- skill tools (OpenClaw-compatible SKILL.md) ----
+    read_skill: {
+        category: 'read', group: 'skills',
+        description: 'Read a skill file (SKILL.md) from the OpenClaw-compatible skill directories (.agents/skills, .koda/skills, .claude/skills, ~/.agents/skills). Returns the full skill body including workflow steps, CLI commands, and references. Use before running a skill to understand its instructions.',
+        parameters: schema({
+            skillName: str('Name of the skill (the directory name, e.g. "ego-browser", "modern-web-guidance").'),
+        }),
+    },
+    run_skill: {
+        category: 'exec', group: 'skills',
+        description: 'Run a skill command. Loads the skill body via read_skill, then executes the CLI command of the skill (usually npx) in the working directory. Returns stdout/stderr. Use for skills that provide CLI tools like modern-web-guidance (search/retrieve guides) or ego-browser (browser automation).',
+        parameters: schema({
+            skillName: str('Name of the skill to run (the directory name).'),
+            args: str('Arguments to pass to the skill command. Usually the npx subcommand and its arguments, e.g. "search dialog" or "skill". Empty string = run skill with no args.'),
+            timeout_seconds: nullableInt('Time limit in seconds (max 300). Null = 60s default.'),
+        }),
+    },
+
+    // ---- deterministic image tools (decomposer re-projection) ----
+    correct_perspective: {
+        category: 'write', group: 'images',
+        description: 'Apply a deterministic projective transform to an image using ImageMagick `-distort Perspective`. Takes four source corner coordinates (x,y) and maps them to a destination rectangle, producing a flat front-view image. Unlike generative restoration (edit_image/generate_image), this preserves every pixel exactly — no hallucination, no color shift, no text distortion. Use when the reference is a photo of a screen taken at an angle, a tilted device frame, or a skewed collage.',
+        parameters: schema({
+            path: str('Source image path relative to the working directory.'),
+            corners_json: str('JSON array of four corner objects: [{"x":0,"y":0},{"x":100,"y":0},{"x":0,"y":100},{"x":100,"y":100}]. Each has source_x (x), source_y (y), dest_x (tx), dest_y (ty). The source corners are in the input image; the dest corners form the output rectangle (usually [0,0], [W,0], [0,H], [W,H]).'),
+            output: str('Output path. Empty string = .tmp/perspective-<timestamp>.png.'),
+            reason: str('One sentence: why this perspective correction is needed (shown to the user for approval).'),
+        }),
+    },
+
+    // ---- deterministic color tools (measurer ground truth) ----
+    sample_colors: {
+        category: 'read', group: 'images',
+        description: 'Deterministically sample dominant colors from an image file using k-means clustering on pixel values. Returns a palette of N dominant colors as hex, RGB, and coverage share, plus the background plate color. Optionally crop to a region first (x, y, width, height). Unlike model perception, this reads actual pixel values — no gamma or brightness guesswork. Use for ground-truth color measurement in the measurer pipeline.',
+        parameters: schema({
+            path: str('Image file path relative to the working directory.'),
+            x: nullableInt('X coordinate of region crop (0-based). Null = whole image.'),
+            y: nullableInt('Y coordinate of region crop (0-based). Null = whole image.'),
+            width: nullableInt('Width of region crop. Null = full width.'),
+            height: nullableInt('Height of region crop. Null = full height.'),
+            k: nullableInt('Number of dominant colors to find (default 5).'),
         }),
     },
 };
@@ -483,7 +527,10 @@ export const READ_ONLY_TOOLS = ['list_files', 'read_file', 'search_files', 'view
 export const SHELL_TOOL_NAMES = ['run_command', 'run_script', 'ssh'];
 
 /** Image and asset tools of the image-processor role and sub-agent. */
-export const IMAGE_TOOL_NAMES = ['view_image', 'crop_image', 'split_image', 'compare_images', 'generate_image', 'edit_image', 'vectorize_image', 'generate_svg', 'download_font', 'download_icons'];
+export const IMAGE_TOOL_NAMES = ['view_image', 'crop_image', 'split_image', 'compare_images', 'generate_image', 'edit_image', 'vectorize_image', 'generate_svg', 'download_font', 'download_icons', 'correct_perspective', 'sample_colors'];
+
+/** Skill tools of the OpenClaw-compatible skill system. */
+export const SKILL_TOOL_NAMES = ['read_skill', 'run_skill'];
 
 /**
  * Strict function-tool definitions for names that exist in `TOOL_SPECS`.
@@ -524,10 +571,13 @@ export function enabledToolNames(tools, { interactive = false, memory = false, s
     if (memory) names.push('recall', 'remember');
     if (tools.askUser && interactive) names.push('ask_user');
     if (tools.images && imageApi) names.push('generate_image', 'edit_image', 'vectorize_image');
-    if (tools.images && images) names.push('split_image', 'crop_image', 'compare_images', 'generate_svg');
+    // correct_perspective and sample_colors are deterministic measurements on the file itself
+    // (sharp/ImageMagick), so like split/crop/compare they need no generator, only `images`.
+    if (tools.images && images) names.push('split_image', 'crop_image', 'compare_images', 'generate_svg', 'correct_perspective', 'sample_colors');
     if (tools.fetch) names.push('download_font', 'download_icons');
     if (tools.channels) names.push('decide', 'moderate_text', 'channel_reply', 'telegram_call');
     if (tools.subagents) names.push('run_subagent', 'delegate_role');
+    if (tools.skills) names.push(...SKILL_TOOL_NAMES);
     return names;
 }
 

@@ -60,7 +60,9 @@ export const EXECUTORS = Object.freeze({
         description: 'Code for one self-contained piece of work: edits the files the task names, follows the stack it finds, and checks the result.',
     },
     styler: {
-        tools: ['list_files', 'read_file', 'search_files', 'list_backups', 'write_file', 'replace_text', 'restore_backup'], turns: 40, schema: null,
+        // read_skill is a plain file read, not a web or shell tool, so it stays inside the styler
+        // restriction and is how this role reaches the installed CSS skill guidance.
+        tools: ['list_files', 'read_file', 'search_files', 'list_backups', 'write_file', 'replace_text', 'restore_backup', 'read_skill'], turns: 40, schema: null,
         description: 'Implement one focused CSS or SCSS task: inspect the consuming markup and project style conventions, edit the named stylesheets, and report without running checks or comparisons.',
     },
     iconifier: {
@@ -80,13 +82,13 @@ export const EXECUTORS = Object.freeze({
         description: 'Solves one problem from the screen or an image: an answer, a calculation, a formula, a captcha, element coordinates.',
     },
     decomposer: {
-        tools: ['view_image', 'fetch_url', 'crop_image', 'split_image', 'compare_images', 'generate_image', 'edit_image'],
+        tools: ['view_image', 'fetch_url', 'crop_image', 'split_image', 'compare_images', 'correct_perspective', 'generate_image', 'edit_image'],
         turns: 12, schema: 'decompose',
-        description: 'Splits visual references and Figma files into ordered screens before measurement, and produces one clean sub-reference image per screen (crop, tile, or a view restored from a rotated or perspective shot).',
+        description: 'Splits visual references and Figma files into ordered screens before measurement, and produces one clean sub-reference image per screen (crop, tile, or a view rectified from a rotated or perspective shot). Rectifies geometry with correct_perspective; regenerates only what the pixels cannot recover.',
     },
     measurer: {
-        tools: ['view_image', 'crop_image', 'split_image', 'fetch_url'], turns: 16, schema: 'measure',
-        description: 'Re-measures a crop or a layer and returns a measurement sheet: boxes, angles, borders, spacing, and CSS-ready values.',
+        tools: ['view_image', 'crop_image', 'split_image', 'sample_colors', 'fetch_url'], turns: 16, schema: 'measure',
+        description: 'Re-measures a crop or a layer and returns a measurement sheet: boxes, angles, borders, spacing, sampled colours, and CSS-ready values.',
     },
     decorator: {
         tools: ['list_files', 'read_file', 'search_files', 'view_image', 'write_file', 'replace_text', 'generate_svg', 'fetch_url'], turns: 16, schema: 'decorations',
@@ -101,7 +103,7 @@ export const EXECUTORS = Object.freeze({
         description: 'Prepare the project environment: audit and install dependencies, configure tooling, set up scripts, and verify readiness for coding.',
     },
     designer: {
-        tools: ['list_files', 'read_file', 'view_image', 'fetch_url', 'generate_image', 'edit_image'], turns: 16, schema: 'design',
+        tools: ['list_files', 'read_file', 'search_files', 'view_image', 'fetch_url', 'generate_image', 'edit_image', 'read_skill'], turns: 16, schema: 'design',
         description: 'Produces a visual design direction (layout, colour, typography, spacing), generates reference images, and writes an HTML template skeleton.',
     },
     clicker: {

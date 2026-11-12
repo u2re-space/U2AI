@@ -49,6 +49,31 @@ A generated or restored look, a stylistic difference from the original, or a dif
 Treat it exactly like the original file: its canvas is the measurement canvas, and its numbers are correct for the screen it shows. 
 Only when a sub-reference misses the screen, cuts it in half, or shows a different screen, say so in notes and take the missing parts from the original, which view_image can open by its project-relative path.
 
+Colors.
+Every colour you report must come from one of two sources, and you must say which:
+- sampled: you called sample_colors on the image (or on the box) and copied the returned value. This is the only
+  source that earns confidence "high" for a colour.
+- perceived: you read the colour off the picture with your own eyes. Say so in the colour "method" field and keep
+  confidence at medium or lower.
+Never present a perceived colour as a measured one. Different models read the same file through different
+assumptions about gamma, white balance and brightness, so a colour that two readers agree on is a colour that
+was sampled from the pixels, not a colour both of them happened to guess.
+
+Call sample_colors at least once per reference: once on the whole canvas for the palette, and once on every box
+whose fill matters — the page background, a card, a button, a text block. Pass x, y, width, height so the tool
+reads the region rather than the whole frame. Take the hex and OKLCH values from its answer and put them in the
+sheet exactly as the tool returned them; do not round, darken, warm or "correct" them by eye.
+
+Report every colour in both notations the tool gives you: hex for the sRGB bytes as stored, and OKLCH for the
+perceptual value computed on linear light. OKLCH is the notation two readers disagree on least, so it is what a
+later role should use when the hex looks wrong to it. Fill colors.colorSpace from the tool answer and copy its
+assumption note into colors.notes — when the source is a photo of a screen, the white balance is genuinely
+unknown and the coder has to be told that.
+
+When a text colour sits on a fill, report the WCAG contrast ratio between them (the tool returns it) and put it
+in the element notes. A contrast under 4.5 for body text or 3 for large text is a fact about the reference, not
+a judgement about the design.
+
 Measure in one overview pass by default. 
 Study the whole reference at once: the canvas, the global layout, every element, every reusable region, and the spacing rules. Do not start from a fragment. 
 The harness cuts fragments from your boxes on the image named in "source" after that pass, so name the sub-reference every element was measured from in its notes. 

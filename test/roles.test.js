@@ -103,7 +103,7 @@ test('font selection instructions distinguish research, pairing, measured appear
 
 test('desktop helpers keep their tool slices and never delegate', () => {
     assert.equal(EXECUTORS.solver.tools, 'screen');
-    assert.deepEqual(EXECUTORS.styler.tools, ['list_files', 'read_file', 'search_files', 'list_backups', 'write_file', 'replace_text', 'restore_backup']);
+    assert.deepEqual(EXECUTORS.styler.tools, ['list_files', 'read_file', 'search_files', 'list_backups', 'write_file', 'replace_text', 'restore_backup', 'read_skill']);
     for (const name of ['run_command', 'run_script', 'ssh', 'compare_images', 'click', 'type', 'screenshot', 'run_batch', 'run_ahk', 'run_subagent', 'delegate_role']) {
         assert.equal(EXECUTORS.styler.tools.includes(name), false, name);
     }
@@ -116,7 +116,9 @@ test('desktop helpers keep their tool slices and never delegate', () => {
     assert.deepEqual(EXECUTORS.clicker.tools, ['click', 'screenshot']);
     assert.deepEqual(EXECUTORS.typer.tools, ['type', 'screenshot']);
     assert.deepEqual(EXECUTORS.encoder.tools, ['screenshot']);
-    assert.deepEqual(EXECUTORS.measurer.tools, ['view_image', 'crop_image', 'split_image', 'fetch_url']);
+    // sample_colors is the measurer's ground truth for colour: without it every hex would be
+    // the model's own visual estimate, and different models disagree on gamma and brightness.
+    assert.deepEqual(EXECUTORS.measurer.tools, ['view_image', 'crop_image', 'split_image', 'sample_colors', 'fetch_url']);
     for (const name of ['solver', 'clicker', 'typer', 'encoder', 'measurer']) {
         const tools = EXECUTORS[name].tools;
         assert.equal(Array.isArray(tools) ? tools.includes('delegate_role') : false, false, name);

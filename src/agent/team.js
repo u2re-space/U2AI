@@ -149,7 +149,7 @@ export function toolNamesForRole(allNames, role, spec = null) {
             : role === 'measurer'
                 ? ['view_image', 'crop_image', 'split_image', 'fetch_url']
                 : role === 'decomposer'
-                    ? ['view_image', 'fetch_url', 'crop_image', 'split_image', 'compare_images', 'generate_image', 'edit_image']
+                    ? ['view_image', 'fetch_url', 'crop_image', 'split_image', 'compare_images', 'correct_perspective', 'generate_image', 'edit_image']
                     : role === 'decorator'
                         ? [...READ_ONLY_TOOLS, 'write_file', 'replace_text', 'generate_svg', 'fetch_url']
                         : [...READ_ONLY_TOOLS, 'view_image', 'generate_image', 'edit_image', 'fetch_url', 'write_file']);
@@ -1097,10 +1097,9 @@ export async function runTeam({
                     if (resumedWork) {
                         const saved = await readFile(path.join(root, dir, 'design.json'), 'utf8')
                             .then((text) => JSON.parse(text)).catch(() => null);
-                        if (saved) {
-                            designResult = saved;
-                            ctx.set('design', 'Design direction (before decomposer)', renderDesign(saved, dir), { priority: 9 });
-                        }
+                        if (!saved) return;  // no saved design — skip, but don't re-run
+                        designResult = saved;
+                        ctx.set('design', 'Design direction (before decomposer)', renderDesign(saved, dir), { priority: 9 });
                         return;
                     }
                     const role = roles.resolve('designer');
@@ -1178,8 +1177,10 @@ export async function runTeam({
                     if (!(referenceParts.length || hasFigmaReference) && decomposeMode !== 'always') return;
                     const dir = `.tmp/${work.id}`;
                     if (resumedWork) {
-                        // A resumed run does not ask the role again; it reads back the screens and the
-                        // sub-reference images that are still on disk.
+                        // A resumed run reads back the screens and the sub-reference images that were
+                        // written in a previous pass. When the previous run stopped before this stage
+                        // (`--stop-after=plan`), there is no decomposition.json yet, so the decomposer
+                        // must still run — falling through to the role call below instead of returning.
                         const saved = await readFile(path.join(root, dir, 'decomposition.json'), 'utf8')
                             .then((text) => JSON.parse(text)).catch(() => null);
                         if (saved) {
@@ -1189,8 +1190,8 @@ export async function runTeam({
                                 await collectLayerHints(saved);
                             }
                             ctx.set('decomposition', 'Screen decomposition (before measurement)', decompositionReport(decomposition, screenReferences.files, dir), { priority: 9 });
+                            return;
                         }
-                        return;
                     }
                     const subRefMode = config.agent.decomposerSubReferences ?? 'auto';
                     const role = roles.resolve('decomposer', plan.complexity === 'trivial' || plan.complexity === 'complex' ? plan.complexity : 'normal');
@@ -1199,9 +1200,12 @@ export async function runTeam({
                         : role.model;
                     // Local cuts belong to the decomposer the same way they belong to the measurer;
                     // generation needs the images API and an enabled `tools.images`.
+                    // correct_perspective is the deterministic first choice for rectifying a
+                    // photographed or skewed reference: it preserves pixels exactly, unlike a
+                    // generative "restoration" whose geometry lands wherever the sampler lands.
                     const names = [...new Set([
                         ...toolNamesForRole(enabled, 'decomposer', config.roles?.decomposer),
-                        'view_image', 'crop_image', 'split_image', 'compare_images',
+                        'view_image', 'crop_image', 'split_image', 'compare_images', 'correct_perspective',
                     ])];
                     const canGenerate = subRefMode !== 'off' && names.includes('generate_image');
                     // `always` demands pictures: say out loud when the run cannot make them, instead of
@@ -1209,7 +1213,7 @@ export async function runTeam({
                     if (subRefMode === 'always' && !canGenerate) {
                         notify({ type: 'warning', message: 'agent.decomposerSubReferences: always, но генерация изображений недоступна (tools.images или image API) — decomposer ограничится локальными кропами.' });
                     }
-                    const autoWrite = ['crop_image', 'split_image', 'compare_images', ...(canGenerate ? ['generate_image', 'edit_image'] : [])];
+                    const autoWrite = ['crop_image', 'split_image', 'compare_images', 'correct_perspective', ...(canGenerate ? ['generate_image', 'edit_image'] : [])];
                     const imageDir = `${dir}/${SUB_REFERENCE_DIR}`;
                     const taskLines = [
                         ...referencePaths.map((source) => `- ${source}`),
@@ -1219,7 +1223,7 @@ export async function runTeam({
                         ? 'Mode: names only. Do not write any image; return the screen list and leave subReference null.'
                         : [
                             `Mode: produce sub-references. Write every image you produce under ${imageDir}/ — that directory is the only place you may write.`,
-                            'For each screen either cut it out of the source (crop_image, split_image) or, when the source is a rotated, mirrored, tilted or perspective shot, first restore a flat front view of the whole frame (edit_image with that source as reference, or generate_image with it as reference) and cut the screens from the restored picture.',
+                            'For each screen either cut it out of the source (crop_image, split_image) or, when the source is a rotated, mirrored, tilted or perspective shot, first rectify the geometry: call correct_perspective with the four corners of the screen (top-left, top-right, bottom-left, bottom-right), or crop_image for a quarter-turn tilt. Only when the geometry cannot be recovered from the pixels, fall back to edit_image or generate_image with that source as reference. Then cut the screens from the rectified picture.',
                             'Check what you wrote: look at the file with view_image and, when a screen was restored, compare_images the result against the source region. Keep a screen out rather than ship an image that is not it.',
                             'Name each file by its order and screen, e.g. 01-home.png, 02-checkout.png.',
                             canGenerate ? '' : 'Image generation is unavailable in this run: use local crops and splits only and say so in notes.',
@@ -1339,10 +1343,10 @@ export async function runTeam({
                         );
                         const measureToolsFor = (pass) => {
                             const names = (pass === 1
-                                ? ['view_image', 'fetch_url']
-                                : ['view_image', 'crop_image', 'split_image', 'fetch_url'])
+                                ? ['view_image', 'fetch_url', 'sample_colors']
+                                : ['view_image', 'crop_image', 'split_image', 'fetch_url', 'sample_colors'])
                                 // Local measurement crops are part of the measurer's job even when image generation is off.
-                                .filter((name) => enabled.includes(name) || name === 'crop_image' || name === 'split_image');
+                                .filter((name) => enabled.includes(name) || name === 'crop_image' || name === 'split_image' || name === 'sample_colors');
                             return names.length
                                 ? createToolset({
                                     ...toolBase, names, approvalLevel, allowWrite: ['crop_image', 'split_image'],

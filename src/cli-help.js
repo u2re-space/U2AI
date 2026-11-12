@@ -128,30 +128,35 @@ context=false запускает роль на чистом контексте. 
                          список экранов — в .tmp/<id>/decomposition.json; measurer получает суб-референсы картинками
                          рядом с оригиналами. auto — только при приложенных картинках или ссылке figma.com
                          (по умолчанию), always — всегда, --no-decompose выключает этап.
-    --subrefs off|auto|always  нужны ли decomposer'у суб-референсы-картинки (по умолчанию auto).
-                         off (--no-subrefs) — роль только перечисляет экраны и ничего не пишет;
-                         auto — режет и восстанавливает, когда доступны image-инструменты;
-                         always — требует их, включает tools.images и предупреждает, если генерация недоступна.
-    --measure off|auto|always  measurer снимает метрики с референсов после плана: блоки, углы, границы, деление, отступы, расстановку.
-                          Планировщик может назначить imageTasks; image-processor готовит их до worker.
-                          auto — только при приложенных картинках и нетривиальном плане (по умолчанию), always — всегда, --no-measure выключает.
-                          Лист замеров уходит в общий контекст и в .tmp/<id>/measurements.json
-                          По умолчанию один обзорный проход (agent.measurerPasses: 1, 8 ходов, контекст large);
-                          второй проход по кропам включается agent.measurerPasses: 2
-    --measure-source auto|subrefs|original  какие картинки measurer считает и из каких режутся готовые кропы (по умолчанию auto).
+     --subrefs off|auto|always  нужны ли decomposer'у суб-референсы-картинки (по умолчанию auto).
+                          off (--no-subrefs) — роль только перечисляет экраны и ничего не пишет;
+                          auto — режет и восстанавливает, когда доступны image-инструменты;
+                          always — требует их, включает tools.images и предупреждает, если генерация недоступна.
+     --decomposer-mode standard|<red>advanced</red>  как decomposer раскладывает референс (по умолчанию standard).
+                          standard — роль называет экраны и режет суб-референсы;
+                          <red>advanced</red> — после роли seedream-5.5 разлагает первый плоский экран
+                          (00-restored.png) на PNG-слои с bounding box: файлы идут в
+                          .tmp/<id>/decomposition/layers/, список — в decomposition.json как "layers".
+                          measurer получает слои картинками и боксы подсказками: боксы — области,
+                          нарисованные генеративной моделью, роль сверяет каждый по картинке;
+                          потолок кропов при подсказках снимается (agent.decomposerCropLimit: 0),
+                          а GPT-модели measurer'а получают reasoning <red>pro</red>. Режим медленный
+                          и дорогой (плата за каждый слой), требует image-модели seedream-5.5 — без неё
+                          разложение пропускается и прогон предупреждает.
+                          Конфиг: agent.decomposerMode, agent.advancedMaxLayers, agent.decomposerCropLimit.
+     --measure off|auto|always  measurer снимает метрики с референсов после плана: блоки, углы, границы, деление, отступы, расстановку.
+                           Планировщик может назначить imageTasks; image-processor готовит их до worker.
+                           auto — только при приложенных картинках и нетривиальном плане (по умолчанию), always — всегда, --no-measure выключает.
+                           Лист замеров уходит в общий контекст и в .tmp/<id>/measurements.json
+                           По умолчанию один обзорный проход (agent.measurerPasses: 1, 8 ходов, контекст large);
+                           второй проход по кропам включается agent.measurerPasses: 2
+     --measure-source auto|subrefs|original  какие картинки measurer считает и из каких режутся готовые кропы (по умолчанию auto).
                           auto — суб-референсы decomposer'а идут первыми в приложениях; когда источник листа —
                           оригинал, у которого есть ровно один суб-референс, кропы режутся из суб-референса;
                           subrefs — оригиналы не прикладываются к замеру вовсе, measurer видит только
                           суб-референсы, и каждый кроп режется из суб-референса, даже если роль называет
                            источником оригинал; original — источник листа принимается буквально (прежнее поведение).
-    --measurer-mode standard|<red>advanced</red>  как работает measurer (по умолчанию standard).
-                          standard — роль читает референс и возвращает лист, а кропы режет harness;
-                          <red>advanced</red> — сначала seedream-5.5 раскладывает референс на слои с bounding box
-                          и полупрозрачными кропами, затем роль сверяет лист по ним: числа первого этапа
-                          засчитываются, потолок кропов снимается (agent.advancedCropLimit: 0), а GPT-модели роли
-                          получают reasoning <red>pro</red>. Режим медленный и дорогой (плата за каждый слой),
-                          требует image-модели seedream-5.5 — без неё прогон остаётся в standard и предупреждает.
-                          Конфиг: agent.measurerMode, agent.advancedMaxLayers, agent.advancedCropLimit.
+
 
     --stop-after <этап>  cleanly завершить прогон после указанного этапа (answer, classify, plan, design, decompose,
                           measure, architect, collect, images, decor, work, iconify, review). Работа сохраняется

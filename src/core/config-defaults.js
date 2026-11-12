@@ -445,6 +445,23 @@ export const defaults = Object.freeze({
          */
         decomposerSubReferences: 'auto', // off | auto | always
         /**
+         * How the decomposer splits the reference. `standard` = the role names screens and cuts one
+         * flat sub-reference per screen. `advanced` = after the role is done, the harness runs the
+         * seedream-5.5 decomposition over the first flat screen (`00-restored.png` or the first
+         * sub-reference): the picture comes back as PNG layers with bounding boxes, written under
+         * `.tmp/<id>/decomposition/layers/` and listed in `decomposition.json` as `layers`. Those
+         * boxes are hints only — the measurer still runs its own passes and verifies every box on
+         * the picture before the sheet is trusted. Advanced mode is slow and is billed per layer;
+         * without a seedream-5.5 model the run stays `standard` and says so. The word `advanced` is
+         * printed red everywhere it appears. It turns on only when the user asks for it — by this
+         * key or by `--decomposer-mode advanced`; nothing picks it on its own, and any trouble on
+         * the decomposition stage leaves the run without layer hints instead of shipping numbers
+         * nobody verified.
+         */
+        decomposerMode: 'standard',       // standard | advanced
+        advancedMaxLayers: 32,            // PNG layers one seedream-5.5 decomposition may return
+        decomposerCropLimit: 0,           // crop ceiling when layer hints are on: 0 = no cap, a number re-applies a ceiling
+        /**
          * Which images the measurer measures on and the harness cuts measurement crops from.
          * auto = sub-references first in the attachments, and when the sheet source names an
          * original with exactly one derived sub-reference, crops come from that sub-reference;
@@ -462,21 +479,6 @@ export const defaults = Object.freeze({
         measurerPasses: 1,              // 1 = one overview sheet (default); 2 = whole reference, then staged fragments
         measurerMaxTurns: 32,            // total tool turns for the measurement passes, split between them
         measurerMaxContextBytes: 'large', // measurement context budget; keep it within limits.maxRequestBytes
-        /**
-         * How the measurer works. `standard` = the model reads the reference and the harness cuts the
-         * crops its sheet names (MAX_CROPS applies). `advanced` = the seedream-5.5 pipeline: the
-         * picture is first split into crops and PNG layers by the model itself (layer decomposition,
-         * semi-transparent fragments included), and only then is the JSON sheet built — the numbers
-         * the first phase produced count towards it. Advanced mode is slow, can be expensive, is
-         * capped at no crop limit, and is not always available; when it is not, the run falls back to
-         * `standard` and says so. The word `advanced` is printed red everywhere it appears.
-         * It turns on only when the user asks for it — by this key or by `--measurer-mode advanced`.
-         * Nothing in the harness ever picks it on its own, and any trouble on any of its stages hands
-         * the measurement back to `standard` instead of continuing with unverified numbers.
-         */
-        measurerMode: 'standard',       // standard | advanced
-        advancedMaxLayers: 32,          // PNG layers one seedream-5.5 decomposition may return
-        advancedCropLimit: 0,           // 0 = no cap on advanced crops; a number re-applies a ceiling
         /**
          * Complex decorative elements (ornaments, flourishes, ribbons, dividers, patterns, frames) are
          * built by the `decorator` role after the measurements and the architect, and before the first

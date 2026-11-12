@@ -790,10 +790,6 @@ function validateConfig(c, env = liveEnv() ?? process.env) {
         if (!Number.isSafeInteger(c.agent[key]) || c.agent[key] < (key === 'maxReviewRounds' ? 0 : 1)) fail(`agent.${key} должен быть целым числом`);
     }
     if (c.agent.measurerPasses > 2) fail('agent.measurerPasses: 1..2');
-    if (!['standard', 'advanced'].includes(c.agent.measurerMode)) fail('agent.measurerMode: standard | advanced');
-    if (c.agent.measurerMode === 'advanced' && c.agent.measurerPasses > 2) fail('agent.measurerPasses: 1..2 (advanced)');
-    if (!Number.isSafeInteger(c.agent.advancedMaxLayers) || c.agent.advancedMaxLayers < 1 || c.agent.advancedMaxLayers > 32) fail('agent.advancedMaxLayers: 1..32');
-    if (!Number.isSafeInteger(c.agent.advancedCropLimit) || c.agent.advancedCropLimit < 0) fail('agent.advancedCropLimit: >= 0 (0 = unlimited)');
     if (!Number.isSafeInteger(c.agent.measurerMaxContextBytes) || c.agent.measurerMaxContextBytes < 1024) {
         fail('agent.measurerMaxContextBytes ≥ 1024');
     }
@@ -805,6 +801,9 @@ function validateConfig(c, env = liveEnv() ?? process.env) {
     if (!['off', 'auto', 'always'].includes(c.agent.measure)) fail('agent.measure: off | auto | always');
     if (!['off', 'auto', 'always'].includes(c.agent.decompose)) fail('agent.decompose: off | auto | always');
     if (!['off', 'auto', 'always'].includes(c.agent.decomposerSubReferences)) fail('agent.decomposerSubReferences: off | auto | always');
+    if (!['standard', 'advanced'].includes(c.agent.decomposerMode)) fail('agent.decomposerMode: standard | advanced');
+    if (!Number.isSafeInteger(c.agent.advancedMaxLayers) || c.agent.advancedMaxLayers < 1 || c.agent.advancedMaxLayers > 32) fail('agent.advancedMaxLayers: 1..32');
+    if (!Number.isSafeInteger(c.agent.decomposerCropLimit) || c.agent.decomposerCropLimit < 0) fail('agent.decomposerCropLimit: >= 0 (0 = unlimited)');
     if (!['auto', 'subrefs', 'original'].includes(c.agent.measureSource)) fail('agent.measureSource: auto | subrefs | original');
     if (!['off', 'auto', 'always'].includes(c.agent.decorations)) fail('agent.decorations: off | auto | always');
     if (!['off', 'auto', 'always'].includes(c.agent.architect)) fail('agent.architect: off | auto | always');

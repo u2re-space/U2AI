@@ -73,12 +73,12 @@ test('plan complexity is printed by cost, from cyan to red-orange', () => {
     hasFg(render([{ ...base, complexity: 'complex' }]), 91, 'complex');
 });
 
-test('the advanced measurer stage is red and names the way back to standard', () => {
-    const out = render([{ type: 'stage.start', stage: 'measure', role: 'measurer', model: 'gpt-6.1-terra', effort: 'max', measurerMode: 'advanced', reasoningMode: 'pro' }]);
+test('the advanced decomposer stage is red and names the way back to standard', () => {
+    const out = render([{ type: 'stage.start', stage: 'decompose', role: 'decomposer', model: 'seedream-5-5', effort: 'max', decomposerMode: 'advanced', reasoningMode: 'pro' }]);
     hasFg(out, 31, 'advanced');
     hasFg(out, 91, 'max');
-    assert.match(out, /--measurer-mode standard/, 'the warning offers the cheaper mode');
-    const plain = render([{ type: 'stage.start', stage: 'measure', role: 'measurer', model: 'gpt-6.1-terra' }]);
+    assert.match(out, /--decomposer-mode standard/, 'the warning offers the cheaper mode');
+    const plain = render([{ type: 'stage.start', stage: 'decompose', role: 'decomposer', model: 'seedream-5-5' }]);
     assert.equal(plain.includes('advanced'), false, 'standard mode is not announced as advanced');
 });
 
@@ -89,5 +89,5 @@ test('help paints its red words on a tty and never shows markup in a pipe', () =
     assert.equal(painted.includes('<red>'), false);
     const stripped = paintHelp(HELP, false);
     assert.equal(stripped.includes('<red>'), false, 'a pipe must not see the markup');
-    assert.match(stripped, /--measurer-mode standard\|advanced/);
+    assert.match(stripped, /--decomposer-mode standard\|advanced/);
 });

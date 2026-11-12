@@ -210,11 +210,15 @@ export function decompositionReport(decomposition, files, dir) {
         ? `Sub-references produced (${files.length}): ${files.map((file) => `${file.rel} [${file.kind}]`).join(', ')}`
         : 'Sub-references produced: none — the measurer works on the original references.';
     const notes = Array.isArray(decomposition?.notes) ? decomposition.notes.filter(Boolean) : [];
+    const layerCount = Array.isArray(decomposition?.layers) ? decomposition.layers.length : 0;
     return [
         `Decomposition: ${decomposition?.summary || '(no summary)'}`,
         lines.join('\n'),
         produced,
         orphans.length ? 'Sub-references without a screen entry: ' + orphans.map((file) => file.rel).join(', ') : '',
+        layerCount
+            ? `Layer hints (advanced decomposer, seedream-5.5): ${layerCount} layers split from ${decomposition?.layersTarget || '(first screen)'}. Their boxes are approximate areas a generation model drew — the measurer verifies every one on the picture; layer PNGs live under ${dir}/${SUB_REFERENCE_DIR}/layers/.`
+            : '',
         notes.length ? `Notes: ${notes.join(' | ')}` : '',
         `Decomposition JSON: ${dir}/decomposition.json; images: ${dir}/${SUB_REFERENCE_DIR}/.`,
     ].filter(Boolean).join('\n\n');

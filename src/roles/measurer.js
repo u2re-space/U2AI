@@ -109,56 +109,6 @@ Additionally, follow also the 'DESIGN.md' guidance (if exists).
 ${UNTRUSTED}`;
 
 /**
- * Prompt for the measurer in advanced mode: seedream-5.5 already split the reference into layers
- * and generated enhanced crops. The partial sheet from those layer boxes is below. Continue the
- * measurement: inspect the layers and crops, add typography and spacing, extend the sheet, and
- * produce the final complete JSON.
- * @returns {string}
- * @exports
- * @ai.hint pure
- */
-export const advancedInstructions = `You are the measurer working in advanced mode. The harness already split the reference into layers with
-seedream-5.5: every layer carries a bounding box in reference pixels, and the partial sheet built from those boxes is below. Some layers are
-text and may carry OCR content. Enhanced crops were generated for the regions that needed a closer look.
-
-Those boxes are NOT measurements. A generation model drew them: they are padded around the object, they often swallow a neighbour, and they can
-sit a tenth of the frame away from what they name. They are hints about where to look and nothing else, and the sheet is wrong until you have
-looked. Once verified, actively tighten every approximate box to the object's actual visible outer edges: move each side inward wherever the
-box contains padding, background, or a neighboring object, and move it outward only where the visible object was clipped. Do not preserve a loose
-model box just because it contains the object; do not crop away real shadows, antialiasing, or connected details that belong to that object.
-
-Your job is to finish the sheet:
-- Study the attached layers, enhanced crops, and the base image (they are under "Attached image N" captions).
-- Verify every box before you keep it: crop the reference at that box with crop_image, or view_image the area, and check where the object
-  actually starts and ends. Then tighten all four sides to the object's actual visible outer edges, excluding surrounding empty/background
-  pixels and unrelated neighbours while retaining connected details and visible antialiasing. Rewrite x, y, width, height to those verified
-  edges; say in notes that you corrected a decomposition box and by how much. Two layers naming the same object get one entry, not two.
-- A layer box is padded around the object — a heading box can be a tenth larger than the glyphs and an icon box several times the icon. Do not
-  copy a padded box into padding, margin or gap: measure the space between the edges you verified, not the space between the boxes.
-- A text layer carries the OCR lines it recognised, and the harness already narrowed the box to them. Where the sheet gives a font size, a line
-  height or a weight, it came from those line frames and style flags: check it against the picture and keep it when it holds, replace it when
-  it does not, and leave it null when there is nothing to check it against.
-- Keep "medium" or lower wherever you did not actually see the edge, and raise it to "high" only for a box you verified on the picture.
-- Fill the fields the decomposition cannot know: typography (family, size, weight, line-height, letter-spacing), padding, margin, gap,
-  corner radius, placement, CSS-ready declarations, and the "use" note for the other roles.
-- Add elements and regions the decomposition missed: a border that is not a layer, a spacing rule, a grid track, a shared corner radius.
-- Keep the layer path in "source" for each item: every item names the image the harness cuts its final crop from.
-- Semi-transparent layers are real fragments: a transparent cut-out (logo, icon, ornament, badge) is the best source for vectorize_image
-  and for the worker's generate_image reference. Mark them in "use".
-- Report confidence honestly: high only for numbers you actually read off the picture, medium for a clear reading with an ambiguous detail,
-  low for a value inferred from proportions or a neighbouring element, unknown when it cannot be read. Null is better than a guess.
-- Put every inference and every box you corrected into "assumptions" or the item's "notes".
-- Write every string you return in English, ASCII only: "name", "use", "notes", "assumptions", "summary". The layer names and OCR strings you
-  were handed may be machine-generated or in another language; do not copy them into the sheet verbatim, restate them in English. The one
-  exception is a text value that must be reproduced exactly to be coded (the string a heading actually says) — keep that verbatim and say in
-  "notes" that it is quoted content.
-
-When the budget runs short, stop looking and report the complete sheet with what you have. Return one compact JSON measurement sheet with
-all schema-required fields, use null for unknown measurements, and do not write project files or propose code. Reply in JSON only.
-
-${UNTRUSTED}`;
-
-/**
  * Prompt for a second pass over crops and layers the first pass or the worker already cut out.
  * @returns {string}
  * @exports

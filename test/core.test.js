@@ -349,33 +349,33 @@ test('measurer passes, turns, and context budget are validated', async () => {
     }
 });
 
-test('measurer mode and the advanced caps are validated', async () => {
-    const home = await mkdtemp(path.join(os.tmpdir(), 'ai-measurer-mode-'));
+test('decomposer mode and the advanced caps are validated', async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), 'ai-decomposer-mode-'));
     const env = { AI_AGENT_HOME: home };
     try {
         const config = await loadConfig({ env, ensureHome: false });
-        assert.equal(config.agent.measurerMode, 'standard');
+        assert.equal(config.agent.decomposerMode, 'standard', 'a vision decomposition is the cheaper default');
         assert.equal(config.agent.advancedMaxLayers, 32);
-        assert.equal(config.agent.advancedCropLimit, 0, 'advanced mode cuts crops without a ceiling by default');
-        await writeFile(path.join(home, 'config.json'), JSON.stringify({ agent: { measurerMode: 'advanced' } }));
-        assert.equal((await loadConfig({ env, ensureHome: false })).agent.measurerMode, 'advanced');
-        await writeFile(path.join(home, 'config.json'), JSON.stringify({ agent: { measurerMode: 'turbo' } }));
-        await assert.rejects(loadConfig({ env, ensureHome: false }), /agent\.measurerMode: standard \| advanced/);
+        assert.equal(config.agent.decomposerCropLimit, 0, 'an advanced decomposition cuts crops without a ceiling by default');
+        await writeFile(path.join(home, 'config.json'), JSON.stringify({ agent: { decomposerMode: 'advanced' } }));
+        assert.equal((await loadConfig({ env, ensureHome: false })).agent.decomposerMode, 'advanced');
+        await writeFile(path.join(home, 'config.json'), JSON.stringify({ agent: { decomposerMode: 'turbo' } }));
+        await assert.rejects(loadConfig({ env, ensureHome: false }), /agent\.decomposerMode: standard \| advanced/);
         await writeFile(path.join(home, 'config.json'), JSON.stringify({ agent: { advancedMaxLayers: 33 } }));
         await assert.rejects(loadConfig({ env, ensureHome: false }), /agent\.advancedMaxLayers: 1\.\.32/);
-        await writeFile(path.join(home, 'config.json'), JSON.stringify({ agent: { advancedCropLimit: -1 } }));
-        await assert.rejects(loadConfig({ env, ensureHome: false }), /agent\.advancedCropLimit: >= 0/);
+        await writeFile(path.join(home, 'config.json'), JSON.stringify({ agent: { decomposerCropLimit: -1 } }));
+        await assert.rejects(loadConfig({ env, ensureHome: false }), /agent\.decomposerCropLimit: >= 0/);
     } finally {
         await rm(home, { recursive: true, force: true });
     }
 });
 
-test('--measurer-mode writes agent.measurerMode and turns the images route on', () => {
-    assert.deepEqual(overridesFrom({ 'measurer-mode': 'standard' }).agent, { measurerMode: 'standard' });
-    const advanced = overridesFrom({ 'measurer-mode': 'advanced' });
-    assert.equal(advanced.agent.measurerMode, 'advanced');
-    assert.equal(advanced.tools.images, true, 'decomposition is an image route, so the flag enables it');
-    assert.throws(() => overridesFrom({ 'measurer-mode': 'turbo' }), /--measurer-mode: standard \| advanced/);
+test('--decomposer-mode writes agent.decomposerMode and turns the images route on', () => {
+    assert.deepEqual(overridesFrom({ 'decomposer-mode': 'standard' }).agent, { decomposerMode: 'standard' });
+    const advanced = overridesFrom({ 'decomposer-mode': 'advanced' });
+    assert.equal(advanced.agent.decomposerMode, 'advanced');
+    assert.equal(advanced.tools.images, true, 'layer decomposition is an image route, so the flag enables it');
+    assert.throws(() => overridesFrom({ 'decomposer-mode': 'turbo' }), /--decomposer-mode: standard \| advanced/);
 });
 
 test('decorator mode and turn cap are validated', async () => {

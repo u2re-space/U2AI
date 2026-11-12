@@ -54,7 +54,7 @@ import { CommandBatchError, executeFileCommands, FILE_COMMANDS_SCHEMA } from './
 import { EXTRACT_MAX_BYTES, EXTRACT_MAX_FILES, extractHandoff, hasExtractableArtifacts } from './extract.js';
 import { assessQuality, assessmentImages } from './quality.js';
 import { stageMeasurementCrops, measurementConclusion } from './measure-crops.js';
-import { canRunAdvanced, advancedMeasure, shouldUseReasoningPro } from './advanced.js';
+import { canRunAdvanced, advancedDecompose, shouldUseReasoningPro } from './advanced.js';
 import { createPipeline } from './pipeline.js';
 import { resolveInside } from './paths.js';
 
@@ -809,6 +809,28 @@ export async function runTeam({
         // Images the decomposer produced (one clean screen per entry). The measurer gets them as
         // attachments, so it measures flat screens instead of a rotated collage.
         let screenReferences = { files: [], parts: [] };
+        // Layer hints of the advanced decomposer mode: the seedream-5.5 split of the first flat
+        // screen. The pictures go to the measurer as attachments, the boxes as JSON hints — they
+        // are areas a generation model drew, never measurements, and the measurer verifies each one.
+        let layerHints = { layers: [], parts: [], target: null };
+        /** Read the layer PNGs recorded in the decomposition back as attachments. */
+        const collectLayerHints = async (data) => {
+            const list = Array.isArray(data?.layers) ? data.layers : [];
+            const parts = [];
+            const kept = [];
+            for (const layer of list) {
+                if (!layer?.localPath) continue;
+                try {
+                    const attachment = await loadImageAttachment(layer.localPath, { cwd: root, maxBytes: config.limits.maxImageBytes });
+                    parts.push(attachment.part);
+                    kept.push(layer);
+                } catch (error) {
+                    notify({ type: 'warning', message: `Слой разложения не приложен замеру: ${layer.localPath}: ${errorMessage(error)}` });
+                }
+            }
+            layerHints = { layers: kept, parts, target: data?.layersTarget ?? null };
+            return layerHints;
+        };
         /** Read the produced sub-references back and turn the existing ones into attachments. */
         const collectScreenReferences = async (data) => {
             const collected = await collectSubReferences({
@@ -1163,6 +1185,9 @@ export async function runTeam({
                         if (saved) {
                             decomposition = saved;
                             await collectScreenReferences(saved);
+                            if (Array.isArray(saved.layers) && saved.layers.length > 0) {
+                                await collectLayerHints(saved);
+                            }
                             ctx.set('decomposition', 'Screen decomposition (before measurement)', decompositionReport(decomposition, screenReferences.files, dir), { priority: 9 });
                         }
                         return;
@@ -1199,7 +1224,7 @@ export async function runTeam({
                             'Name each file by its order and screen, e.g. 01-home.png, 02-checkout.png.',
                             canGenerate ? '' : 'Image generation is unavailable in this run: use local crops and splits only and say so in notes.',
                         ].filter(Boolean).join(' ');
-                    notify({ type: 'stage.start', stage: 'decompose', role: 'decomposer', model });
+                    notify({ type: 'stage.start', stage: 'decompose', role: 'decomposer', model, decomposerMode: config.agent.decomposerMode ?? 'standard' });
                     const result = await roles.run('decomposer', {
                         text: `${ctx.render({ maxBytes, exclude: ['tree'] })}\n\n# Design sources\n${taskLines.join('\n') || '(attached image references)'}\n\n# Output directory\n${imageDir}/\n\n${subRefBrief}\n\n# Task\nIdentify screens and relationships before measurements, then return one clean sub-reference per screen.`,
                         parts: referenceParts, instructions: withAgents(ROLE_INSTRUCTIONS.decomposer),
@@ -1216,6 +1241,42 @@ export async function runTeam({
                     if (result.data) {
                         decomposition = result.data;
                         await collectScreenReferences(decomposition);
+                        // Advanced decomposer mode: after the role has flattened and cut the screens,
+                        // the harness splits the first flat screen into seedream-5.5 layers. The layer
+                        // boxes go to `decomposition.json` as hints; the measurer verifies them on the
+                        // picture in its own passes. A failed decomposition simply leaves `layers` out.
+                        const decomposerMode = config.agent.decomposerMode ?? 'standard';
+                        if (decomposerMode === 'advanced' && !canRunAdvanced(config)) {
+                            notify({ type: 'warning', message: 'agent.decomposerMode: advanced, но seedream-5.5 не найден ни среди image-моделей, ни среди бэкендов (imageModel / modelsBackends / imagesBackends) — разложение на слои пропущено.' });
+                        }
+                        else if (decomposerMode === 'advanced') {
+                            const layerTarget = screenReferences.files[0]?.rel ?? referencePaths[0] ?? null;
+                            if (!layerTarget) {
+                                notify({ type: 'warning', message: 'agent.decomposerMode: advanced, но плоского экрана для разложения нет — слои не создаются.' });
+                            } else {
+                                notify({ type: 'measure.progress', phase: 'decomposition', status: 'started', target: layerTarget });
+                                try {
+                                    const advanced = await advancedDecompose({
+                                        root, workId: work.id, client, referencePath: layerTarget,
+                                        maxLayers: config.agent.advancedMaxLayers ?? 32,
+                                        outDir: `${dir}/${SUB_REFERENCE_DIR}/layers/`,
+                                        config, signal, notify,
+                                    });
+                                    for (const warning of advanced.warnings ?? []) notify({ type: 'warning', message: warning });
+                                    if (advanced.layers.length) {
+                                        decomposition.layers = advanced.layers;
+                                        decomposition.layersTarget = layerTarget;
+                                        decomposition.layerFrame = advanced.frame ? { width: advanced.frame.width, height: advanced.frame.height } : null;
+                                        await collectLayerHints(decomposition);
+                                        notify({ type: 'decompose.layers', count: advanced.layers.length, target: layerTarget });
+                                    } else {
+                                        notify({ type: 'warning', message: 'Разложение на слои не вернуло слоёв — замеры идут по обычному пути без подсказок.' });
+                                    }
+                                } catch (error) {
+                                    notify({ type: 'warning', message: `Разложение на слои не завершилось (${errorMessage(error)}); замеры идут по обычному пути.` });
+                                }
+                            }
+                        }
                         ctx.set('decomposition', 'Screen decomposition (before measurement)', decompositionReport(decomposition, screenReferences.files, dir), { priority: 9 });
                         await writeFile(path.join(root, dir, 'decomposition.json'), `${JSON.stringify(decomposition, null, 2)}\n`, 'utf8').catch((error) => {
                             notify({ type: 'warning', message: `Разбиение экранов не сохранено: ${errorMessage(error)}` });
@@ -1266,12 +1327,6 @@ export async function runTeam({
                                 ? measurerRole.effort
                                 : stageEffort(measurerRole.effort, baseline, paced.qualities.measurer);
                         const measurePasses = Math.max(1, Math.min(2, config.agent.measurerPasses ?? 1));
-                        // Advanced mode decomposes the reference into Seedream layers first; it needs a
-                        // Seedream 5.5 image model, otherwise the run silently stays on the standard passes.
-                        const measurerMode = config.agent.measurerMode ?? 'standard';
-                        if (measurerMode === 'advanced' && !canRunAdvanced(config)) {
-                            notify({ type: 'warning', message: 'agent.measurerMode: advanced, но seedream-5.5 не найден ни среди image-моделей, ни среди бэкендов (imageModel / modelsBackends / imagesBackends) — замеры идут обычным режимом (standard).' });
-                        }
                         const measureTurns = Math.max(1, config.agent.measurerMaxTurns ?? 8);
                         // One pass spends the whole turn budget on the overview. A second pass splits it
                         // evenly, so the fragment inspection does not starve the overview.
@@ -1329,6 +1384,16 @@ export async function runTeam({
                                 index += 1;
                                 const caption = `Attached image ${index}: ${file.rel} (sub-reference, ${file.kind}${file.screen ? `, screen ${file.screen}` : ''})`;
                                 parts.push({ type: 'input_text', text: caption }, attachment);
+                                captions.push(caption);
+                            }
+                            // Layer hints come after the flat screens they were cut from: they are a
+                            // hint about where an object sits, never a measurement source of their own.
+                            for (const [layerIndex, part] of layerHints.parts.entries()) {
+                                const layer = layerHints.layers[layerIndex];
+                                const box = layer?.box ?? {};
+                                index += 1;
+                                const caption = `Attached image ${index}: ${layer?.localPath ?? '(layer)'} (seedream layer hint — ${box.width ?? '?'}×${box.height ?? '?'} at ${box.x ?? '?'},${box.y ?? '?'}, approximate box, not a measurement source)`;
+                                parts.push({ type: 'input_text', text: caption }, part);
                                 captions.push(caption);
                             }
                             if (!subRefsOnly) {
@@ -1391,105 +1456,37 @@ export async function runTeam({
                             }
                             return result;
                         };
-                        // Advanced measurer: Seedream 5.5 splits the reference into layers with boxes first
-                        // (those numbers are measurements the model read, so phase 1 counts), then the
-                        // measurer verifies and completes the sheet. Any GPT model gets reasoning "pro" here.
-                        // A missing sheet or a failed decomposition falls back to the standard passes.
-                        const advancedMeasureMode = measurerMode === 'advanced' && canRunAdvanced(config);
-                        const advancedCropLimit = Math.max(0, Number(config.agent.advancedCropLimit ?? 0) || 0);
-                        const proReasoning = advancedMeasureMode && shouldUseReasoningPro(model);
+                        // Layer hints from the advanced decomposer mode (agent.decomposerMode): the
+                        // seedream-5.5 split of the first flat screen, attached as pictures and listed
+                        // as JSON boxes in the task text. They change what the measurer looks at, not
+                        // how it runs: the overview and fragment passes below stay the only measurement
+                        // path, and the measurer verifies every hint box before it keeps it. A GPT
+                        // measurer gets reasoning "pro" while hints are on the table.
+                        const hasLayerHints = layerHints.parts.length > 0;
+                        const layerCropLimit = Math.max(0, Number(config.agent.decomposerCropLimit ?? 0) || 0);
+                        const proReasoning = hasLayerHints && shouldUseReasoningPro(model);
+                        // The hint boxes arrive in the frame of the picture that was decomposed; the
+                        // measurer works on the same flat screen, so no frame mapping is needed here.
+                        const layerBlock = layerHints.layers.length
+                            ? '\n\n# Layer hints (seedream-5.5 decomposition of ' + (layerHints.target ?? 'the first screen') + ')\n'
+                                + 'Each image captioned "seedream layer hint" above is one transparent layer cut from that screen. The JSON below carries the box, z-order and OCR text of every layer, in the same order as the pictures.\n'
+                                + 'Those boxes are NOT measurements: a generation model drew them, they are padded around the object, they can swallow a neighbour and sit tens of pixels off. '
+                                + 'Verify a hint on the sub-reference before you keep it (crop_image at the box or view_image the area), then tighten all four sides to the object\'s actual visible edges. '
+                                + 'Measure padding, margin and gap between the edges you verified, never between hint boxes; two hints naming one object are one sheet entry. '
+                                + 'Keep a hint\'s OCR text and typography only where the picture agrees with them. '
+                                + 'Set every element and region "source" to the sub-reference you measured on — never to the layer path: the harness cuts the final crops from the sub-reference. '
+                                + 'Add everything the decomposition missed: borders, spacing rules, grid tracks, shared radii.\n'
+                                + JSON.stringify(layerHints.layers.map((layer) => ({
+                                    index: layer.index, name: layer.name, z: layer.z, background: layer.background,
+                                    box: layer.box, ...(layer.tightened ? { boxTightenedToOcr: true } : {}),
+                                    ...(layer.typography ? { typography: layer.typography } : {}),
+                                    ...(layer.text ? { text: String(layer.text.text ?? '').slice(0, 200) } : {}),
+                                })))
+                            : '';
                         let measured = null;
                         let sheet = null;
                         let stagedCrops = { crops: [], warnings: [] };
-                        notify({ type: 'stage.start', stage: 'measure', role: 'measurer', model, effort: measureEffort, measurerMode: advancedMeasureMode ? 'advanced' : 'standard', reasoningMode: proReasoning ? 'pro' : null });
-                        if (advancedMeasureMode) {
-                            const decomposeTarget = screenReferences.files[0]?.rel ?? referencePaths[0] ?? null;
-                            let advanced = null;
-                            if (!decomposeTarget) {
-                                notify({ type: 'warning', message: 'Advanced-режим замеров: нет файла референса для разложения — перехожу на обычные проходы.' });
-                            } else {
-                                try {
-                                    advanced = await advancedMeasure({ root, workId: work.id, referencePath: decomposeTarget, plan: measurePlan, config, client, signal, notify });
-                                } catch (error) {
-                                    notify({ type: 'warning', message: `Advanced-режим замеров не завершился (${errorMessage(error)}); перехожу на обычные проходы.` });
-                                }
-                            }
-                            if (advanced?.sheet) {
-                                for (const warning of advanced.warnings ?? []) notify({ type: 'warning', message: warning });
-                                // The layer images come first, in the order of the list below: attached
-                                // pictures carry no names, so the sheet can only match them by position.
-                                const layerParts = [];
-                                const layerLines = [];
-                                const unreadable = [];
-                                for (const layer of advanced.layers ?? []) {
-                                    if (!layer?.localPath) continue;
-                                    try {
-                                        layerParts.push((await loadImageAttachment(layer.localPath, { cwd: root, maxBytes: config.limits.maxImageBytes })).part);
-                                    } catch (error) {
-                                        unreadable.push(`${layer.localPath}: ${errorMessage(error)}`);
-                                        continue;
-                                    }
-                                    const box = layer.box ?? {};
-                                    layerLines.push(`- attachment ${layerParts.length}: layer ${layer.index} (z=${layer.z}${layer.name ? `, "${layer.name}"` : ''}) — ${layer.localPath} (${box.width ?? '?'}×${box.height ?? '?'} at ${box.x ?? '?'},${box.y ?? '?'}; ${layer.tightened ? 'box tightened to the OCR line frames' : 'box approximate: verify it on the picture'})${layer.text?.text ? `; text: ${String(layer.text.text).slice(0, 80)}` : ''}`);
-                                }
-                                const enhancedLines = [];
-                                for (const crop of advanced.cropPaths ?? []) {
-                                    if (!crop || (advanced.layers ?? []).some((layer) => layer.localPath === crop)) continue;
-                                    try {
-                                        layerParts.push((await loadImageAttachment(crop, { cwd: root, maxBytes: config.limits.maxImageBytes })).part);
-                                        enhancedLines.push(`- attachment ${layerParts.length}: enhanced crop — ${crop}`);
-                                    } catch (error) {
-                                        unreadable.push(`${crop}: ${errorMessage(error)}`);
-                                    }
-                                }
-                                // A layer the harness could not attach is a hole in the verification pass,
-                                // so it is named out loud rather than dropped in silence.
-                                for (const problem of unreadable) notify({ type: 'warning', message: `Слой разложения не приложен замеру: ${problem}` });
-                                const layerBlock = [
-                                            layerLines.length ? `# Decomposed layers (JSON)\n${JSON.stringify(advanced.sheet)}\n\n# Layer images, in attachment order\n${layerLines.join('\n')}` : '',
-                                            enhancedLines.length ? `\n# Enhanced transparent crops\n${enhancedLines.join('\n')}` : '',
-                                        ].filter(Boolean).join('\n');
-                                if (!layerParts.length) {
-                                    // A sheet whose layers never reached the model cannot be verified by
-                                    // looking at anything, so the advanced branch stops here and the
-                                    // ordinary passes take the measurement.
-                                    notify({ type: 'warning', message: 'Advanced-режим замеров: ни один слой не приложен проверщику — перехожу на обычные проходы.' });
-                                } else {
-                                    notify({ type: 'measure.pass', pass: 2, phase: 'advanced-verify', layers: layerLines.length, enhanced: enhancedLines.length, reasoningMode: proReasoning ? 'pro' : null });
-                                    measured = await measureRun({
-                                        pass: 2,
-                                        instructions: ROLE_INSTRUCTIONS.measurerAdvanced,
-                                        reasoningMode: proReasoning ? 'pro' : null,
-                                        parts: layerParts,
-                                        text: `${measureContext}\n\n# Advanced measurement pass — verification\n${measurePlan}\n\n` +
-                                            'The reference has already been decomposed into layers by Seedream 5.5; the sheet above carries the areas it read. ' +
-                                            'Those areas are approximate — a generation model drew them, they are padded around the object and can sit tens of pixels off. ' +
-                                            'Verify every box on the picture with view_image or crop_image before you keep it, correct the ones that do not line up, and fill ' +
-                                            'the fields decomposition cannot know (typography, padding, gaps, radius, CSS). Add the elements the decomposition missed ' +
-                                            'and mark a semi-transparent layer that needs redrawing with crop_image. Return the complete final sheet, not a delta.' +
-                                            attachmentBlock + subReferenceBlock + layerBlock,
-                                        maxTurns: fragmentTurns,
-                                        session: createSession({ store: false, model }),
-                                    });
-                                    if (HARD_STOP.has(measured.status) && measured.status !== 'failed') return { exit: stop(measured, 'замеры') };
-                                    // The verified sheet is the only thing the advanced branch hands on. An
-                                    // unverified decomposition sheet is a paid experiment, not a measurement,
-                                    // so the run falls back to the ordinary passes instead of shipping it.
-                                    if (measured.data) {
-                                        sheet = measured.data;
-                                        stagedCrops = await stageMeasurementCrops({
-                                            root, workId: work.id, sheet, referencePaths,
-                                            subReferences: screenReferences.files, measureSource, config,
-                                            maxCrops: advancedCropLimit, signal,
-                                        });
-                                    } else {
-                                        notify({ type: 'warning', message: `Проверка листа разложения не завершилась (${measured.status}); перехожу на обычные проходы.` });
-                                    }
-                                }
-                            } else if (attachments.parts.length) {
-                                notify({ type: 'warning', message: 'Advanced-режим замеров не вернул лист — перехожу на обычные проходы.' });
-                            }
-                        }
+                        notify({ type: 'stage.start', stage: 'measure', role: 'measurer', model, effort: measureEffort, layerHints: hasLayerHints ? layerHints.layers.length : 0, reasoningMode: proReasoning ? 'pro' : null });
                         if (!sheet) {
                             notify({ type: 'measure.pass', pass: 1, phase: 'overview' });
                             measured = await measureRun({
@@ -1498,17 +1495,23 @@ export async function runTeam({
                                     'Study the whole reference first: the canvas, the global layout, every element, every reusable region, and the spacing rules. ' +
                                     'Do not start from a fragment. Return the complete overview sheet with CSS units, per-item confidence, and explicit assumptions. ' +
                                     'The harness cuts fragments from your boxes on the image each item names in its "source" field after this pass.' +
-                                    attachmentBlock + subReferenceBlock,
+                                    attachmentBlock + subReferenceBlock + layerBlock,
                                 maxTurns: overviewTurns,
+                                reasoningMode: proReasoning ? 'pro' : null,
                                 session: createSession({ store: false, model }),
                             });
                             if (HARD_STOP.has(measured.status)) return { exit: stop(measured, 'замеры') };
                             sheet = measured.data ?? null;
+                            // With layer hints the sheet can hold one entry per layer: the ceiling that
+                            // fits a hand-made sheet would truncate the decomposition, so the caller's
+                            // budget decides (`0` lifts it) instead of the default cap.
+                            const cropBudget = hasLayerHints && layerCropLimit > 0 ? { maxCrops: layerCropLimit } : (hasLayerHints ? { maxCrops: 0 } : {});
                             if (sheet && measurePasses > 1) {
                                 // Cut the overview regions and reusable elements first, then let the measurer inspect
                                 // the actual fragments instead of guessing from the full-size picture.
                                 const preliminary = await stageMeasurementCrops({
                                     root, workId: work.id, sheet, referencePaths, subReferences: screenReferences.files, measureSource, config, signal,
+                                    ...cropBudget,
                                 });
                                 const fragmentList = preliminary.crops.length
                                     ? preliminary.crops.map((crop) => {
@@ -1527,6 +1530,7 @@ export async function runTeam({
                                         'inferred value in assumptions, and set confidence per element. Do not replace the global layout with a single fragment.\n\n' +
                                         `# Overview sheet (JSON)\n${JSON.stringify(sheet)}\n\n# Staged fragments\n${fragmentList}` + attachmentBlock + subReferenceBlock,
                                     maxTurns: fragmentTurns,
+                                    reasoningMode: proReasoning ? 'pro' : null,
                                     session: createSession({ store: false, model }),
                                 });
                                 // A failed fragment pass must not throw away the overview sheet; cancellation and
@@ -1540,10 +1544,12 @@ export async function runTeam({
                                 }
                                 stagedCrops = await stageMeasurementCrops({
                                     root, workId: work.id, sheet, referencePaths, subReferences: screenReferences.files, measureSource, config, signal, reuse: preliminary.crops,
+                                    ...cropBudget,
                                 });
                             } else if (sheet) {
                                 stagedCrops = await stageMeasurementCrops({
                                     root, workId: work.id, sheet, referencePaths, subReferences: screenReferences.files, measureSource, config, signal,
+                                    ...cropBudget,
                                 });
                             }
                         }

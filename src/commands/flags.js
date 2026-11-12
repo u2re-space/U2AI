@@ -348,12 +348,13 @@ export function overridesFrom(values, { command = null } = {}) {
         if (!['auto', 'subrefs', 'original'].includes(values['measure-source'])) throw new UsageError('--measure-source: auto | subrefs | original');
         (o.agent ??= {}).measureSource = values['measure-source'];
     }
-    // How the measurer works. `advanced` splits the reference into Seedream 5.5 layers first: slow,
-    // charged per layer, and it needs the images route, so asking for it turns images on.
-    if (values['measurer-mode']) {
-        if (!['standard', 'advanced'].includes(values['measurer-mode'])) throw new UsageError('--measurer-mode: standard | advanced');
-        (o.agent ??= {}).measurerMode = values['measurer-mode'];
-        if (values['measurer-mode'] === 'advanced') o.tools.images = true;
+    // How the decomposer works. `standard` = the role names screens and cuts sub-references.
+    // `advanced` = after the role is done, the harness splits the first flat screen into Seedream
+    // 5.5 layers: slow, billed per layer, and needs the images route.
+    if (values['decomposer-mode']) {
+        if (!['standard', 'advanced'].includes(values['decomposer-mode'])) throw new UsageError('--decomposer-mode: standard | advanced');
+        (o.agent ??= {}).decomposerMode = values['decomposer-mode'];
+        if (values['decomposer-mode'] === 'advanced') o.tools.images = true;
     }
     // Optional design stage: produces a visual design direction, layout, and HTML template
     // before the decomposer and measurer. Expensive role (xhigh + image generation).

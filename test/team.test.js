@@ -2542,13 +2542,21 @@ test('the fragment pass replaces the overview sheet and reuses its crops', async
     }
 });
 
-test('advanced measurer mode decomposes the reference first and verifies the sheet with reasoning pro', async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-measure-advanced-'));
+// A names-only decomposition: the role names one screen and produces no sub-reference image, so the
+// harness decomposes the original reference (`referencePaths[0]`) into layers.
+const namesOnlyDecomposition = (source) => JSON.stringify({
+    summary: 'Один экран без дополнительных картинок.',
+    screens: [{ name: 'Home', source, nodeId: null, purpose: 'Первый экран.', bounds: null, references: [], subReference: null, subReferenceKind: '' }],
+    subReferences: [],
+    notes: [],
+});
+
+test('advanced decomposer mode splits the reference into layers and hands them to the measurer as hints', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-decompose-advanced-'));
     const events = [];
     const measureBodies = [];
     const imageBodies = [];
-    const picture = pngOf(1000, 800);
-    await writeFile(path.join(dir, 'mockup.png'), picture);
+    await writeFile(path.join(dir, 'mockup.png'), pngOf(1000, 800));
     // Layers travel as data URIs, so the test does not need a CDN to download them from.
     const layerUrl = `data:image/png;base64,${TINY_PNG}`;
     imageScript = (body) => {
@@ -2558,13 +2566,10 @@ test('advanced measurer mode decomposes the reference first and verifies the she
             assert.equal(body.image_urls.length, 1, 'exactly one picture is decomposed');
             return { data: [{ task_id: 'task-adv' }] };
         }
-        // The enhanced crop is a generation, and seedream answers a task for that too.
-        return { code: 200, data: [{ status: 'pending', task_id: 'task-crop' }] };
+        return { data: [{ b64_json: TINY_PNG }] };
     };
     taskScript = ({ taskId }) => {
-        if (taskId !== 'task-adv') {
-            return { data: { status: 'completed', result: { images: [{ url: [layerUrl], sizes: ['1024x1024'] }] } } };
-        }
+        if (taskId !== 'task-adv') return { data: { status: 'completed', result: { images: [{ url: [layerUrl], sizes: ['1024x1024'] }] } } };
         return {
             data: { status: 'completed', result: { images: [{
                 url: [layerUrl, layerUrl, layerUrl],
@@ -2585,6 +2590,7 @@ test('advanced measurer mode decomposes the reference first and verifies the she
         if (role === 'planner') {
             return { text: JSON.stringify({ summary: 'стили по референсу', complexity: 'normal', steps: [{ goal: 'Создать styles.scss', details: 'Собрать grid по измеренному макету', verify: 'прочитать styles.scss' }], filesOfInterest: [], searchQueries: [], questionsForCollector: [], acceptanceCriteria: [], needsReview: false, imageNotes: null, risks: [] }) };
         }
+        if (role === 'decomposer') return { text: namesOnlyDecomposition('mockup.png') };
         if (role === 'measurer') {
             // The mock must not assert: a thrown check becomes an HTTP 500 and the client retries
             // the same request five times. The assertions below run on the recorded bodies.
@@ -2612,9 +2618,8 @@ test('advanced measurer mode decomposes the reference first and verifies the she
     };
     const config = baseConfig();
     config.memory = { ...defaults.memory, enabled: false };
-    config.imageModel = 'seedream-5-5';
-    //config.imageModel = 'bytedance-seed/seedream-5-5';
-    config.agent = { ...config.agent, measurerMode: 'advanced', measurerPasses: 1 };
+    config.imageModel = 'seedream-5.5';
+    config.agent = { ...config.agent, decomposerMode: 'advanced', measurerPasses: 1 };
     config.roles = { ...config.roles, measurer: { ...config.roles.measurer, model: 'gpt-6.1-terra' } };
     try {
         const result = await runTeam({
@@ -2624,37 +2629,35 @@ test('advanced measurer mode decomposes the reference first and verifies the she
             emit: (event) => events.push(event),
         });
         assert.equal(result.status, 'completed', result.error?.message);
-        assert.equal(measureBodies.length, 1, `measurer calls: ${measureBodies.map((b) => (JSON.stringify(b.input).match(/Advanced measurement pass|Measurement pass \d|Turn budget is spent/g) ?? ['?'])[0]).join(' | ')}`);
-        const verify = measureBodies[0];
-        assert.equal(verify.reasoning?.mode, 'pro', 'a GPT measurer in advanced mode reasons in pro mode');
-        assert.match(verify.instructions, /the measurer working in advanced mode/, 'the verification pass uses the advanced instructions');
-        const prompt = JSON.stringify(verify.input);
-        assert.match(prompt, /Advanced measurement pass/);
-        assert.match(prompt, /Decomposed layers \(JSON\)/);
-        assert.match(prompt, /Big headline/, 'the OCR of a layer reaches the measurer');
-        assert.match(prompt, /"input_image"/, 'the cut layers are attached for verification');
-        const generations = imageBodies.filter((body) => !body.layer_decomposition);
-        // Two layers plus, when ImageMagick is installed, the enhanced transparent crops.
-        const attached = verify.input.flatMap((item) => item.content ?? []).filter((part) => part.type === 'input_image').length;
-        assert.ok(attached >= 2, `both decomposed layers travel to the measurer, got ${attached}`);
-        if (generations.length) assert.ok(attached >= 3, 'enhanced crops were added to the measurer input');
+        // The decomposition is paid for in the decompose stage, before the measurer runs at all.
         assert.ok(imageBodies.some((body) => body.layer_decomposition === true), 'the reference was decomposed by seedream-5.5');
-        // The enhanced crops are generations, and a generation of this model answers a task: the day
-        // they went back through the synchronous images route, every crop died on «не содержит ни
-        // b64_json, ни url», so the absence of that warning is the regression this asserts.
-        for (const body of generations) {
-            assert.equal(body.background, 'transparent', 'a crop is asked for as a transparent cut');
-            assert.equal(body.output_format, 'png');
-            assert.equal(body.image_urls?.length, 1, 'the crop region travels in image_urls');
-            assert.equal('input_references' in body, false);
-        }
-        assert.equal(events.find((event) => event.type === 'warning' && /Улучшенный кроп не создан/.test(event.message)), undefined,
-            `the enhanced pass produced its crops: ${events.filter((e) => e.type === 'warning').map((e) => e.message).join(' / ')}`);
+        assert.ok(events.some((event) => event.type === 'decompose.layers' && event.count === 2), 'two transparent layers reach the measurer (the opaque base has no box)');
+        const decomposeStart = events.find((event) => event.type === 'stage.start' && event.stage === 'decompose');
+        assert.equal(decomposeStart.decomposerMode, 'advanced');
+        // The measurer runs its ordinary overview pass — there is no separate advanced pass any more —
+        // but it sees the layer hints as pictures and JSON, and a GPT model reasons in pro mode.
+        assert.equal(measureBodies.length, 1, `measurer calls: ${measureBodies.map((b) => (JSON.stringify(b.input).match(/Measurement pass \d|Turn budget is spent/g) ?? ['?'])[0]).join(' | ')}`);
+        const pass1 = measureBodies[0];
+        assert.equal(pass1.reasoning?.mode, 'pro', 'a GPT measurer with layer hints reasons in pro mode');
+        assert.equal(String(pass1.instructions).includes('advanced mode'), false, 'the measurer keeps its ordinary instructions');
+        const prompt = JSON.stringify(pass1.input);
+        assert.match(prompt, /Measurement pass 1/);
+        assert.match(prompt, /# Layer hints \(seedream-5\.5 decomposition/, 'the hint block is written into the task');
+        assert.match(prompt, /boxes are NOT measurements/, 'the measurer is told the hint boxes are not measurements');
+        assert.match(prompt, /Big headline/, 'the OCR of a layer reaches the measurer');
+        const attached = pass1.input.flatMap((item) => item.content ?? []).filter((part) => part.type === 'input_image').length;
+        assert.ok(attached >= 2, `both decomposed layers travel to the measurer, got ${attached}`);
+        assert.match(prompt, /seedream layer hint/, 'each layer picture carries its hint caption');
         const started = events.find((event) => event.type === 'stage.start' && event.stage === 'measure');
-        assert.equal(started.measurerMode, 'advanced');
-        assert.ok(events.some((event) => event.type === 'measure.pass' && event.phase === 'advanced-decomposition' && event.layers === 2));
-        assert.ok(events.some((event) => event.type === 'measure.pass' && event.phase === 'advanced-verify' && event.reasoningMode === 'pro'));
+        assert.equal(started.layerHints, 2);
+        assert.ok(events.some((event) => event.type === 'measure.pass' && event.phase === 'overview'));
         assert.ok(events.some((event) => event.type === 'measure.conclusion' && event.elements === 1));
+        // The layers are recorded in decomposition.json, and the measurer's own sheet is the kept one.
+        const saved = JSON.parse(await readFile(path.join(dir, '.tmp', result.workId, 'decomposition.json'), 'utf8'));
+        assert.equal(saved.layers.length, 2, 'the transparent layers are written to the decomposition');
+        assert.equal(saved.layersTarget, 'mockup.png');
+        assert.equal(saved.layers[0].box.width, 400, 'the headline layer box is kept in the reference frame');
+        assert.ok(saved.layers[0].localPath?.includes('/layers/'), 'layer PNGs live under the decomposition layers directory');
         const savedSheet = JSON.parse(await readFile(path.join(dir, '.tmp', result.workId, 'measurements.json'), 'utf8'));
         assert.equal(savedSheet.elements[0].box.width, 400);
     } finally {
@@ -2662,11 +2665,13 @@ test('advanced measurer mode decomposes the reference first and verifies the she
     }
 });
 
-test('advanced measurer mode without a seedream picture model warns and stays on the standard passes', async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-measure-advanced-off-'));
+test('advanced decomposer mode without a seedream picture model warns and the measurer stays standard', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-decompose-advanced-off-'));
     const events = [];
     const measureBodies = [];
+    const imageBodies = [];
     await writeFile(path.join(dir, 'mockup.png'), Buffer.from(TINY_PNG, 'base64'));
+    imageScript = (body) => { imageBodies.push(body); return { data: [{ b64_json: TINY_PNG }] }; };
     detectCoder = true;
     script = (body) => {
         const role = roleOf(body);
@@ -2675,6 +2680,7 @@ test('advanced measurer mode without a seedream picture model warns and stays on
         if (role === 'planner') {
             return { text: JSON.stringify({ summary: 'стили по референсу', complexity: 'normal', steps: [{ goal: 'Создать styles.scss', details: '', verify: 'прочитать styles.scss' }], filesOfInterest: [], searchQueries: [], questionsForCollector: [], acceptanceCriteria: [], needsReview: false, imageNotes: null, risks: [] }) };
         }
+        if (role === 'decomposer') return { text: namesOnlyDecomposition('mockup.png') };
         if (role === 'measurer') {
             measureBodies.push(body);
             return { text: JSON.stringify({
@@ -2691,7 +2697,8 @@ test('advanced measurer mode without a seedream picture model warns and stays on
     const config = baseConfig();
     config.memory = { ...defaults.memory, enabled: false };
     config.imageModel = 'openai/gpt-image-2.6-sunburst';
-    config.agent = { ...config.agent, measurerMode: 'advanced' };
+    config.modelsBackends = {};
+    config.agent = { ...config.agent, decomposerMode: 'advanced' };
     try {
         const result = await runTeam({
             client: client(), config, ledger: createLedger(), task: 'стили по референсу',
@@ -2702,32 +2709,31 @@ test('advanced measurer mode without a seedream picture model warns and stays on
         assert.equal(result.status, 'completed', result.error?.message);
         assert.ok(events.some((event) => event.type === 'warning' && /advanced, но seedream-5\.5 не найден/.test(event.message)),
             'the user is told the expensive mode is not available');
-        assert.equal(events.find((event) => event.type === 'stage.start' && event.stage === 'measure').measurerMode, 'standard');
-        assert.ok(events.some((event) => event.type === 'measure.pass' && event.phase === 'overview'), 'the standard overview pass runs instead');
+        assert.equal(imageBodies.some((body) => body.layer_decomposition), false, 'no decomposition is paid for when seedream is absent');
+        assert.equal(events.find((event) => event.type === 'stage.start' && event.stage === 'measure').layerHints, 0);
+        assert.ok(events.some((event) => event.type === 'measure.pass' && event.phase === 'overview'), 'the standard overview pass runs anyway');
         assert.equal(measureBodies.length, 1);
-        assert.notEqual(measureBodies[0].reasoning?.mode, 'pro', 'the standard mode does not force pro reasoning');
+        assert.notEqual(measureBodies[0].reasoning?.mode, 'pro', 'without layer hints the standard mode does not force pro reasoning');
     } finally {
         await rm(dir, { recursive: true, force: true });
     }
 });
 
-test('advanced mode runs when seedream is named only by modelsBackends, not by imageModel', async () => {
+test('advanced decomposer mode runs when seedream is named only by modelsBackends, not by imageModel', async () => {
     // The shape of a real config: the default image model is a GPT one and seedream-5.5 lives on a
     // single host. Refusing advanced mode here would ignore exactly what the user wrote down.
-    const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-measure-advanced-map-'));
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-decompose-advanced-map-'));
     const events = [];
     const imageBodies = [];
-    await writeFile(path.join(dir, 'mockup.png'), Buffer.from(TINY_PNG, 'base64'));
+    await writeFile(path.join(dir, 'mockup.png'), pngOf(1000, 800));
     const layerUrl = `data:image/png;base64,${TINY_PNG}`;
     imageScript = (body) => {
         imageBodies.push(body);
         if (body.layer_decomposition) return { data: [{ task_id: 'task-map' }] };
-        return { data: [{ status: 'pending', task_id: 'task-map-crop' }] };
+        return { data: [{ b64_json: TINY_PNG }] };
     };
     taskScript = ({ taskId }) => {
-        if (taskId !== 'task-map') {
-            return { data: { status: 'completed', result: { images: [{ url: [layerUrl], sizes: ['1024x1024'] }] } } };
-        }
+        if (taskId !== 'task-map') return { data: { status: 'completed', result: { images: [{ url: [layerUrl], sizes: ['1024x1024'] }] } } };
         return {
             data: { status: 'completed', result: { images: [{
                 url: [layerUrl, layerUrl],
@@ -2747,11 +2753,12 @@ test('advanced mode runs when seedream is named only by modelsBackends, not by i
         if (role === 'planner') {
             return { text: JSON.stringify({ summary: 'стили по референсу', complexity: 'normal', steps: [{ goal: 'Создать styles.scss', details: '', verify: 'прочитать styles.scss' }], filesOfInterest: [], searchQueries: [], questionsForCollector: [], acceptanceCriteria: [], needsReview: false, imageNotes: null, risks: [] }) };
         }
+        if (role === 'decomposer') return { text: namesOnlyDecomposition('mockup.png') };
         if (role === 'measurer') {
             return { text: JSON.stringify({
                 summary: 's', source: 'mockup.png', unit: 'px',
                 units: { source: 'px', rootFontSize: 16, scale: null, preferred: ['rem'], notes: '' },
-                confidence: 'low', assumptions: [], canvas: { x: 0, y: 0, width: 100, height: 100 },
+                confidence: 'low', assumptions: [], canvas: { x: 0, y: 0, width: 1000, height: 800 },
                 elements: [], regions: [], rules: [], notes: '',
             }) };
         }
@@ -2763,7 +2770,7 @@ test('advanced mode runs when seedream is named only by modelsBackends, not by i
     config.memory = { ...defaults.memory, enabled: false };
     config.imageModel = 'openai/gpt-image-2.6-sunburst';
     config.modelsBackends = { 'seedream-5-5': [{ baseURL: 'https://api.apimart.ai/v1' }] };
-    config.agent = { ...config.agent, measurerMode: 'advanced', measurerPasses: 1 };
+    config.agent = { ...config.agent, decomposerMode: 'advanced', measurerPasses: 1 };
     try {
         const result = await runTeam({
             client: client(), config, ledger: createLedger(), task: 'стили по референсу',
@@ -2774,8 +2781,7 @@ test('advanced mode runs when seedream is named only by modelsBackends, not by i
         assert.equal(result.status, 'completed', result.error?.message);
         assert.equal(events.find((event) => event.type === 'warning' && /seedream-5\.5 не найден/.test(event.message)), undefined,
             'a seedream named in modelsBackends is available, so nothing warns');
-        assert.equal(events.find((event) => event.type === 'stage.start' && event.stage === 'measure').measurerMode, 'advanced');
-        assert.ok(events.some((event) => event.type === 'measure.pass' && event.phase === 'advanced-decomposition'));
+        assert.ok(events.some((event) => event.type === 'decompose.layers' && event.count === 1));
         assert.equal(imageBodies.find((body) => body.layer_decomposition)?.model, 'seedream-5-5',
             'the decomposition asks for the id the config places on its own host');
     } finally {
@@ -2783,8 +2789,8 @@ test('advanced mode runs when seedream is named only by modelsBackends, not by i
     }
 });
 
-test('advanced measurer mode falls back to the standard passes when decomposition fails', async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-measure-advanced-fallback-'));
+test('advanced decomposer mode falls back to the standard passes when decomposition fails', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-decompose-advanced-fallback-'));
     const events = [];
     const measureBodies = [];
     await writeFile(path.join(dir, 'mockup.png'), Buffer.from(TINY_PNG, 'base64'));
@@ -2798,9 +2804,9 @@ test('advanced measurer mode falls back to the standard passes when decompositio
         if (role === 'planner') {
             return { text: JSON.stringify({ summary: 'стили по референсу', complexity: 'normal', steps: [{ goal: 'Создать styles.scss', details: '', verify: 'прочитать styles.scss' }], filesOfInterest: [], searchQueries: [], questionsForCollector: [], acceptanceCriteria: [], needsReview: false, imageNotes: null, risks: [] }) };
         }
+        if (role === 'decomposer') return { text: namesOnlyDecomposition('mockup.png') };
         if (role === 'measurer') {
             measureBodies.push(body);
-            assert.equal(roleOf(body) === 'measurer' && body.instructions.includes('advanced mode'), false, 'the fallback uses the ordinary measurer prompt');
             return { text: JSON.stringify({
                 summary: 's', source: 'mockup.png', unit: 'px',
                 units: { source: 'px', rootFontSize: 16, scale: null, preferred: ['rem'], notes: '' },
@@ -2815,8 +2821,7 @@ test('advanced measurer mode falls back to the standard passes when decompositio
     const config = baseConfig();
     config.memory = { ...defaults.memory, enabled: false };
     config.imageModel = 'seedream-5-5';
-    //config.imageModel = 'bytedance-seed/seedream-5-5';
-    config.agent = { ...config.agent, measurerMode: 'advanced' };
+    config.agent = { ...config.agent, decomposerMode: 'advanced' };
     try {
         const result = await runTeam({
             client: client(), config, ledger: createLedger(), task: 'стили по референсу',
@@ -2825,26 +2830,29 @@ test('advanced measurer mode falls back to the standard passes when decompositio
             emit: (event) => events.push(event),
         });
         assert.equal(result.status, 'completed', result.error?.message);
-        assert.ok(events.some((event) => event.type === 'warning' && /Разложение слоёв не удалось/.test(event.message)));
-        assert.ok(events.some((event) => event.type === 'warning' && /перехожу на обычные проходы/.test(event.message)));
+        assert.ok(events.some((event) => event.type === 'warning' && /Разложение слоёв не удалось/.test(event.message)),
+            events.filter((e) => e.type === 'warning').map((e) => e.message).join(' / '));
+        assert.ok(events.some((event) => event.type === 'warning' && /замеры идут по обычному пути/.test(event.message)),
+            'the fallback path is announced');
         assert.ok(events.some((event) => event.type === 'measure.pass' && event.phase === 'overview'), 'the standard pass still measures the reference');
         assert.equal(measureBodies.length, 1);
+        assert.equal(events.find((event) => event.type === 'stage.start' && event.stage === 'measure').layerHints, 0);
     } finally {
         await rm(dir, { recursive: true, force: true });
     }
 });
 
-test('advanced measurer mode falls back to the standard passes when the verification pass returns no sheet', async () => {
-    // The decomposition is paid for and the layers are on disk, but an unverified sheet of a
-    // generation model's guesses is not a measurement: the ordinary passes have to run anyway.
-    const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-measure-advanced-verify-'));
+test('advanced decomposer mode writes layers into decomposition.json and the measurer keeps its own sheet', async () => {
+    // The decomposition is paid for and the layers are on disk; the measurer still returns its
+    // own sheet (not a generation model's guesses) and that sheet is what gets saved.
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-decompose-advanced-sheet-'));
     const events = [];
     const measureBodies = [];
     await writeFile(path.join(dir, 'mockup.png'), pngOf(1000, 800));
     const layerUrl = `data:image/png;base64,${TINY_PNG}`;
     imageScript = (body) => (body.layer_decomposition
         ? { data: [{ task_id: 'task-adv' }] }
-        : { code: 200, data: [{ status: 'pending', task_id: 'task-crop' }] });
+        : { data: [{ b64_json: TINY_PNG }] });
     taskScript = ({ taskId }) => (taskId !== 'task-adv'
         ? { data: { status: 'completed', result: { images: [{ url: [layerUrl], sizes: ['1024x1024'] }] } } }
         : {
@@ -2870,9 +2878,9 @@ test('advanced measurer mode falls back to the standard passes when the verifica
         if (role === 'planner') {
             return { text: JSON.stringify({ summary: 'стили по референсу', complexity: 'normal', steps: [{ goal: 'Создать styles.scss', details: '', verify: 'прочитать styles.scss' }], filesOfInterest: [], searchQueries: [], questionsForCollector: [], acceptanceCriteria: [], needsReview: false, imageNotes: null, risks: [] }) };
         }
+        if (role === 'decomposer') return { text: namesOnlyDecomposition('mockup.png') };
         if (role === 'measurer') {
             measureBodies.push(body);
-            if (String(body.instructions ?? '').includes('advanced mode')) return { text: 'Я посмотрел слои, но лист не вернул.' };
             return { text: JSON.stringify({
                 summary: 's', source: 'mockup.png', unit: 'px',
                 units: { source: 'px', rootFontSize: 16, scale: null, preferred: ['rem'], notes: '' },
@@ -2894,8 +2902,9 @@ test('advanced measurer mode falls back to the standard passes when the verifica
     };
     const config = baseConfig();
     config.memory = { ...defaults.memory, enabled: false };
-    config.imageModel = 'seedream-5.5';
-    config.agent = { ...config.agent, measurerMode: 'advanced', measurerPasses: 1 };
+    config.imageModel = 'seedream-5-5';
+    config.agent = { ...config.agent, decomposerMode: 'advanced', measurerPasses: 1 };
+    config.roles = { ...config.roles, measurer: { ...config.roles.measurer, model: 'gpt-6.1-terra' } };
     try {
         const result = await runTeam({
             client: client(), config, ledger: createLedger(), task: 'стили по референсу',
@@ -2904,17 +2913,16 @@ test('advanced measurer mode falls back to the standard passes when the verifica
             emit: (event) => events.push(event),
         });
         assert.equal(result.status, 'completed', result.error?.message);
-        // The verification pass may be retried by the runner before it gives up; what matters is that
-        // the run did not stop on the unverified decomposition sheet and reached the ordinary pass.
-        const advancedCalls = measureBodies.filter((body) => /advanced mode/.test(String(body.instructions ?? '')));
-        const ordinaryCalls = measureBodies.filter((body) => !/advanced mode/.test(String(body.instructions ?? '')));
-        assert.ok(advancedCalls.length >= 1, 'the advanced verification pass ran first');
-        assert.ok(ordinaryCalls.length >= 1, `the ordinary pass ran after the verification failed: ${measureBodies.length} measurer calls`);
-        assert.match(JSON.stringify(ordinaryCalls[0].input), /Measurement pass 1/);
-        assert.ok(events.some((event) => event.type === 'warning' && /Проверка листа разложения не завершилась/.test(event.message)),
-            events.filter((e) => e.type === 'warning').map((e) => e.message).join(' / '));
+        const decomposeStart = events.find((event) => event.type === 'stage.start' && event.stage === 'decompose');
+        assert.equal(decomposeStart.decomposerMode, 'advanced');
+        const measureStart = events.find((event) => event.type === 'stage.start' && event.stage === 'measure');
+        assert.equal(measureStart.layerHints, 1);
+        const saved = JSON.parse(await readFile(path.join(dir, '.tmp', result.workId, 'decomposition.json'), 'utf8'));
+        assert.equal(saved.layers.length, 1, 'the layer is saved in decomposition.json');
+        assert.equal(saved.layersTarget, 'mockup.png');
         const savedSheet = JSON.parse(await readFile(path.join(dir, '.tmp', result.workId, 'measurements.json'), 'utf8'));
-        assert.equal(savedSheet.elements[0].name, 'headline', 'the sheet of the ordinary pass is the one that is kept');
+        assert.equal(savedSheet.elements[0].name, 'headline', 'the measurer\'s own sheet is the one that is kept');
+        assert.ok(measureBodies[0].reasoning?.mode === 'pro', 'layer hints carry pro reasoning for a GPT measurer');
     } finally {
         await rm(dir, { recursive: true, force: true });
     }

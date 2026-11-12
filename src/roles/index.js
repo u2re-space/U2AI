@@ -68,5 +68,4 @@ export const ROLE_INSTRUCTIONS = {
     orchestratorFileSummary: orchestrator.fileSummaryInstructions,
     orchestratorWriting: orchestrator.writingInstructions,
     measurerFragment: measurer.reMeasureInstructions,
-    measurerAdvanced: measurer.advancedInstructions,
 };

@@ -233,17 +233,17 @@ export function handleRendererEvent(event, api) {
         case 'stage.start': {
             const stageLabel = STAGES[event.stage] ?? event.stage;
             const flags = [];
-            if (event.measurerMode === 'advanced') flags.push(paint(color, DANGER_COLOR, 'advanced'));
+            if (event.decomposerMode === 'advanced') flags.push(paint(color, DANGER_COLOR, 'advanced'));
             // The stage line carries the settings the user pays for: effort, `pro`, `advanced`.
             const tail = effortTail(color, event.effort, event.reasoningMode);
             line('action', `этап «${sanitizeTerminal(String(stageLabel))}»${event.round ? ` (раунд ${event.round})` : ''} — `
                 + `${sanitizeTerminal(String(event.role ?? ''))}${event.model ? ` · ${sanitizeTerminal(String(event.model))}` : ''}`
                 + `${flags.length ? ` · ${flags.join(' · ')}` : ''}${tail}`, { keepColor: true });
             setStatus(`${stageLabel}…`);
-            // Advanced measurer mode is printed red: it is slow, it costs per layer, and the run
-            // can be cheaper on the standard passes, so the line below names the switch back.
-            if (event.measurerMode === 'advanced') {
-                line('danger', 'advanced режим замеров: разложение слоёв seedream-5.5 — долго и дорого; обычный режим: --measurer-mode standard');
+            // Advanced decomposer mode is printed red: it is slow, it costs per layer, and the run
+            // can be cheaper without the layer hints, so the line below names the switch back.
+            if (event.decomposerMode === 'advanced') {
+                line('danger', 'advanced разложение: seedream-5.5 делит первый экран на слои — долго и дорого; обычный режим: --decomposer-mode standard');
             }
             break;
         }

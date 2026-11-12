@@ -4,7 +4,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
-import { canRunAdvanced, advancedImageModel, shouldUseReasoningPro, advancedMeasurerProfile, advancedMeasurePhase1, advancedEnhanceCrops, advancedMeasure } from '../src/agent/advanced.js';
+import { canRunAdvanced, advancedImageModel, shouldUseReasoningPro, advancedDecompose } from '../src/agent/advanced.js';
 import { detectMagick } from '../src/agent/image-magick.js';
 import { SEEDREAM_MODEL } from '../src/openai/seedream-5-5.js';
 import { TINY_PNG } from './helpers/mock-server.js';
@@ -61,17 +61,15 @@ test('the decomposition model follows imageModel, then modelsBackends, then the 
     assert.equal(advancedImageModel({ imageModel: 'openai/gpt-image-2.6-sunburst' }), SEEDREAM_MODEL);
 });
 
-test('every OpenAI GPT model gets reasoning pro in advanced mode, other vendors do not', () => {
+test('every OpenAI GPT model gets reasoning pro, other vendors do not', () => {
     assert.equal(shouldUseReasoningPro('gpt-6.1-terra'), true);
     assert.equal(shouldUseReasoningPro('openai/gpt-6-luna'), true);
     assert.equal(shouldUseReasoningPro('gpt-image-2.6-flare'), true);
     assert.equal(shouldUseReasoningPro('moonshotai/kimi-k3.1-pro'), false);
     assert.equal(shouldUseReasoningPro(null), false);
-    const profile = advancedMeasurerProfile({ model: 'gpt-6-luna', roles: { measurer: { model: 'gpt-6.1-terra' } } });
-    assert.deepEqual(profile, { needsReasoningPro: true, model: 'gpt-6.1-terra' });
 });
 
-test('phase 1 turns one decomposition answer into a sheet, layer files, and OCR notes', async () => {
+test('phase 1 turns one decomposition answer into layers and layer files', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-advanced-'));
     const events = [];
     const server = http.createServer((_req, res) => {
@@ -87,27 +85,22 @@ test('phase 1 turns one decomposition answer into a sheet, layer files, and OCR 
                 return route === 'images/generations' ? { data: [{ task_id: 'task-1' }] } : answer(origin);
             },
         };
-        const result = await advancedMeasurePhase1({
+        const result = await advancedDecompose({
             root: dir, workId: 'w', client, referencePath: 'ref.png',
             config: { agent: { advancedMaxLayers: 12 } }, notify: (event) => events.push(event),
         });
         assert.match(result.warnings.join(' '), /Вход Seedream локально дополнен справа и снизу/);
         assert.equal(result.layers.length, 2, 'both layers carry a box, so both are kept');
-        assert.equal(result.cropPaths.length, 2);
-        for (const rel of result.cropPaths) {
-            assert.ok(await stat(path.join(dir, rel)).then((info) => info.isFile(), () => false), `${rel} is stored`);
+        for (const layer of result.layers) {
+            assert.ok(layer.localPath, `layer ${layer.name} carries its file`);
+            assert.ok(await stat(path.join(dir, layer.localPath)).then((info) => info.isFile(), () => false), `${layer.localPath} is stored`);
         }
-        const sheet = result.sheet;
-        assert.equal(sheet.canvas.width, 1000);
-        assert.equal(sheet.elements.length + sheet.regions.length, 2);
-        const headline = [...sheet.elements, ...sheet.regions].find((item) => item.name === 'headline');
+        assert.deepEqual(result.frame, { width: 1000, height: 800 }, 'the frame is the reference that was sent');
+        const headline = result.layers.find((layer) => layer.name === 'headline');
         assert.deepEqual(headline.box, { x: 40, y: 20, width: 400, height: 100 });
-        assert.equal(headline.confidence, 'medium', 'a box a generation model drew is a hint, not a measurement');
-        assert.match(headline.notes, /box approximate/);
-        assert.match(headline.notes, /text: Big headline/);
-        assert.match(sheet.notes, /OCR на нескольких слоях/);
-        assert.match(sheet.assumptions[0], /approximate/);
-        assert.ok(events.some((event) => event.type === 'measure.pass' && event.phase === 'advanced-decomposition'));
+        assert.equal(headline.tightened, false, 'an empty OCR line list cannot tighten the box');
+        assert.equal(headline.text.text, 'Big headline', 'the OCR text travels with the layer');
+        assert.ok(events.some((event) => event.type === 'decompose.layers'));
     } finally {
         server.close();
         await rm(dir, { recursive: true, force: true });
@@ -140,103 +133,15 @@ test('phase 1 asks the backend that serves seedream, not the primary host', asyn
                 return [{ label: 'https://api.apimart.ai/v1', client: serving, modelFor: (name) => name }];
             },
         };
-        const result = await advancedMeasurePhase1({
+        const result = await advancedDecompose({
             root: dir, workId: 'w', client, referencePath: 'ref.png',
             config: { agent: { advancedMaxLayers: 12 }, modelsBackends: { 'seedream-5-5': [{ baseURL: 'https://api.apimart.ai/v1' }] } },
             notify: () => {},
         });
         assert.deepEqual(tried, ['channels images seedream-5-5', 'apimart images/generations seedream-5-5', 'apimart tasks/task-1']);
-        assert.ok(result.sheet, 'the layers came from the host the config names');
-        assert.equal(result.layers.length, 2);
+        assert.equal(result.layers.length, 2, 'the layers came from the host the config names');
     } finally {
         server.close();
-        await rm(dir, { recursive: true, force: true });
-    }
-});
-
-test('the enhanced pass cuts a region and asks seedream for its transparent version as a task', async (t) => {
-    const exe = await detectMagick({ magickPath: null });
-    if (!exe) { t.skip('ImageMagick is not installed, so no region can be cut'); return; }
-    const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-advanced-enhance-'));
-    const layerUrl = `data:image/png;base64,${TINY_PNG}`;
-    const calls = [];
-    const bodies = [];
-    try {
-        await writeFile(path.join(dir, 'ref.png'), pngOf(1000, 800));
-        const client = {
-            channels: () => [{
-                label: 'https://api.apimart.ai/v1',
-                client: {
-                    async call(route, options = {}) {
-                        calls.push(`${options.method ?? 'POST'} ${route}`);
-                        if (route === 'images/generations') {
-                            bodies.push(options.body);
-                            return { code: 200, data: [{ status: 'pending', task_id: 'task-crop' }] };
-                        }
-                        return { data: { status: 'completed', result: { images: [{ url: [layerUrl], sizes: ['1024x1024'] }] } } };
-                    },
-                },
-            }],
-        };
-        const out = await advancedEnhanceCrops({
-            root: dir, client, referencePath: 'ref.png', cropPaths: ['x.png'],
-            regions: [
-                { name: '英雄 区域', box: { x: 200, y: 150, width: 600, height: 200 } },
-                { name: 'the same object, cut twice', box: { x: 200, y: 150, width: 600, height: 200 } },
-                { name: 'a dot', box: { x: 5, y: 5, width: 1, height: 1 } },
-                { name: 'off frame', box: { x: 990, y: 790, width: 600, height: 200 } },
-            ],
-            frame: { width: 1000, height: 800 },
-            model: 'seedream-5-5', config: {}, notify: () => {},
-        });
-        assert.deepEqual(out.warnings, []);
-        assert.equal(out.enhancedPaths.length, 1, 'the transparent cut came back from the task');
-        assert.deepEqual(calls, ['POST images/generations', 'GET tasks/task-crop'],
-            'generation of this model is a task, not a synchronous images call');
-        assert.match(out.enhancedPaths[0], /^\.tmp\/[\w-]+\/enhanced-01-[a-z0-9-]+\.png$/, 'the file name stays ASCII');
-        assert.equal(bodies[0].background, 'transparent');
-        assert.equal(bodies[0].output_format, 'png');
-        assert.equal(bodies[0].size, '1K', 'a 600×200 region is under the pixel floor of a pixel frame');
-        assert.equal(bodies[0].image_urls.length, 1, 'the region travels in image_urls');
-        assert.equal('input_references' in bodies[0], false);
-    } finally {
-        await rm(dir, { recursive: true, force: true });
-    }
-});
-
-test('the enhanced pass spends the cap on the biggest regions first', async (t) => {
-    const exe = await detectMagick({ magickPath: null });
-    if (!exe) { t.skip('ImageMagick is not installed, so no region can be cut'); return; }
-    const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-advanced-cap-'));
-    const layerUrl = `data:image/png;base64,${TINY_PNG}`;
-    try {
-        await writeFile(path.join(dir, 'ref.png'), pngOf(1000, 800));
-        const client = {
-            channels: () => [{
-                label: 'https://api.apimart.ai/v1',
-                client: {
-                    async call(route) {
-                        return route === 'images/generations'
-                            ? { data: [{ status: 'pending', task_id: 'task-x' }] }
-                            : { data: { status: 'completed', result: { images: [{ url: [layerUrl], sizes: ['1024x1024'] }] } } };
-                    },
-                },
-            }],
-        };
-        const out = await advancedEnhanceCrops({
-            root: dir, client, referencePath: 'ref.png', cropPaths: ['x.png'], maxEnhanced: 2,
-            regions: [
-                { name: 'small', box: { x: 0, y: 0, width: 120, height: 120 } },
-                { name: 'huge', box: { x: 0, y: 0, width: 800, height: 600 } },
-                { name: 'medium', box: { x: 0, y: 0, width: 400, height: 300 } },
-            ],
-            frame: { width: 1000, height: 800 },
-            model: 'seedream-5-5', config: {}, notify: () => {},
-        });
-        assert.equal(out.enhancedPaths.length, 2, 'the cap is the cap');
-        assert.match(out.enhancedPaths[0], /huge/, 'the biggest region is generated first');
-        assert.match(out.enhancedPaths[1], /medium/);
-    } finally {
         await rm(dir, { recursive: true, force: true });
     }
 });
@@ -244,15 +149,15 @@ test('the enhanced pass spends the cap on the biggest regions first', async (t) 
 test('phase 1 warns instead of throwing when the reference is missing or the task fails', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-advanced-missing-'));
     try {
-        const missing = await advancedMeasurePhase1({
+        const missing = await advancedDecompose({
             root: dir, workId: 'w', client: { async call() { throw new Error('unused'); } },
             referencePath: 'nope.png', config: {}, notify: () => {},
         });
-        assert.equal(missing.sheet, null);
+        assert.equal(missing.layers.length, 0);
         assert.match(missing.warnings.join('\n'), /Референс не найден|Файл референса не найден/);
 
         await writeFile(path.join(dir, 'ref.png'), pngOf(1000, 800));
-        const failed = await advancedMeasurePhase1({
+        const failed = await advancedDecompose({
             root: dir, workId: 'w',
             client: {
                 async call(route) {
@@ -262,7 +167,7 @@ test('phase 1 warns instead of throwing when the reference is missing or the tas
             },
             referencePath: 'ref.png', config: {}, notify: () => {},
         });
-        assert.equal(failed.sheet, null);
+        assert.equal(failed.layers.length, 0);
         assert.match(failed.warnings.join('\n'), /Разложение слоёв не удалось/);
     } finally {
         await rm(dir, { recursive: true, force: true });
@@ -273,7 +178,7 @@ test('a reference the moderation refuses is reported as refused, not as a broken
     const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-advanced-policy-'));
     try {
         await writeFile(path.join(dir, 'ref.png'), pngOf(1000, 800));
-        const refused = await advancedMeasurePhase1({
+        const refused = await advancedDecompose({
             root: dir, workId: 'w',
             client: {
                 async call(route) {
@@ -292,55 +197,9 @@ test('a reference the moderation refuses is reported as refused, not as a broken
             referencePath: 'ref.png', config: {}, notify: () => {},
         });
         const text = refused.warnings.join('\n');
-        assert.equal(refused.sheet, null);
+        assert.equal(refused.layers.length, 0);
         assert.match(text, /отклонено модерацией провайдера \(content_policy_violation\)/);
         assert.doesNotMatch(text, /did not pass content safety review/, 'the vendor sentence about a prompt nobody sent is not repeated');
-    } finally {
-        await rm(dir, { recursive: true, force: true });
-    }
-});
-
-test('the enhanced pass stops buying generations once the moderation refuses the picture', async (t) => {
-    const exe = await detectMagick({ magickPath: null });
-    if (!exe) { t.skip('ImageMagick is not installed, so no region can be cut'); return; }
-    const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-advanced-policy-crops-'));
-    const posts = [];
-    try {
-        await writeFile(path.join(dir, 'ref.png'), pngOf(1000, 800));
-        const client = {
-            channels: () => [{
-                label: 'https://api.apimart.ai/v1',
-                client: {
-                    async call(route, options = {}) {
-                        if (route === 'images/generations') {
-                            posts.push(options.body);
-                            return { data: [{ task_id: 'task-crop' }] };
-                        }
-                        return {
-                            data: {
-                                status: 'failed',
-                                error: { message: 'output image may be related to copyright restrictions', code: 'OutputImageSensitiveContentDetected.PolicyViolation' },
-                            },
-                        };
-                    },
-                },
-            }],
-        };
-        const out = await advancedEnhanceCrops({
-            root: dir, client, referencePath: 'ref.png', cropPaths: ['x.png'],
-            regions: [
-                { name: 'first', box: { x: 0, y: 0, width: 800, height: 600 } },
-                { name: 'second', box: { x: 0, y: 0, width: 400, height: 300 } },
-                { name: 'third', box: { x: 500, y: 200, width: 300, height: 300 } },
-            ],
-            frame: { width: 1000, height: 800 },
-            model: 'seedream-5-5', config: {}, notify: () => {},
-        });
-        assert.equal(posts.length, 1, 'one refusal is enough: every remaining crop is a piece of the same refused picture');
-        assert.equal(out.enhancedPaths.length, 0);
-        assert.match(out.warnings.join('\n'), /генерация остановлена после отказа модерации/i);
-        assert.match(out.warnings.join('\n'), /ещё 2/);
-        assert.equal(out.warnings.filter((warning) => /отклонено модерацией/.test(warning)).length, 1);
     } finally {
         await rm(dir, { recursive: true, force: true });
     }
@@ -387,7 +246,7 @@ test('phase 1 keeps the boxes in the reference frame and every name ASCII', asyn
                 };
             },
         };
-        const result = await advancedMeasurePhase1({
+        const result = await advancedDecompose({
             root: dir, workId: 'w', client, referencePath: 'ref.png',
             config: { agent: { advancedMaxLayers: 12 } }, notify: () => {},
         });
@@ -396,22 +255,22 @@ test('phase 1 keeps the boxes in the reference frame and every name ASCII', asyn
         assert.equal('prompt' in bodies[0], true, 'the decomposition request carries the tight-box guard');
         assert.match(bodies[0].prompt, /tightest rectangle that fully contains the visible pixels/);
         assert.doesNotMatch(bodies[0].prompt, /original scale and geometry/, 'no canvas-size guard is asked of a mode that cannot honour it');
-        assert.equal(result.sheet.canvas.width, 500);
-        assert.equal(result.sheet.canvas.height, 400);
-        const item = [...result.sheet.elements, ...result.sheet.regions][0];
-        assert.deepEqual(item.box, { x: 200, y: 150, width: 600, height: 200 }, 'the box is used exactly as the model sent it');
-        assert.match(item.name, /^[a-z0-9][a-z0-9-]*$/, 'a CJK layer name does not reach the sheet');
-        for (const rel of result.cropPaths) assert.match(rel, /^\.tmp\/[\w./-]+$/, 'file names stay ASCII');
+        assert.deepEqual(result.frame, { width: 500, height: 400 }, 'the frame reported is the reference on disk');
+        assert.equal(result.layers.length, 1, 'the opaque base carries no box and is not a layer to measure');
+        const [cta] = result.layers;
+        assert.deepEqual(cta.box, { x: 200, y: 150, width: 600, height: 200 }, 'the box is used exactly as the model sent it');
+        assert.match(cta.name, /^[a-z0-9][a-z0-9-]*$/, 'a CJK layer name does not reach the layer list');
+        assert.match(cta.localPath, /^\.tmp\/[\w./-]+$/, 'file names stay ASCII');
         assert.match(result.warnings.join(' '), /Вход Seedream локально дополнен справа и снизу/);
-        assert.match(result.sheet.assumptions.join(' '), /base image the task returned is 1000x800/);
-        assert.match(result.sheet.notes, /Купить/, 'the text the layer carries stays as evidence');
+        assert.match(result.warnings.join(' '), /Базовое изображение разложения 1000x800/, 'the two frames of one answer are reported');
+        assert.equal(cta.text.text, 'Купить', 'the text the layer carries stays as evidence');
     } finally {
         server.close();
         await rm(dir, { recursive: true, force: true });
     }
 });
 
-test('advanced measure sends only the tight-box guard and never the Russian plan', async () => {
+test('the decomposition sends only the tight-box guard', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-advanced-prompt-'));
     const bodies = [];
     const server = http.createServer((_req, res) => {
@@ -431,15 +290,16 @@ test('advanced measure sends only the tight-box guard and never the Russian plan
                 return answer(origin);
             },
         };
-        const result = await advancedMeasure({
+        // The team calls the decomposition with no prompt: a longer text alongside
+        // `text_recognition` can cost the OCR, and the page plan belongs to the measurer, not here.
+        const result = await advancedDecompose({
             root: dir, workId: 'w', referencePath: 'ref.png',
-            plan: 'Русский план страницы: hero с заголовком и карточками.',
             config: { agent: {} }, client, notify: () => {},
         });
-        assert.ok(result.sheet);
-        assert.equal('prompt' in bodies[0], true, 'the tight-box guard is sent even though the plan stays out');
+        assert.equal(result.layers.length, 2);
+        assert.equal('prompt' in bodies[0], true, 'the tight-box guard is the only text the call carries');
         assert.match(bodies[0].prompt, /tightest rectangle that fully contains the visible pixels/);
-        assert.doesNotMatch(bodies[0].prompt, /Русский план страницы/, 'the Russian plan never reaches the model');
+        assert.doesNotMatch(bodies[0].prompt, /Русский план страницы/, 'no plan text ever reaches the model');
     } finally {
         server.close();
         await rm(dir, { recursive: true, force: true });
@@ -502,20 +362,21 @@ test('a text layer is narrowed to its OCR lines and carries the style the OCR me
                     };
             },
         };
-        const result = await advancedMeasurePhase1({
+        const result = await advancedDecompose({
             root: dir, workId: 'w', client, referencePath: 'ref.png',
             config: { agent: { advancedMaxLayers: 12 } }, notify: () => {},
         });
-        const [hero, note] = result.sheet.elements;
+        const [hero, note] = result.layers;
         assert.equal(hero.name, 'hero-heading');
         assert.deepEqual(hero.box, { x: 300, y: 150, width: 460, height: 270 }, 'the padded area gave way to the union of the two lines');
-        assert.match(hero.notes, /box tightened to the OCR line frames/);
+        assert.equal(hero.tightened, true, 'the box was narrowed to the OCR line frames');
+        assert.deepEqual(hero.bbox, { x: 200, y: 100, width: 600, height: 520 }, 'the area the model drew is kept next to the tightened box');
         assert.equal(hero.typography.fontSize, 100, 'a line of glyphs is 100 px tall');
         assert.equal(hero.typography.lineHeight, 170, 'the step between the two line tops');
         assert.equal(hero.typography.weight, 700, 'bold came from the style flags');
         assert.equal(hero.typography.family, 'Inter');
         assert.deepEqual(note.box, { x: 100, y: 100, width: 300, height: 120 }, 'a layer whose lines leave its box keeps the box');
-        assert.match(note.notes, /box approximate/);
+        assert.equal(note.tightened, false);
     } finally {
         server.close();
         await rm(dir, { recursive: true, force: true });

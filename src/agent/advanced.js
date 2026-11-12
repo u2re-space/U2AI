@@ -36,12 +36,11 @@
  *   without a prompt, because the vendor states a prompt alongside `text_recognition` can cost the OCR.
  * @changed 2026-11-12 Each downloaded layer PNG is resized to its bounding-box content size using
  *   fitLayerToBox: the API generates each layer at ~1K canvas with the same aspect as its bounding_box,
- *   so the file is down-scaled to box.width×box.height (vendor docs: `приведите слой к w×h`).
- *   The original bounding box is preserved as bbox in the named mapping (the box field may be
- *   tightened to OCR line frames for text layers, which is a measurement, not a crop). The
- *   SOURCE_GEOMETRY_PROMPT is no longer sent to decomposition — layers are independently scaled
- *   by the model and resized locally.
- *   may be tightened to OCR line frames for text layers, which is a measurement, not a crop).
+ *   so the file is down-scaled to box.width×box.height (vendor docs: "приведите слой к w×h").
+ *   The original bounding box is preserved as `bbox` in the named mapping (the `box` field may be
+ *   tightened to OCR line frames for text layers, which is a measurement, not a crop).
+ *   The decomposition now carries a `TIGHT_BOX_PROMPT` so the model writes tighter bounding boxes
+ *   (no square rounding, no padding).
  *
  * How advanced differs from standard:
  *   - standard: the model reads the reference and returns boxes; the harness cuts the crops.
@@ -81,6 +80,18 @@ export const LAYER_PROMPT = 'Split this interface screenshot into its visual lay
 const SOURCE_GEOMETRY_PROMPT = 'Preserve the source image or fragment at its original scale and geometry, unchanged at canvas origin (0,0). '
     + 'Do not upscale, stretch, move, or recenter it. If a larger canvas is required, extend it to the right and bottom. '
     + 'Never guess or state unverified source dimensions.';
+
+/**
+ * The wording that makes the boxes hug the object. Measured on a real answer, six of nineteen layers
+ * came back as the same square 272×272 — a wide tag, a round button and a row of icons all got one
+ * box size — and since every layer file is resized to its own box, a square box around a wide object
+ * buys back the phantom padding the sheet was built to remove. The canvas cannot be asked for (the
+ * vendor scales each layer independently), but the box is a number the model writes, so it can.
+ */
+const TIGHT_BOX_PROMPT = 'Report each bounding_box as the tightest rectangle that fully contains the visible pixels of that layer, '
+    + 'with no margin, no padding and no allowance for shadow. Do not round a box to a square and do not widen or heighten it to a '
+    + 'convenient size: a wide element gets a wide box, a tall element a tall box, and each box keeps the aspect ratio of what it frames. '
+    + 'Keep every box inside the frame of the source image.';
 
 /** A region this small is not an object, and seedream cannot cut anything out of it. */
 const MIN_CROP_SIDE = 32;
@@ -598,11 +609,12 @@ export async function advancedMeasurePhase1({ root, workId, client, referencePat
     const inputFrame = { width: inputPadding.width, height: inputPadding.height };
     const refMime = inputPadding.padded || refAbs.endsWith('.png') ? 'image/png'
         : (refAbs.endsWith('.jpg') || refAbs.endsWith('.jpeg') ? 'image/jpeg' : 'image/png');
-    // The decomposition mode does not accept size/prompt geometry hints — the vendor
-    // states that each layer is independently scaled to the chosen level. Sending a
-    // prompt alongside text_recognition can also degrade OCR quality. Let the model
-    // return layers at ~1K canvas and resize them locally to the bounding-box size.
-    const geometryPrompt = prompt ?? null;
+    // The canvas size cannot be asked for — the vendor scales every layer independently and
+    // `fitLayerToBox` restores the content size locally. The box itself is a different matter: it is
+    // a number the model writes into the JSON, and left alone it rounds them to a square. So this
+    // call carries the tight-box wording only, and nothing else, because a prompt sent alongside
+    // `text_recognition` can cost the OCR the sheet measures with.
+    const geometryPrompt = [prompt, TIGHT_BOX_PROMPT].filter(Boolean).join('\n\n') || null;
 
     // Decompose. The host chain is resolved per model, because the gateway that serves seedream is
     // usually not the primary one, and `modelsBackends` is the only place that says which is which.
@@ -834,9 +846,10 @@ export function advancedMeasurerProfile(config) {
 export async function advancedMeasure({ root, workId, referencePath, plan = '', config,
     client, signal, notify }) {
     const seedreamModel = advancedImageModel(config ?? {});
-    // The decomposition runs without a brief: `text_recognition` is on, and the vendor warns that a
-    // prompt alongside it can cost the OCR — which is where the line frames and the font style come
-    // from. The plan is read by the measurer in the second pass, where it belongs.
+    // The decomposition runs without the plan: `text_recognition` is on, and a longer prompt
+    // alongside it can cost the OCR — which is where the line frames and the font style come from.
+    // `advancedMeasurePhase1` adds only the tight-box wording. The plan is read by the measurer in
+    // the second pass, where it belongs.
     const result = await advancedMeasurePhase1({
         root, workId, client, referencePath,
         prompt: null,

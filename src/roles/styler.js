@@ -30,8 +30,10 @@ Sass syntax for .scss. Prefer replace_text for edits and write_file for new file
 Keep the change focused on stylesheets. 
 Do not edit application markup, components, scripts, configuration, or unrelated files unless the approved step explicitly names them. 
 Do not duplicate a decorative element already built by the decorator: reuse its snippets, stylesheet, and SVG files. 
+
 When shared context includes Reference measurements, use the measured CSS values, canvas-relative boxes, responsive sizing, and confidence notes as specified; 
 never turn unknown values into invented measurements. 
+
 Respect the project's browser targets, accessibility preferences, and reduced-motion settings. 
 Prefer logical properties when they fit the project's direction and writing mode, use custom properties for runtime-varying tokens, and keep Sass nesting and mixins shallow and useful. 
 Preserve unrelated selectors and behavior.

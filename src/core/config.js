@@ -804,15 +804,6 @@ function validateConfig(c, env = liveEnv() ?? process.env) {
     if (!['standard', 'advanced'].includes(c.agent.decomposerMode)) fail('agent.decomposerMode: standard | advanced');
     if (!Number.isSafeInteger(c.agent.advancedMaxLayers) || c.agent.advancedMaxLayers < 1 || c.agent.advancedMaxLayers > 32) fail('agent.advancedMaxLayers: 1..32');
     if (!Number.isSafeInteger(c.agent.decomposerCropLimit) || c.agent.decomposerCropLimit < 0) fail('agent.decomposerCropLimit: >= 0 (0 = unlimited)');
-    if (!['off', 'auto', 'always'].includes(c.agent.extend)) fail('agent.extend: off | auto | always');
-    if (!Number.isSafeInteger(c.agent.extendMaxFiles) || c.agent.extendMaxFiles < 1 || c.agent.extendMaxFiles > 16) fail('agent.extendMaxFiles: 1..16');
-    if (!['off', 'auto', 'always'].includes(c.agent.rectify)) fail('agent.rectify: off | auto | always');
-    if (!Number.isSafeInteger(c.agent.rectifyMaxFiles) || c.agent.rectifyMaxFiles < 1 || c.agent.rectifyMaxFiles > 16) fail('agent.rectifyMaxFiles: 1..16');
-    if (!Number.isSafeInteger(c.agent.rectifyMaxTurns) || c.agent.rectifyMaxTurns < 1 || c.agent.rectifyMaxTurns > 24) fail('agent.rectifyMaxTurns: 1..24');
-    if (!['off', 'auto', 'always'].includes(c.agent.restore)) fail('agent.restore: off | auto | always');
-    if (!Number.isSafeInteger(c.agent.restoreMaxFiles) || c.agent.restoreMaxFiles < 1 || c.agent.restoreMaxFiles > 16) fail('agent.restoreMaxFiles: 1..16');
-    if (!Number.isSafeInteger(c.agent.restoreMaxPatches) || c.agent.restoreMaxPatches < 1 || c.agent.restoreMaxPatches > 8) fail('agent.restoreMaxPatches: 1..8');
-    if (typeof c.agent.restoreVerify !== 'boolean') fail('agent.restoreVerify: true | false');
     if (!['auto', 'subrefs', 'original'].includes(c.agent.measureSource)) fail('agent.measureSource: auto | subrefs | original');
     if (!['off', 'auto', 'always'].includes(c.agent.decorations)) fail('agent.decorations: off | auto | always');
     if (!['off', 'auto', 'always'].includes(c.agent.architect)) fail('agent.architect: off | auto | always');

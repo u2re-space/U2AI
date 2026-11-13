@@ -348,30 +348,6 @@ export function overridesFrom(values, { command = null } = {}) {
         if (!['auto', 'subrefs', 'original'].includes(values['measure-source'])) throw new UsageError('--measure-source: auto | subrefs | original');
         (o.agent ??= {}).measureSource = values['measure-source'];
     }
-    // Phase 0.5: the extender grows a frame that ends inside real content, before the projections.
-    // It is an outpainting request, so it needs the images route.
-    if (flagsOff(values, 'extend')) (o.agent ??= {}).extend = 'off';
-    if (values.extend) {
-        if (!['off', 'auto', 'always'].includes(values.extend)) throw new UsageError('--extend: off | auto | always');
-        (o.agent ??= {}).extend = values.extend;
-        if (values.extend !== 'off') o.tools.images = true;
-    }
-    // Phase 1: the rectifier owns the projections. The tool is deterministic (ImageMagick), but it
-    // lives in the image tool group, so the phase needs `tools.images` switched on.
-    if (flagsOff(values, 'rectify')) (o.agent ??= {}).rectify = 'off';
-    if (values.rectify) {
-        if (!['off', 'auto', 'always'].includes(values.rectify)) throw new UsageError('--rectify: off | auto | always');
-        (o.agent ??= {}).rectify = values.rectify;
-        if (values.rectify !== 'off') o.tools.images = true;
-    }
-    // Phase 1.5: the restorer cleans the sub-references before anybody measures them. It needs the
-    // images route, because the named region is repaired by an editor model.
-    if (flagsOff(values, 'restore')) (o.agent ??= {}).restore = 'off';
-    if (values.restore) {
-        if (!['off', 'auto', 'always'].includes(values.restore)) throw new UsageError('--restore: off | auto | always');
-        (o.agent ??= {}).restore = values.restore;
-        if (values.restore !== 'off') o.tools.images = true;
-    }
     // How the decomposer works. `standard` = the role names screens and cuts sub-references.
     // `advanced` = after the role is done, the harness splits the first flat screen into Seedream
     // 5.5 layers: slow, billed per layer, and needs the images route.

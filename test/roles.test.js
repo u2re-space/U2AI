@@ -5,7 +5,7 @@ import { isWritingStep } from '../src/roles/orchestrator.js';
 import { EXECUTORS } from '../src/agent/role-registry.js';
 import { defaults } from '../src/core/config.js';
 
-const NAMES = ['default', 'planner', 'architect', 'orchestrator', 'worker', 'coder', 'styler', 'iconifier', 'reviewer', 'solver', 'clicker', 'typer', 'encoder', 'classifier', 'decomposer', 'extender', 'rectifier', 'restorer', 'measurer', 'decorator', 'image-processor', 'designer', 'installer'];
+const NAMES = ['default', 'planner', 'architect', 'orchestrator', 'worker', 'coder', 'styler', 'iconifier', 'reviewer', 'solver', 'clicker', 'typer', 'encoder', 'classifier', 'decomposer', 'measurer', 'decorator', 'image-processor', 'designer', 'installer'];
 
 test('role modules match config role names', () => {
     assert.deepEqual(Object.keys(defaults.roles).sort(), NAMES.slice().sort());
@@ -44,6 +44,10 @@ test('existing role instructions keep their job', () => {
     assert.match(ROLE_INSTRUCTIONS.orchestratorFileSummary, /Do not propose changes\./);
     assert.match(ROLE_INSTRUCTIONS.encoderExtract, /encoder in extraction mode/);
     assert.match(ROLE_INSTRUCTIONS.encoderExtract, /removeLines/);
+    // Geometry is the decomposer's own again: it runs the deterministic projection, but once per
+    // reference — a second homography on top of the first is what used to wreck the screens.
+    assert.match(ROLE_INSTRUCTIONS.decomposer, /call\s+correct_perspective/);
+    assert.match(ROLE_INSTRUCTIONS.decomposer, /Project a picture once/);
     assert.match(ROLE_INSTRUCTIONS['image-processor'], /before implementation begins/);
     assert.match(ROLE_INSTRUCTIONS['image-processor'], /Do not edit application code/);
 });

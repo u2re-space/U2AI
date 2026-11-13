@@ -428,7 +428,7 @@ async function trimLayerAsset(abs, config, signal) {
  * @ai.hint io
  */
 export async function advancedDecompose({ root, workId, client, referencePath, prompt = null,
-    size = 'auto', maxLayers = 16, model = null, outDir = null, config, signal, notify }) {
+    size = 'auto', maxLayers = 32, model = null, outDir = null, config, signal, notify }) {
     const warnings = [];
     const layers = [];
     // Layer PNGs live next to the sub-references the role wrote, so one decomposition directory

@@ -6,8 +6,9 @@
  * @depends node:path, node:fs/promises, agent/paths, agent/schemas, shared/image-raster,
  *   shared/images, core/attachments, commands/instructions
  * @usedBy agent/team (decompose stage, before the decomposer role)
- * @exports EXTENDER_FRAME, MAX_MEAN_DELTA, MAX_CHANGED_SHARE, extendTarget, regionDelta,
- *   acceptsExtension, extenderPrompt, canExtend, extendableFiles, extendReferences
+ * @exports EXTENDER_FRAME, MAX_MEAN_DELTA, MAX_CHANGED_SHARE, SEAM_ROWS, MAX_SEAM_DELTA,
+ *   MAX_SEAM_CHANGED_SHARE, MIN_BAND_FILL, extendTarget, regionDelta, seamDelta, bandFillShare,
+ *   extensionVerdict, acceptsExtension, extenderPrompt, canExtend, extendableFiles, extendReferences
  * @ai.tags extension, outpainting, decomposition, images
  * @ai.hint io
  *
@@ -20,17 +21,26 @@
  *      with no resampling and no crop;
  *   2. the `extender` role decides whether anything real is clipped and writes the instruction for the
  *      empty band — no fixed outpainting sentence is reused from one reference to the next;
- *   3. the answer is accepted only when the original area of it is the original, measured pixel by
- *      pixel. A model that redrew the picture to fit its own grid is rejected and the file is kept.
+ *   3. the answer is judged by its seam, not by a byte match. A diffusion editor never returns the
+ *      source bytes untouched — it repaints every glyph it looks at — so requiring that would refuse
+ *      every honest outpaint (the first real run did: 27 levels of drift over the original area).
+ *      What has to hold is that the picture is still at 1:1 scale in the top-left, and the last rows
+ *      of the original area are the place to read that. When they match, the band is a continuation of
+ *      the real content and only the band is taken from the answer; the original area is stitched back
+ *      from the source file, so every padding, type size and colour a later role measures is the
+ *      source's own byte. When the seam moved, the model resampled the frame, its band continues a
+ *      scaled copy, and the answer is refused — two scales in one file is worse than a clipped frame.
  *
  * @changed 2026-11-13 First version.
+ * @changed 2026-11-13 Seam-based acceptance and the band-only stitch. The all-or-nothing byte check
+ *   refused every real answer, because a generative edit never leaves the original area untouched.
  */
 
 import path from 'node:path';
 import { mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { resolveInside } from './paths.js';
 import { EXTEND_SCHEMA } from './schemas.js';
-import { decodeRgba, rasterPadImageBytes } from '../shared/image-raster.js';
+import { decodeRgba, rasterCrop, rasterPadImageBytes, rasterPatch } from '../shared/image-raster.js';
 import { IMAGE_SIZES, imageModelFor, paddedSizeToMinPixels, sniffImage } from '../shared/images.js';
 import { loadImageAttachment } from '../core/attachments.js';
 import { ROLE_INSTRUCTIONS } from '../commands/instructions.js';
@@ -61,6 +71,25 @@ export const MAX_MEAN_DELTA = 3;
 
 /** Share of original pixels allowed to differ before the answer counts as a redraw. */
 export const MAX_CHANGED_SHARE = 0.01;
+
+/**
+ * Rows of the original area compared against the answer to tell "kept the picture, painted the
+ * band" from "resampled the whole picture". The seam is the only place where the two cases differ:
+ * a rescaled frame moves every row, an honest outpaint leaves the last rows exactly where they were.
+ */
+export const SEAM_ROWS = 8;
+
+/** Mean level difference at the seam above which the frame is considered resampled. */
+export const MAX_SEAM_DELTA = 6;
+
+/** Share of seam pixels allowed to differ before the frame is considered resampled. */
+export const MAX_SEAM_CHANGED_SHARE = 0.05;
+
+/**
+ * Share of the grown band that has to carry pixels. An answer whose band is still the transparent
+ * padding drew nothing: taking it would only make the canvas larger, which the local pad already did.
+ */
+export const MIN_BAND_FILL = 0.5;
 
 /**
  * The frame the editor model has to be given for this source, or null when the source already fits.
@@ -124,7 +153,105 @@ export function regionDelta(before, after, width, height) {
 }
 
 /**
- * Is the answer a grown canvas rather than a repainted reference.
+ * How far the seam (last few rows of the original area) drifted from the original.
+ * Used to decide whether the model kept the original at 1:1 scale and only painted the band,
+ * or resampled the whole picture — in the latter case the band is not a continuation.
+ * @param {{width:number,height:number,data:Buffer}} before original RGBA
+ * @param {{width:number,height:number,data:Buffer}} after answer RGBA
+ * @param {number} width original width
+ * @param {number} height original height
+ * @param {number} rows how many rows at the bottom to check
+ * @returns {{meanDelta:number, changedShare:number}}
+ * @exports
+ * @ai.hint pure
+ */
+export function seamDelta(before, after, width, height, rows = 8) {
+    const start = Math.max(0, height - rows);
+    let sum = 0;
+    let changed = 0;
+    let seen = 0;
+    for (let y = start; y < height; y++) {
+        const beforeRow = y * before.width * 4;
+        const afterRow = y * after.width * 4;
+        for (let x = 0; x < width; x++) {
+            const from = beforeRow + x * 4;
+            const to = afterRow + x * 4;
+            const delta = Math.abs(before.data[from] - after.data[to])
+                + Math.abs(before.data[from + 1] - after.data[to + 1])
+                + Math.abs(before.data[from + 2] - after.data[to + 2]);
+            sum += delta / 3;
+            if (delta > 12) changed += 1;
+            seen += 1;
+        }
+    }
+    return { meanDelta: seen ? sum / seen : Infinity, changedShare: seen ? changed / seen : 1 };
+}
+
+/**
+ * Share of a band that carries pixels rather than the transparent padding it was grown from.
+ * @param {{width:number,height:number,data:Buffer}} after answer RGBA
+ * @param {number} top first row of the band
+ * @returns {number}
+ * @exports
+ * @ai.hint pure
+ */
+export function bandFillShare(after, top) {
+    let filled = 0;
+    let seen = 0;
+    for (let y = Math.max(0, Math.round(top)); y < after.height; y++) {
+        const row = y * after.width * 4;
+        for (let x = 0; x < after.width; x++) {
+            if (after.data[row + x * 4 + 3] > 8) filled += 1;
+            seen += 1;
+        }
+    }
+    return seen ? filled / seen : 0;
+}
+
+/**
+ * Should the answer be accepted as a grown canvas, or only its band?
+ *
+ * A diffusion edit almost always changes the original area by a few levels (anti-aliasing,
+ * micro-shift). Requiring a perfect match is too strict: it rejects honest outpainting.
+ * What matters is whether the original stayed at 1:1 scale in the top-left. If the seam (last
+ * rows of the original area) matches the source, the model kept the content and only painted
+ * the empty band — so the band is a valid continuation and the rest can be taken from the
+ * original pixel-for-pixel.
+ *
+ * @param {{meanDelta:number, changedShare:number}} originalDelta the full original area
+ * @param {{meanDelta:number, changedShare:number}} seamDelta the last few rows of the original area
+ * @param {{ maxMeanDelta?: number, maxChangedShare?: number, maxSeamDelta?: number, maxSeamChangedShare?: number, minBandFill?: number }} [limits]
+ * @returns {{ ok: boolean, mode: 'whole'|'band'|'reject', reason: string }}
+ * @exports
+ * @ai.hint pure
+ */
+export function extensionVerdict(
+    originalDelta, seamDelta,
+    { maxMeanDelta = MAX_MEAN_DELTA, maxChangedShare = MAX_CHANGED_SHARE,
+      maxSeamDelta = MAX_SEAM_DELTA, maxSeamChangedShare = MAX_SEAM_CHANGED_SHARE } = {},
+) {
+    // If the whole original area matches (rare but possible), accept the full answer.
+    if (Number.isFinite(originalDelta?.meanDelta) && originalDelta.meanDelta <= maxMeanDelta
+        && originalDelta.changedShare <= maxChangedShare) {
+        return { ok: true, mode: 'whole', reason: 'оригинал не изменён' };
+    }
+    // If the seam matches, the model kept the original at 1:1 scale in the top-left.
+    // The band is a valid continuation; the original area is taken from the source.
+    if (Number.isFinite(seamDelta?.meanDelta) && seamDelta.meanDelta <= maxSeamDelta
+        && seamDelta.changedShare <= maxSeamChangedShare) {
+        return { ok: true, mode: 'band', reason: `шов совпал (расхождение ${seamDelta.meanDelta.toFixed(1)})` };
+    }
+    // The model resampled the whole picture — the band is not a continuation.
+    return { ok: false, mode: 'reject', reason: `кадр перерисован (оригинал ${originalDelta.meanDelta.toFixed(1)}, шов ${seamDelta.meanDelta.toFixed(1)})` };
+}
+
+/**
+ * The strict all-or-nothing check: is the answer a grown canvas whose original area is untouched?
+ *
+ * Kept separate from `extensionVerdict` because the two answer different questions. This one refuses
+ * any drift in the original area and is what a caller uses when it must ship the model's own bytes;
+ * `extensionVerdict` also allows the band-only stitch, which is the common case for a diffusion
+ * editor that repaints every glyph it looks at.
  * @param {{meanDelta:number, changedShare:number}} delta
  * @param {{maxMeanDelta?:number, maxChangedShare?:number}} [limits]
  * @returns {{ok:boolean, reason:string}}
@@ -189,11 +316,16 @@ export function extendableFiles(sources = [], mode = 'auto', model = null, maxFi
  * rejected answer leaves nothing behind.
  * @param {{
  *   root: string, files: object[], roles: object, client: object, config: object,
- *   signal?: AbortSignal, notify?: (event: object) => void, model?: string|null, effort?: string|null,
+ *   signal?: AbortSignal, notify?: (event: object) => void,
+ *   model?: string|null, effort?: string|null, editorModel?: string|null,
  *   dir?: string, maxMeanDelta?: number, maxChangedShare?: number
  * }} options
- * The copies land in `<dir>/extended/`, the same folder the stage already keeps its derived files in —
- * never over the reference itself.
+ * `model` is the vision model the `extender` role uses to look at the picture;
+ * `editorModel` is the image-editing model that actually draws the band (default: resolved from
+ * config via `imageModelFor`). They must not be the same: a chat/vision model (e.g. kimi-k3.1-pro)
+ * has no Images API entry, so passing the role model to images.edit always fails. The copies land in
+ * `<dir>/extended/`, the folder the stage already keeps its derived files in — never over the
+ * reference itself.
  * @returns {Promise<{ extended: Array<{from:string,to:string,edge:string,band:{width:number,height:number},prompt:string}>,
  *   kept: Array<{path:string,reason:string}>, warnings: string[] }>}
  * @exports
@@ -201,7 +333,7 @@ export function extendableFiles(sources = [], mode = 'auto', model = null, maxFi
  */
 export async function extendReferences({
     root, files = [], roles, client, config, signal, notify = () => {},
-    model: modelOverride = null, effort = null, dir = '',
+    model: modelOverride = null, effort = null, editorModel: editorOverride = null, dir = '',
     maxMeanDelta = MAX_MEAN_DELTA, maxChangedShare = MAX_CHANGED_SHARE,
 }) {
     const extended = [];
@@ -211,7 +343,12 @@ export async function extendReferences({
         return { extended, kept, warnings: ['Расширение пропущено: images API недоступен.'] };
     }
     const engine = config.image?.rasterEngine ?? 'auto';
-    const editorModel = modelOverride || imageModelFor(config, { hasImage: true });
+    const editorModel = editorOverride || imageModelFor(config, { hasImage: true });
+    // A run whose image transport is the Responses tool has no Images API model to name here, and an
+    // edit call without one fails on every reference. Saying so once beats N identical failures.
+    if (!editorModel) {
+        return { extended, kept, warnings: ['Расширение пропущено: модель для Images API не определена (imageModel не задан, транспорт — Responses tool).'] };
+    }
     const scratchAbs = path.join(root, '.tmp', `extend-${Date.now()}`);
 
     for (const file of files) {
@@ -280,13 +417,16 @@ export async function extendReferences({
             width: padded.width - file.width,
             height: padded.height - file.height,
         };
+        // `.file`, not `.extend`: the phase itself announces `decompose.extend` with the candidate list,
+        // and a per-file event under the same type renders as a second phase start with no candidates.
         notify({
-            type: 'decompose.extend', file: file.path, edge: edge || 'bottom',
+            type: 'decompose.extend.file', file: file.path, edge: edge || 'bottom',
             from: `${file.width}×${file.height}`, to: `${padded.width}×${padded.height}`, model: editorModel,
         });
 
-        const paddedAbs = path.join(scratchAbs, `${path.basename(file.path, path.extname(file.path))}-padded.png`);
-        const answerAbs = path.join(scratchAbs, `${path.basename(file.path, path.extname(file.path))}-grown.png`);
+        const stem = path.basename(file.path, path.extname(file.path));
+        const paddedAbs = path.join(scratchAbs, `${stem}-padded.png`);
+        const answerAbs = path.join(scratchAbs, `${stem}-grown.png`);
         try {
             await mkdir(scratchAbs, { recursive: true });
             await writeFile(paddedAbs, padded.bytes);
@@ -314,20 +454,53 @@ export async function extendReferences({
             if (after.width < file.width || after.height < file.height) {
                 throw new Error(`модель вернула ${after.width}×${after.height} вместо ${padded.width}×${padded.height}`);
             }
-            const delta = regionDelta(before, after, file.width, file.height);
-            const accepted = acceptsExtension(delta, { maxMeanDelta, maxChangedShare });
-            if (!accepted.ok) throw new Error(accepted.reason);
+            // The original area and the seam answer two different questions. The area says whether the
+            // model left the picture alone; the seam says whether the picture still sits at 1:1 scale in
+            // the top-left, which is what makes the painted band a continuation of the real content and
+            // not of a rescaled copy of it.
+            const original = regionDelta(before, after, file.width, file.height);
+            const seam = seamDelta(before, after, file.width, file.height, SEAM_ROWS);
+            const verdict = extensionVerdict(original, seam, { maxMeanDelta, maxChangedShare });
+            if (!verdict.ok) throw new Error(verdict.reason);
 
             const to = `${dir ? `${dir.replace(/[\/]+$/, '')}/` : ''}${EXTENDED_DIR}/${path.basename(file.path)}`;
             const targetAbs = path.join(root, ...to.split('/'));
             await mkdir(path.dirname(targetAbs), { recursive: true });
-            await writeFile(targetAbs, answerBytes);
+
+            let finalBytes = answerBytes;
+            if (verdict.mode === 'band') {
+                const fill = bandFillShare(after, file.height);
+                if (fill < MIN_BAND_FILL) {
+                    throw new Error(`доращиваемая полоса осталась пустой (заполнено ${Math.round(fill * 100)}%) — модель ничего не дорисовала`);
+                }
+                // Stitch: the padded canvas carries the original pixel for pixel, and only the band the
+                // model actually painted comes from its answer. This is what keeps every padding, type
+                // size and colour around the growth measurable on the source file's own bytes.
+                const bandAbs = path.join(scratchAbs, `${stem}-band.png`);
+                const mergedAbs = path.join(scratchAbs, `${stem}-merged.png`);
+                const bandWidth = Math.min(file.width, after.width);
+                const bandHeight = Math.min(padded.height, after.height) - file.height;
+                await rasterCrop({
+                    input: answerAbs, output: bandAbs, x: 0, y: file.height,
+                    width: bandWidth, height: bandHeight, cwd: root, signal, engine,
+                });
+                await rasterPatch({
+                    input: paddedAbs, patch: bandAbs, output: mergedAbs,
+                    x: 0, y: file.height, width: bandWidth, height: bandHeight, cwd: root, signal, engine,
+                });
+                finalBytes = await readFile(mergedAbs);
+                await unlink(bandAbs).catch(() => {});
+                await unlink(mergedAbs).catch(() => {});
+            }
+            await writeFile(targetAbs, finalBytes);
             extended.push({
                 from: file.path, to, edge: edge || 'bottom', band,
                 prompt: plan.prompt, assessment: plan.assessment ?? '',
-                meanDelta: Number(delta.meanDelta.toFixed(3)),
+                mode: verdict.mode,
+                meanDelta: Number(original.meanDelta.toFixed(3)),
+                seamDelta: Number(seam.meanDelta.toFixed(3)),
             });
-            notify({ type: 'decompose.extend.done', file: file.path, to, band });
+            notify({ type: 'decompose.extend.file.done', file: file.path, to, band, mode: verdict.mode });
         } catch (error) {
             if (error?.name === 'AbortError') throw error;
             warnings.push(`${file.path}: расширение отклонено (${errorMessage(error)}) — замеры пойдут по исходному кадру.`);

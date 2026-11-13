@@ -477,9 +477,14 @@ export const defaults = Object.freeze({
          * frame ends inside real content. The 1024×768 mock-up is the usual case — the keyboard loses its
          * bottom row, the last list row is cut through the middle — and every later role then measures a
          * screen that never existed. The `extender` role says whether anything real is clipped and writes
-         * the instruction for the grown band itself; the harness pads the canvas locally, asks the editor
-         * for the larger frame explicitly, and accepts the answer only when the original area of it is
-         * still the original, measured pixel by pixel. Grown copies land in
+          * the instruction for the grown band itself; the harness pads the canvas locally, asks the editor
+          * for the larger frame explicitly, and judges the answer by its seam. A generative editor never
+          * returns the source bytes untouched, so the check is whether the picture is still at 1:1 scale
+          * in the top-left: when the last rows of the original area match the source, only the grown band
+          * is taken from the answer and the original area is stitched back from the source file, so
+          * everything a later role measures is the source's own byte. When the seam moved the frame was
+          * resampled and the answer is refused. Grown copies land in
+
          * `.tmp/<id>/extended/` and replace the reference for the rest of the run; the input file is
          * never rewritten, and a rejected answer leaves nothing behind.
          * off = never; auto = only a picture whose frame the editor model cannot serve as it stands;
@@ -492,17 +497,24 @@ export const defaults = Object.freeze({
          * role looks at each reference and, when the screen was photographed, scanned or rotated, places
          * its four corners and runs `correct_perspective` on them. This role owns every distort and
          * perspective operation in the run — the decomposer no longer touches geometry, because naming
-         * corners and naming screens in one pass is how a tilt survives a "correction". The projection
-         * itself stays deterministic: the corners are snapped onto the boundaries measured in the pixels
-         * and the file is warped exactly once. The harness then re-measures the tilt in the file the role
-         * produced and keeps the original unless the copy came out flatter. Corrected copies land in
-         * `.tmp/<id>/rectified/` and replace the reference for the decomposer, the measurer and the layer
-         * split. off = never; auto = every attached reference (the role answers "keep" for a flat export,
-         * which is the common case); always = the same, and the count cap is ignored.
-         */
-        rectify: 'auto',                // off | auto | always
-        rectifyMaxFiles: 4,             // references one decomposition may send to the rectifier
-        rectifyMaxTurns: 6,             // tool turns the rectifier may spend on one reference
+          * corners and naming screens in one pass is how a tilt survives a "correction". The projection
+          * itself stays deterministic: the corners are snapped onto the boundaries measured in the pixels
+          * and the file is warped exactly once. The projection is also the cut — the tool maps the quad
+          * onto a rectangle of that quad's own size — so a reference carrying several screens (a
+          * marketing collage, an artboard with three phones) is separated here: one call per screen, and
+          * every screen that comes out level becomes a reference of its own in place of the collage.
+          * Nothing after this stage can measure a screen out of a collage, because a box, a padding and a
+          * font size would be read across neighbouring content. The harness re-measures the tilt in each
+          * file the role produced and keeps the original unless the copy came out flatter. Corrected
+          * copies land in `.tmp/<id>/rectified/` and replace the reference for the decomposer, the
+          * measurer and the layer split. off = never; auto = every attached reference (the role answers
+          * "keep" for a flat export, which is the common case); always = the same, and the count cap is
+          * ignored.
+          */
+         rectify: 'auto',                // off | auto | always
+         rectifyMaxFiles: 4,             // references one decomposition may send to the rectifier
+         rectifyMaxTurns: 10,            // tool turns the rectifier may spend on one reference (one cut-and-level per screen)
+
         /**
          * Phase 1.5 inside the decompose stage: after the projections (phase 1 — `correct_perspective`
          * and the crops have put every pixel where it belongs) and before the layer split (phase 2,
@@ -518,10 +530,13 @@ export const defaults = Object.freeze({
          * `.tmp/<id>/decomposition/restored/`; the sub-reference itself is never overwritten, and a
          * repair the verification role calls worse than the original is dropped. Both phase 2 and the
          * measurer then read the repaired file.
-         * off = never; auto = only the sub-references a transform produced (`restored`,
-         * `regenerated`, `repaired`) — a plain crop of a flat export has nothing to recover;
-         * always = every sub-reference. Needs the images API; without it the phase is skipped.
-         */
+          * off = never; auto = every sub-reference the decomposer produced — a plain crop is exactly where
+          * a neighbour's strip, a clipped keyboard or a shadow shows up, and only the role can tell that
+          * from a clean screen; a file this phase already repaired is left alone, so one screen is never
+          * ground down by a second pass. always = every sub-reference, repaired ones included. Needs the
+          * images API; without it the phase is skipped.
+          */
+
         restore: 'auto',                // off | auto | always
         restoreMaxFiles: 6,             // sub-references one decomposition may send to the restorer
         restoreMaxPatches: 3,           // repair regions accepted per sub-reference, in the order reported

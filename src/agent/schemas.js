@@ -229,35 +229,46 @@ const quadCorner = object({
 });
 
 /**
- * The projection verdict for one reference, produced by the `rectifier` role (phase 1).
+ * The geometry verdict for one reference, produced by the `rectifier` role (phase 1).
  *
- * The role owns every geometric operation on the reference: it names the four corners and calls the
- * deterministic projection tool itself (`correct_perspective`, which snaps those corners onto the
- * boundaries it measures in the pixels and warps exactly once). That split is the point: naming a
- * screen and its corners is something a model does well, computing a homography is something it does
- * badly, and the pixel pass is exact at snapping yet cannot tell a screen from a bezel. The harness
- * does not trust the claim — it re-measures the tilt in the file the role produced and keeps the
- * original unless the copy came back flatter.
+ * The role owns every geometric operation on the reference: it names the four corners of each screen
+ * and calls the deterministic projection tool itself (`correct_perspective`, which snaps those corners
+ * onto the boundaries it measures in the pixels and warps exactly once). That split is the point:
+ * naming a screen and its corners is something a model does well, computing a homography is something
+ * it does badly, and the pixel pass is exact at snapping yet cannot tell a screen from a bezel.
+ *
+ * The projection is also the cut: the tool maps the quad onto a rectangle of the quad's own measured
+ * size, so one call around one screen inside a collage returns that screen, flat, as its own file.
+ * A reference that carries several screens therefore produces several entries in `screens`, and the
+ * harness keeps each one that came out level. The harness does not trust the claim — it re-measures
+ * the tilt in every file the role produced and keeps the original unless the copy came back flatter.
  */
 export const RECTIFY_SCHEMA = object({
     verdict: {
         type: 'string', enum: ['keep', 'rectified', 'unresolved'],
-        description: 'keep when the screen content is already a flat front-facing rectangle and you wrote no file; rectified when you produced a corrected file and named it in output; unresolved when the picture is distorted but a corner could not be placed — say what is missing.',
+        description: 'keep when the picture is already one flat front-facing screen and you wrote no file; rectified when you produced at least one file and named every one of them in screens; unresolved when the picture is distorted or cut up but a corner could not be placed — say what is missing.',
     },
-    assessment: { ...string, description: 'What the picture is (export or photograph of a screen) and how the screen is tilted. Say "flat export, no projection needed" when keeping.' },
-    output: {
-        ...string,
-        description: 'The path of the file correct_perspective produced, exactly as the tool reported it, or an empty string when the verdict is not rectified.',
-    },
-    quad: {
-        ...object({
-            tl: { ...quadCorner, description: 'The corner nearest the top-left of the screen as a viewer reads it.' },
-            tr: { ...quadCorner, description: 'The corner nearest the top-right of the screen as a viewer reads it.' },
-            br: { ...quadCorner, description: 'The corner nearest the bottom-right of the screen as a viewer reads it.' },
-            bl: { ...quadCorner, description: 'The corner nearest the bottom-left of the screen as a viewer reads it.' },
+    assessment: { ...string, description: 'What the picture is (export or photograph of a screen, a collage of several) and how each screen sits in it. Say "flat export, no projection needed" when keeping.' },
+    screens: {
+        type: 'array',
+        maxItems: 8,
+        description: 'One entry per file you produced — for a collage, one entry per screen you cut out and levelled. Empty when the verdict is keep or unresolved.',
+        items: object({
+            label: { ...string, description: 'What this screen is, in two or three words, from what is on it (e.g. "transfer screen"). Used only to name the file when the tool left the naming to you.' },
+            output: {
+                ...string,
+                description: 'The path of the file correct_perspective produced, exactly as the tool reported it.',
+            },
+            quad: {
+                ...object({
+                    tl: { ...quadCorner, description: 'The corner nearest the top-left of the screen as a viewer reads it.' },
+                    tr: { ...quadCorner, description: 'The corner nearest the top-right of the screen as a viewer reads it.' },
+                    br: { ...quadCorner, description: 'The corner nearest the bottom-right of the screen as a viewer reads it.' },
+                    bl: { ...quadCorner, description: 'The corner nearest the bottom-left of the screen as a viewer reads it.' },
+                }),
+                description: 'The four corners you passed to correct_perspective for THIS screen, in the pixel coordinates of the original image. Corners of the interface itself — not the device bezel, not the desk behind it.',
+            },
         }),
-        type: ['object', 'null'],
-        description: 'The four corners you passed to correct_perspective, in the pixel coordinates of the original image, or null when the verdict is keep or unresolved. Corners of the interface itself — not the device bezel, not the desk behind it.',
     },
 });
 

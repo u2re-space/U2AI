@@ -70,8 +70,11 @@ export function canRestore(config, tools = null) {
 }
 
 /**
- * The sub-references worth looking at. `auto` reads only the files a transform produced — a plain
- * crop of a flat export carries nothing a model should add — while `always` reads every one.
+ * The sub-references worth looking at. `auto` reads every sub-reference the decomposer produced —
+ * a crop of a flat export can still carry a neighbour's strip, a clipped keyboard or a shadow, and
+ * only the role can tell that from a clean cut — while `always` also reads files that were already
+ * through a transform pass (`restored`, `repaired`, `regenerated`), which `auto` leaves alone so a
+ * second pass cannot grind the same file down.
  * @param {object[]} files collected sub-references
  * @param {'off'|'auto'|'always'} mode
  * @param {number} maxFiles
@@ -80,7 +83,8 @@ export function canRestore(config, tools = null) {
  * @ai.hint pure
  */
 export function restorableFiles(files = [], mode = 'auto', maxFiles = 6) {
-    const pool = mode === 'always' ? files : files.filter((file) => TRANSFORMED_KINDS.has(file.kind));
+    if (mode === 'off') return [];
+    const pool = mode === 'always' ? files : files.filter((file) => !TRANSFORMED_KINDS.has(file.kind));
     return pool.slice(0, Math.max(1, maxFiles));
 }
 
@@ -157,8 +161,8 @@ async function verifyRepair({ roles, before, after, cwd, maxBytes, model, effort
 export async function restoreSubReferences({
     root, files = [], roles, client, config, signal, notify = () => {},
     originals = new Map(), maxPatches = 3, verify = true,
-    model: modelOverride = null, effort = null, maxBytes = Number.MAX_SAFE_INTEGER,
-    outDir = null,
+    model: modelOverride = null, effort = null, editorModel: editorOverride = null,
+    maxBytes = Number.MAX_SAFE_INTEGER, outDir = null,
 }) {
     const warnings = [];
     const replaced = [];
@@ -168,7 +172,16 @@ export async function restoreSubReferences({
         return { replaced, kept, warnings: ['Восстановление пропущено: images API недоступен.'], patchesProposed };
     }
     const engine = config.image?.rasterEngine ?? 'auto';
-    const editorModel = modelOverride || imageModelFor(config, { hasImage: true });
+    // `modelOverride` is the vision model the restorer role uses to inspect the picture;
+    // `editorOverride` is the image-editing model that actually redraws the fragment. They are
+    // never the same: a chat/vision model (e.g. kimi-k3.1-pro) has no Images API entry, so
+    // passing the role model to images.edit always returns "No model found".
+    const editorModel = editorOverride || imageModelFor(config, { hasImage: true });
+    // A run whose image transport is the Responses tool has no Images API model to name here; without
+    // this guard every fragment fails with the same "No model found".
+    if (!editorModel) {
+        return { replaced, kept, warnings: ['Восстановление пропущено: модель для Images API не определена (imageModel не задан, транспорт — Responses tool).'], patchesProposed };
+    }
     const scratch = path.posix.join(outDir ?? '.tmp', `restore-${Date.now()}`);
     const scratchAbs = path.join(root, ...scratch.split('/'));
 

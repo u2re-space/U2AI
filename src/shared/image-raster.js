@@ -890,9 +890,12 @@ export async function rasterPatch({
     if (resized) frame = await scaleRgba(frame, box.width, box.height, engine);
 
     // Copy, not blit: the repair replaces what was there, and an alpha the model returned must not
-    // let the damaged pixel show through underneath.
+    // let the damaged pixel show through underneath. The source row is counted from the top of the
+    // patch — `box.y` belongs to the base frame only. Reading the patch at `box.y + row` offsets the
+    // copy by the box position and runs past a patch that is shorter than the base, so every stitch
+    // below row 0 used to fail with a buffer-range error.
     for (let row = 0; row < box.height; row++) {
-        const from = ((box.y + row) * box.width) * 4;
+        const from = (row * box.width) * 4;
         frame.data.copy(base.data, ((box.y + row) * base.width + box.x) * 4, from, from + box.width * 4);
     }
 

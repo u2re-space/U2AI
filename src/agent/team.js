@@ -58,6 +58,7 @@ import { canRunAdvanced, advancedDecompose, shouldUseReasoningPro } from './adva
 import { canExtend, extendableFiles, extendReferences } from './extend.js';
 import { canRectify, rectifyReferences, rectifyTargets } from './rectify.js';
 import { rasterInfo } from '../shared/image-raster.js';
+import { imageModelFor } from '../shared/images.js';
 import { applyRepairs, canRestore, restorableFiles, restoreSubReferences } from './restore.js';
 import { createPipeline } from './pipeline.js';
 import { resolveInside } from './paths.js';
@@ -1226,15 +1227,32 @@ export async function runTeam({
                     // meaning the same screen.
                     const tierForPhase = plan.complexity === 'trivial' || plan.complexity === 'complex' ? plan.complexity : 'normal';
                     const rasterEngine = config.image?.rasterEngine ?? 'auto';
-                    const swapReference = async (from, to) => {
+                    // Puts the files a phase produced in place of the reference they came from. One
+                    // source can produce several pictures — a collage is cut one quad at a time — so
+                    // this splices a list in, and the attachment list grows with it: the two stay
+                    // index-aligned, which is what lets a later caption "Attached image N" name the
+                    // right screen. The originals are never touched, only the working copy of each
+                    // list.
+                    const swapReferences = async (from, tos) => {
+                        const list = (Array.isArray(tos) ? tos : [tos]).filter(Boolean);
                         const at = referenceFiles.indexOf(from);
-                        if (at < 0) return false;
-                        referenceFiles[at] = to;
-                        if (at < referenceParts.length) {
-                            const reloaded = await loadImageAttachment(to, { cwd: root, maxBytes: config.limits.maxImageBytes }).catch(() => null);
-                            if (reloaded?.part) referenceParts[at] = reloaded.part;
+                        if (at < 0 || !list.length) return false;
+                        // A picture that cannot be read back as an attachment cannot be announced as
+                        // one either: an entry in the parts list is sent to the model as an image, so a
+                        // path that has no part behind it is dropped from the paths along with it.
+                        const attached = [];
+                        const dropped = [];
+                        for (const to of list) {
+                            const reloaded = await loadImageAttachment(to, { cwd: root, maxBytes: config.limits.maxImageBytes })
+                                .then((attachment) => attachment?.part ?? null)
+                                .catch(() => null);
+                            if (reloaded) attached.push({ to, part: reloaded });
+                            else dropped.push(to);
                         }
-                        return true;
+                        if (!attached.length) return false;
+                        referenceFiles.splice(at, 1, ...attached.map((item) => item.to));
+                        referenceParts.splice(at, 1, ...attached.map((item) => item.part));
+                        return { dropped };
                     };
                     const announceReferences = (changed) => {
                         if (!changed.length) return;
@@ -1259,27 +1277,38 @@ export async function runTeam({
                             const extenderModel = paced?.ready
                                 ? clampModel(extenderRole.model, paceSettings.models, paced.ceilingIndex, Boolean(pins.extender?.model))
                                 : extenderRole.model;
+                            // The role that looks at the picture and the model that draws the band are two
+                            // different models: the role is a vision chat model with no Images API entry,
+                            // and the frame the picture has to sit in is the *editor's* floor, not the
+                            // role's. Passing one where the other belongs is what made every extension
+                            // fail with "No model found".
+                            const editorModel = imageModelFor(config, { hasImage: true });
                             const measured = [];
                             for (const rel of referenceFiles) {
                                 const frame = await rasterInfo(rel, { cwd: root, engine: rasterEngine }).catch(() => null);
                                 if (frame?.width && frame?.height) measured.push({ path: rel, width: frame.width, height: frame.height });
                             }
-                            const candidates = extendableFiles(measured, extendMode, extenderModel, config.agent.extendMaxFiles ?? 4);
+                            const candidates = extendableFiles(measured, extendMode, editorModel, config.agent.extendMaxFiles ?? 4);
                             if (candidates.length) {
                                 notify({
                                     type: 'decompose.extend', role: 'extender', model: extenderModel,
+                                    editor: editorModel,
                                     candidates: candidates.length,
                                     files: candidates.map((item) => `${item.path} ${item.width}×${item.height} → ${item.target.width}×${item.target.height}`),
                                 });
                                 try {
                                     const grown = await extendReferences({
                                         root, files: candidates, roles, client, config, signal, notify,
-                                        model: extenderModel, effort: extenderRole.effort, dir,
+                                        model: extenderModel, effort: extenderRole.effort,
+                                        editorModel, dir,
                                     });
                                     for (const warning of grown.warnings) notify({ type: 'warning', message: warning });
                                     const changed = [];
                                     for (const item of grown.extended) {
-                                        if (await swapReference(item.from, item.to)) changed.push({ from: item.from, to: item.to });
+                                        const swapped = await swapReferences(item.from, [item.to]);
+                                        if (!swapped) continue;
+                                        changed.push({ from: item.from, to: item.to });
+                                        for (const lost of swapped.dropped) notify({ type: 'warning', message: `${lost}: доращенный кадр не читается как изображение — замеры пойдут по исходному.` });
                                     }
                                     announceReferences(changed);
                                     progress.notes ??= [];
@@ -1327,7 +1356,7 @@ export async function runTeam({
                                     const straightened = await rectifyReferences({
                                         root, dir, files: candidates, roles, config, signal, notify,
                                         model: rectifierModel, effort: rectifierRole.effort,
-                                        maxTurns: config.agent.rectifyMaxTurns ?? 6,
+                                        maxTurns: config.agent.rectifyMaxTurns ?? 10,
                                         toolset: createToolset({
                                             ...toolBase, names: rectifierNames, approvalLevel: 'read',
                                             allowWrite: ['correct_perspective', 'crop_image', 'compare_images'],
@@ -1335,9 +1364,21 @@ export async function runTeam({
                                         }),
                                     });
                                     for (const warning of straightened.warnings) notify({ type: 'warning', message: warning });
-                                    const changed = [];
+                                    // Grouped by source: a collage comes back as several screens, and
+                                    // all of them take the place of the one file they were cut from.
+                                    const bySource = new Map();
                                     for (const item of straightened.rectified) {
-                                        if (await swapReference(item.from, item.to)) changed.push({ from: item.from, to: item.to });
+                                        if (!bySource.has(item.from)) bySource.set(item.from, []);
+                                        bySource.get(item.from).push(item.to);
+                                    }
+                                    const changed = [];
+                                    for (const [from, tos] of bySource) {
+                                        const swapped = await swapReferences(from, tos);
+                                        if (!swapped) continue;
+                                        for (const to of tos) {
+                                            if (!swapped.dropped.includes(to)) changed.push({ from, to });
+                                        }
+                                        for (const lost of swapped.dropped) notify({ type: 'warning', message: `${lost}: выпрямленный экран не читается как изображение — он не стал референсом.` });
                                     }
                                     announceReferences(changed);
                                     progress.notes ??= [];
@@ -1390,6 +1431,7 @@ export async function runTeam({
                             `Mode: produce sub-references. Write every image you produce under ${imageDir}/ — that directory is the only place you may write.`,
                             'For each screen either cut it out of the source (crop_image, split_image) or, when the source cannot be cut at all, fall back to edit_image or generate_image with that source as reference.',
                             'The geometry is already settled: every reference listed for you has been through the rectifier, so a picture that still looks skewed was left that way on purpose and is reported, not corrected. You have no perspective tool and must not rotate, deskew or warp anything — cut from what is there, or say in notes that the source is unusable.',
+                            'A reference may already be one screen: the rectifier cuts a collage apart quad by quad, so several entries of the list can be the phones that stood in one picture. Such a file is a screen as it stands — take it whole (or crop only its dead margin) instead of cutting a screen out of it again.',
                             'Check what you wrote: look at the file with view_image and, when a screen was regenerated, compare_images the result against the source region. Keep a screen out rather than ship an image that is not it.',
                             'Name each file by its order and screen, e.g. 01-home.png, 02-checkout.png.',
                             canGenerate ? '' : 'Image generation is unavailable in this run: use local crops and splits only and say so in notes.',
@@ -1454,6 +1496,7 @@ export async function runTeam({
                                             maxPatches: config.agent.restoreMaxPatches ?? 3,
                                             verify: config.agent.restoreVerify !== false,
                                             model: restorerModel, effort: restorerRole.effort,
+                                            editorModel: imageModelFor(config, { hasImage: true }),
                                             maxBytes: config.limits.maxImageBytes,
                                             outDir: dir,
                                         });

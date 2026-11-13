@@ -7,7 +7,8 @@
  *   shared/image-raster, core/attachments, commands/instructions
  * @usedBy agent/team (decompose stage, before the decomposer role)
  * @exports RECTIFIED_DIR, MAX_RESIDUAL_DEG, MIN_IMPROVEMENT_DEG, canRectify, rectifyTargets,
- *   acceptsRectification, validateRectifiedFile, rectifyReferences, swapReferencePaths
+ *   acceptsRectification, producedScreens, validateRectifiedFile, rectifyReferences,
+ *   swapReferencePaths
  * @ai.tags rectification, perspective, decomposition, images
  * @ai.hint io
  *
@@ -18,9 +19,17 @@
  * and verifies the result by measuring the residual tilt. If the residual is not smaller than the
  * source, the rectification is discarded and the original is kept.
  *
+ * The projection is also the cut. The tool maps the quad onto a rectangle of that quad's own size,
+ * so one call around one screen inside a collage returns that screen, flat, as its own file. A
+ * marketing collage with three phones at different angles is therefore separated here: one call per
+ * screen, and every screen that comes out level becomes a reference of its own. Nothing after this
+ * stage can measure a screen out of a collage.
+ *
  * @changed 2026-11-13 First version (phase 1). Distort and perspective operations are now the
  *   exclusive responsibility of the rectifier role; the decomposer only works on already-rectified
  *   references and returns the source untouched when the picture is already flat.
+ * @changed 2026-11-13 Collage splitting: one call per screen, each screen becomes a separate
+ *   reference in place of the collage; `swapReferencePaths` grows the list to accommodate.
  */
 
 import path from 'node:path';
@@ -97,6 +106,31 @@ export function acceptsRectification(
 }
 
 /**
+ * The files the role claims to have produced, as a list.
+ *
+ * The schema asks for `screens[]`, one entry per screen, because a collage returns several files. A
+ * model that answers in the older single-file shape (`output` + `quad` at the top level) is folded
+ * into that list rather than discarded — the work is in the file it wrote, and losing a correct
+ * projection to a shape mismatch would leave the skewed reference in place.
+ * @param {object|null} data the parsed rectifier answer
+ * @returns {Array<{label:string,output:string,quad:object|null}>}
+ * @exports
+ * @ai.hint pure
+ */
+export function producedScreens(data) {
+    const list = (Array.isArray(data?.screens) ? data.screens : [])
+        .map((entry) => ({
+            label: String(entry?.label ?? '').trim(),
+            output: String(entry?.output ?? '').trim(),
+            quad: entry?.quad ?? null,
+        }))
+        .filter((entry) => entry.output);
+    if (list.length) return list;
+    const output = String(data?.output ?? '').trim();
+    return output ? [{ label: '', output, quad: data?.quad ?? null }] : [];
+}
+
+/**
  * Verify that a rectified file is valid: exists, is a file, sits inside the output directory.
  * @param {string} filePath absolute path
  * @param {string} outputDir absolute path
@@ -142,7 +176,9 @@ async function askRectifier({ cwd, roles, file, frame, outDir, toolset, model, e
             `Size: ${frame.width}×${frame.height} pixels. Every coordinate you place belongs to this file.`,
             `Write any corrected file under ${outDir}/ — nowhere else, and never over the reference itself.`,
             '',
-            'Say whether this picture needs a projection, and if it does, place the corners of the screen and project once.',
+            'Say whether this picture needs a projection, and if it does, place the corners of every screen it carries',
+            'and project each one separately: one correct_perspective call per screen cuts that screen out and levels',
+            'it in the same step, because the tool maps your quad onto a rectangle of the quad\'s own size.',
         ].join('\n'),
         parts: [attachment.part],
         instructions: ROLE_INSTRUCTIONS.rectifier,
@@ -234,63 +270,84 @@ export async function rectifyReferences({
             continue;
         }
 
-        const outputRel = String(plan.data.output ?? '').trim().split(path.sep).join('/');
-        if (!outputRel) {
-            warnings.push(`${file.path}: verdict "rectified" без пути к результату — кадр остаётся как есть.`);
-            kept.push({ path: file.path, reason: 'нет выходного пути' });
-            continue;
-        }
-        // The role writes inside `<dir>/rectified/`; anything else is a path it was never given.
-        const outputAbs = path.isAbsolute(outputRel) ? path.resolve(outputRel) : path.join(root, outputRel);
-        const fileValid = await validateRectifiedFile(outputAbs, outputDir);
-        if (!fileValid.ok) {
-            warnings.push(`${file.path}: результат «${outputRel}» не принят — ${fileValid.reason}; кадр остаётся как есть.`);
-            kept.push({ path: file.path, reason: fileValid.reason });
+        // One reference can carry several screens, and the projection cuts as it levels: each entry the
+        // role names is one screen of the collage, produced by its own call. Each is verified on its
+        // own pixels and accepted on its own — a collage where two of three screens came out level is
+        // worth more than the collage itself, and the third screen stays inside the original file the
+        // decomposer still sees.
+        const produced = producedScreens(plan.data);
+        if (!produced.length) {
+            warnings.push(`${file.path}: verdict "rectified" без единого файла в screens — кадр остаётся как есть.`);
+            kept.push({ path: file.path, reason: 'ни одного файла в screens' });
             continue;
         }
 
-        const to = path.relative(root, outputAbs).split(path.sep).join('/');
-        if (to === file.path) {
-            warnings.push(`${file.path}: rectifier вернул путь исходника — исходный файл не перезаписывается, кадр остаётся как есть.`);
-            kept.push({ path: file.path, reason: 'результат совпадает с исходником' });
-            continue;
-        }
-
-        // The only honest check of a projection: the tilt still measurable in the pixels. The role
-        // says it straightened the screen; this says whether the screen came back level.
+        // The tilt of the source is measured once for the whole picture. On a collage it is a mixture of
+        // every screen in it, which is why a produced screen is judged first by its own residual tilt and
+        // the comparison against the source is only the fallback.
         let sourceSkew = null;
-        let resultSkew = null;
         try {
-            [sourceSkew, resultSkew] = await Promise.all([
-                measureResidualSkew(sourceAbs, { maxSide: 900, maxAngleDeg: 15, stepDeg: 0.1 }),
-                measureResidualSkew(outputAbs, { maxSide: 900, maxAngleDeg: 15, stepDeg: 0.1 }),
-            ]);
+            sourceSkew = await measureResidualSkew(sourceAbs, { maxSide: 900, maxAngleDeg: 15, stepDeg: 0.1 });
         } catch (error) {
-            warnings.push(`${file.path}: остаточный наклон не измерен (${errorMessage(error)}) — результат принимается без верификации.`);
+            warnings.push(`${file.path}: наклон источника не измерен (${errorMessage(error)}); результаты принимаются без сравнения с ним.`);
         }
 
-        if (sourceSkew && resultSkew) {
-            const accept = acceptsRectification(sourceSkew, resultSkew, maxResidualDeg, minImprovementDeg);
-            if (!accept.ok) {
-                warnings.push(`${file.path}: выпрямление отклонено (${accept.reason}); замеры пойдут по исходному кадру.`);
-                kept.push({ path: file.path, reason: accept.reason });
-                await unlink(outputAbs).catch(() => {});
+        const acceptedScreens = [];
+        for (const entry of produced) {
+            const outputRel = String(entry?.output ?? '').trim().split(path.sep).join('/');
+            if (!outputRel) {
+                warnings.push(`${file.path}: экран «${String(entry?.label ?? '').trim() || '(без имени)'}» без пути — не принят.`);
                 continue;
             }
+            // The role writes inside `<dir>/rectified/`; anything else is a path it was never given.
+            const outputAbs = path.isAbsolute(outputRel) ? path.resolve(outputRel) : path.join(root, outputRel);
+            const fileValid = await validateRectifiedFile(outputAbs, outputDir);
+            if (!fileValid.ok) {
+                warnings.push(`${file.path}: результат «${outputRel}» не принят — ${fileValid.reason}.`);
+                continue;
+            }
+            const to = path.relative(root, outputAbs).split(path.sep).join('/');
+            if (to === file.path) {
+                warnings.push(`${file.path}: rectifier вернул путь исходника — исходный файл не перезаписывается.`);
+                continue;
+            }
+
+            // The only honest check of a projection: the tilt still measurable in the pixels. The role
+            // says it levelled the screen; this says whether the screen came back level.
+            let resultSkew = null;
+            try {
+                resultSkew = await measureResidualSkew(outputAbs, { maxSide: 900, maxAngleDeg: 15, stepDeg: 0.1 });
+            } catch (error) {
+                warnings.push(`${to}: остаточный наклон не измерен (${errorMessage(error)}) — принимается без верификации.`);
+            }
+            if (resultSkew && sourceSkew) {
+                const accept = acceptsRectification(sourceSkew, resultSkew, maxResidualDeg, minImprovementDeg);
+                if (!accept.ok) {
+                    warnings.push(`${to}: экран не принят (${accept.reason}).`);
+                    await unlink(outputAbs).catch(() => {});
+                    continue;
+                }
+            }
+
+            notify({
+                type: 'decompose.rectify.file', file: to, from: file.path,
+                screen: String(entry?.label ?? '').trim(),
+                before: sourceSkew?.angleDeg ?? null, after: resultSkew?.angleDeg ?? null,
+            });
+            acceptedScreens.push({
+                from: file.path, to,
+                screen: String(entry?.label ?? '').trim(),
+                before: sourceSkew?.angleDeg ?? null, after: resultSkew?.angleDeg ?? null,
+                confidence: resultSkew?.confidence ?? null,
+                assessment: plan.data.assessment ?? '',
+            });
         }
 
-        notify({
-            type: 'decompose.rectify', file: file.path, to,
-            from: `${frame.width}×${frame.height}`,
-            before: sourceSkew?.angleDeg ?? null, after: resultSkew?.angleDeg ?? null,
-        });
-        rectified.push({
-            from: file.path, to,
-            before: sourceSkew?.angleDeg ?? null, after: resultSkew?.angleDeg ?? null,
-            confidence: resultSkew?.confidence ?? null,
-            assessment: plan.data.assessment ?? '',
-        });
-        notify({ type: 'decompose.rectify.done', file: file.path, to });
+        if (acceptedScreens.length) {
+            rectified.push(...acceptedScreens);
+        } else {
+            kept.push({ path: file.path, reason: 'ни один экран не прошёл проверку наклона' });
+        }
     }
 
     return { rectified, kept, warnings };
@@ -300,8 +357,10 @@ export async function rectifyReferences({
  * Re-point a list of reference paths at the rectified copies.
  * Pure, and pointed at the path list rather than at a decomposition: the phase runs before the
  * decomposer has named anything, so what has to change is the set of references every later role
- * sees. The index is kept — the attached image parts are matched to paths by position — so a
- * replaced path arrives as the same "Attached image N" the task captioned.
+ * sees. One source can produce several screens — a collage is cut one quad at a time — so an entry is
+ * replaced by the whole list of files produced from it, in place, and the list grows. That is safe
+ * because the attachment parts are re-generated from this list by position, and every caption
+ * "Attached image N" is computed from the same order.
  * @param {string[]} paths reference paths in attachment order
  * @param {Array<{from:string,to:string}>} rectified results of `rectifyReferences`
  * @returns {{ paths: string[], swapped: Array<{from:string,to:string}> }}
@@ -310,16 +369,28 @@ export async function rectifyReferences({
  */
 export function swapReferencePaths(paths = [], rectified = []) {
     if (!rectified.length) return { paths: [...paths], swapped: [] };
-    const byPath = new Map(rectified.map((item) => [
-        String(item.from ?? '').trim().split(path.sep).join('/'), item.to,
-    ]));
+    const byPath = new Map();
+    for (const item of rectified) {
+        const from = String(item?.from ?? '').trim().split(path.sep).join('/');
+        const to = String(item?.to ?? '').trim().split(path.sep).join('/');
+        if (!from || !to) continue;
+        if (!byPath.has(from)) byPath.set(from, []);
+        const list = byPath.get(from);
+        if (!list.includes(to)) list.push(to);
+    }
     const swapped = [];
-    const next = paths.map((item) => {
+    const next = [];
+    for (const item of paths) {
         const rel = String(item ?? '').trim().split(path.sep).join('/');
         const to = byPath.get(rel);
-        if (!to) return item;
-        swapped.push({ from: item, to });
-        return to;
-    });
+        if (!to) {
+            next.push(item);
+            continue;
+        }
+        for (const produced of to) {
+            next.push(produced);
+            swapped.push({ from: item, to: produced });
+        }
+    }
     return { paths: next, swapped };
 }

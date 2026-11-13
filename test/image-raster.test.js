@@ -16,6 +16,7 @@ import {
     rasterInfo,
     rasterIsOpaque,
     rasterPadImageBytes,
+    rasterPatch,
     rasterRemoveImagePadding,
     rasterSplit,
     rasterTrim,
@@ -39,6 +40,33 @@ async function pixel(file, x, y) {
     const at = (y * info.width + x) * 4;
     return [...raw.subarray(at, at + 4)];
 }
+
+test('a fragment is stitched back at the coordinates it was cut from', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'ai-raster-patch-'));
+    try {
+        await writeFile(path.join(root, 'base.png'), await png(20, 20, (ctx) => {
+            ctx.fillStyle = '#0000ff'; ctx.fillRect(0, 0, 20, 20);
+        }));
+        await writeFile(path.join(root, 'patch.png'), await png(8, 8, (ctx) => {
+            ctx.fillStyle = '#00ff00'; ctx.fillRect(0, 0, 8, 8);
+        }));
+        // A box below the first row: reading the patch at `box.y + row` used to copy from past its
+        // buffer, so every repair the restorer names below row 0 died on a range error.
+        const result = await rasterPatch({
+            input: 'base.png', patch: 'patch.png', output: 'stitched.png',
+            x: 4, y: 12, width: 8, height: 8, cwd: root,
+        });
+        assert.deepEqual(result.box, { x: 4, y: 12, width: 8, height: 8 });
+        assert.equal(result.resized, false);
+        const stitched = path.join(root, 'stitched.png');
+        assert.deepEqual(await pixel(stitched, 6, 14), [0, 255, 0, 255], 'the fragment lands in its own box');
+        assert.deepEqual(await pixel(stitched, 6, 4), [0, 0, 255, 255], 'every pixel outside the box is the source');
+        assert.deepEqual(await pixel(stitched, 15, 14), [0, 0, 255, 255], 'and so is the row beside it');
+    } finally {
+        await rm(root, { recursive: true, force: true });
+    }
+});
+
 
 test('local image engine is available and geometry keeps aspect ratio', async () => {
     assert.ok(['sharp', 'canvas'].includes(await rasterEngine()));

@@ -17,10 +17,11 @@ import path from 'node:path';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 
 import {
-    acceptsExtension, canExtend, extendTarget, extendableFiles, regionDelta, extenderPrompt, EXTENDER_FRAME,
+    acceptsExtension, bandFillShare, canExtend, extendReferences, extendTarget, extendableFiles,
+    extensionVerdict, regionDelta, seamDelta, extenderPrompt, EXTENDER_FRAME,
 } from '../src/agent/extend.js';
 import {
-    acceptsRectification, canRectify, rectifyReferences, rectifyTargets, swapReferencePaths,
+    acceptsRectification, canRectify, producedScreens, rectifyReferences, rectifyTargets, swapReferencePaths,
     validateRectifiedFile, RECTIFIED_DIR,
 } from '../src/agent/rectify.js';
 import { applyRepairs, restorableFiles } from '../src/agent/restore.js';
@@ -44,6 +45,37 @@ const rgba = (width, height, fill) => {
         data[i * 4 + 3] = 255;
     }
     return { width, height, data };
+};
+
+/**
+ * A PNG built from raw RGBA rows. `rows` is a list of [r,g,b,a] repeated across the width, so a
+ * picture whose top half is repainted and whose bottom half is the source is one array.
+ */
+const pngFromRows = async (width, height, rows) => {
+    const sharp = (await import('sharp')).default;
+    const data = Buffer.alloc(width * height * 4);
+    for (let y = 0; y < height; y++) {
+        const fill = rows[Math.min(y, rows.length - 1)];
+        for (let x = 0; x < width; x++) {
+            const at = (y * width + x) * 4;
+            data[at] = fill[0];
+            data[at + 1] = fill[1];
+            data[at + 2] = fill[2];
+            data[at + 3] = fill[3] ?? 255;
+        }
+    }
+    return sharp(data, { raw: { width, height, channels: 4 } }).png().toBuffer();
+};
+
+const decodeRows = async (bytes) => {
+    const sharp = (await import('sharp')).default;
+    const { data, info } = await sharp(bytes).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    return { width: info.width, height: info.height, data };
+};
+
+const pixelAt = (frame, x, y) => {
+    const at = (y * frame.width + x) * 4;
+    return [frame.data[at], frame.data[at + 1], frame.data[at + 2], frame.data[at + 3]];
 };
 
 // ---------------------------------------------------------------------------
@@ -89,6 +121,51 @@ test('extend: an answer that redrew the picture is not an extension', () => {
     assert.equal(acceptsExtension({ meanDelta: Number.NaN, changedShare: 0 }).ok, false);
 });
 
+test('extend: the seam is what tells a painted band from a resampled frame', () => {
+    // The real failure this pays for: an editor that answers a 1024×768 → 1024×1024 request by
+    // repainting the whole frame. The original area drifts by tens of levels, so the all-or-nothing
+    // check refuses it — and the honest outpaint next to it would be refused for the same reason,
+    // because a diffusion pass never returns the source bytes untouched.
+    const source = rgba(8, 12, [10, 20, 30]);
+    const repaintedTop = rgba(8, 12, [10, 20, 30]);
+    for (let y = 0; y < 4; y++) {
+        for (let x = 0; x < 8; x++) {
+            const at = (y * 8 + x) * 4;
+            repaintedTop.data[at] = 200;
+            repaintedTop.data[at + 1] = 0;
+            repaintedTop.data[at + 2] = 0;
+        }
+    }
+    // The answer carries the source in its top-left at 1:1 scale and adds rows below; only the rows
+    // far from the seam differ.
+    const whole = regionDelta(source, repaintedTop, 8, 12);
+    const seam = seamDelta(source, repaintedTop, 8, 12, 8);
+    assert.ok(whole.meanDelta > 3, 'the original area did drift');
+    assert.equal(seam.meanDelta, 0, 'the last rows of the original area are exactly where they were');
+
+    const verdict = extensionVerdict(whole, seam);
+    assert.equal(verdict.ok, true);
+    assert.equal(verdict.mode, 'band', 'the band is a continuation; the original is taken from the source');
+
+    // A frame whose seam moved too is a resample: the band below it continues a scaled copy, and
+    // stitching it to the untouched original would put two scales in one picture.
+    const resampled = extensionVerdict({ meanDelta: 27, changedShare: 0.9 }, { meanDelta: 22, changedShare: 0.8 });
+    assert.equal(resampled.ok, false);
+    assert.match(resampled.reason, /перерисован/);
+
+    // Untouched source is still the best answer: the model's own frame is shipped as it is.
+    const clean = regionDelta(source, source, 8, 12);
+    assert.deepEqual(extensionVerdict(clean, clean), { ok: true, mode: 'whole', reason: 'оригинал не изменён' });
+});
+
+test('extend: a band the model left empty is not a growth', () => {
+    const answer = { width: 4, height: 6, data: Buffer.alloc(4 * 6 * 4) };
+    // Rows 4 and 5 are the grown band; here they are still the transparent padding.
+    assert.equal(bandFillShare(answer, 4), 0);
+    for (let i = 4 * 4 * 4; i < answer.data.length; i += 4) answer.data[i + 3] = 255;
+    assert.equal(bandFillShare(answer, 4), 1);
+});
+
 test('extend: the role writes the wording, the harness adds the contract', () => {
     const text = extenderPrompt('Continue the keyboard rows in the same grey.');
     assert.match(text, /^Continue the keyboard rows in the same grey\.\n\n/);
@@ -99,6 +176,90 @@ test('extend: the phase needs an editor model and the image tools', () => {
     assert.equal(canExtend({ tools: { images: false } }), false);
     assert.equal(canExtend({ tools: { images: true } }), false, 'no model, nobody to ask');
     assert.equal(canExtend({ tools: { images: true }, imageModel: 'vendor/editor' }), true);
+});
+
+test('extend: a repainted frame keeps its original bytes and takes only the painted band', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-extend-band-'));
+    try {
+        // A frame on the 16-pixel grid the padding rounds to, so the canvas grows exactly as asked.
+        await writeFile(path.join(dir, 'mockup.png'), await pngFromRows(32, 16, [[10, 20, 30]]));
+        // What the log called "среднее расхождение 27 уровня": the editor kept the source at 1:1 in
+        // the top-left, repainted some of its rows anyway, and painted the band below. The old
+        // all-or-nothing check threw this away; the seam says the band is a real continuation.
+        const answerRows = [];
+        for (let y = 0; y < 32; y++) {
+            answerRows.push(y < 4 ? [200, 0, 0] : y < 16 ? [10, 20, 30] : [0, 128, 255]);
+        }
+        const answer = (await pngFromRows(32, 32, answerRows)).toString('base64');
+        const roles = {
+            async run() {
+                return {
+                    status: 'completed',
+                    error: null,
+                    text: '',
+                    data: {
+                        verdict: 'extend', edge: 'bottom', assessment: 'последняя строка списка обрезана',
+                        prompt: 'Continue the list rows in the same grey with the same separators.',
+                    },
+                };
+            },
+        };
+        const grown = await extendReferences({
+            root: dir,
+            files: [{ path: 'mockup.png', width: 32, height: 16, target: { width: 32, height: 32 } }],
+            roles,
+            client: { images: { async edit() { return [answer]; } } },
+            config: defaults,
+            editorModel: 'vendor/editor',
+            dir: '.tmp/w1',
+        });
+        assert.equal(grown.extended.length, 1, grown.warnings.join('; '));
+        assert.equal(grown.extended[0].mode, 'band');
+        assert.equal(grown.extended[0].to, '.tmp/w1/extended/mockup.png');
+
+        const written = await readFile(path.join(dir, '.tmp', 'w1', 'extended', 'mockup.png'));
+        const frame = await decodeRows(written);
+        assert.deepEqual([frame.width, frame.height], [32, 32]);
+        assert.deepEqual(pixelAt(frame, 6, 1), [10, 20, 30, 255], 'a repainted row is taken from the source, not the answer');
+        assert.deepEqual(pixelAt(frame, 6, 15), [10, 20, 30, 255], 'the row at the seam is the source row');
+        assert.deepEqual(pixelAt(frame, 6, 16), [0, 128, 255, 255], 'the grown band is what the model painted');
+    } finally {
+        await rm(dir, { recursive: true, force: true });
+    }
+});
+
+test('extend: a frame whose seam moved is refused rather than stitched', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-extend-seam-'));
+    try {
+        await writeFile(path.join(dir, 'mockup.png'), await pngFromRows(32, 16, [[10, 20, 30]]));
+        // The whole picture — seam included — is a different colour: a resample, whose band continues
+        // a scaled copy and would put two scales in one file.
+        const answer = (await pngFromRows(32, 32, [[200, 0, 0]])).toString('base64');
+        const roles = {
+            async run() {
+                return {
+                    status: 'completed', error: null, text: '',
+                    data: { verdict: 'extend', edge: 'bottom', assessment: '', prompt: 'Continue the list rows in the same grey.' },
+                };
+            },
+        };
+        const result = await extendReferences({
+            root: dir,
+            files: [{ path: 'mockup.png', width: 32, height: 16, target: { width: 32, height: 32 } }],
+            roles,
+            client: { images: { async edit() { return [answer]; } } },
+            config: defaults,
+            editorModel: 'vendor/editor',
+            dir: '.tmp/w1',
+        });
+        assert.equal(result.extended.length, 0);
+        assert.match(result.warnings.join('\n'), /перерисован/);
+        const { stat } = await import('node:fs/promises');
+        assert.equal(await stat(path.join(dir, '.tmp', 'w1', 'extended', 'mockup.png')).catch(() => null), null,
+            'a refused answer leaves no file behind');
+    } finally {
+        await rm(dir, { recursive: true, force: true });
+    }
 });
 
 // ---------------------------------------------------------------------------
@@ -158,6 +319,19 @@ test('rectify: a produced file outside the rectified directory is not the result
     }
 });
 
+test('rectify: the file list is read from screens, and an older single-file answer still counts', () => {
+    assert.deepEqual(producedScreens({ screens: [{ label: 'home', output: 'a.png', quad: null }] }),
+        [{ label: 'home', output: 'a.png', quad: null }]);
+    // Entries without a path are claims, not files.
+    assert.deepEqual(producedScreens({ screens: [{ label: 'home', output: '  ' }] }), []);
+    assert.deepEqual(producedScreens({ verdict: 'keep', screens: [] }), []);
+    assert.deepEqual(producedScreens(null), []);
+    // A model that answers in the single-file shape is folded in rather than discarded: the projection
+    // it made is real work, and dropping it would leave the skewed reference in place.
+    assert.deepEqual(producedScreens({ verdict: 'rectified', output: 'b.png', quad: { tl: 1 } }),
+        [{ label: '', output: 'b.png', quad: { tl: 1 } }]);
+});
+
 /** A `roles` stub: one rectifier answer, no model behind it. */
 const rectifyRoles = (answer) => ({
     async run() {
@@ -171,7 +345,7 @@ test('rectify: a flat reference is left exactly where it was', async () => {
         await writeFile(path.join(dir, 'mockup.png'), TINY_PNG);
         const result = await rectifyReferences({
             root: dir, dir: '.tmp/w1', files: [{ path: 'mockup.png' }],
-            roles: rectifyRoles({ verdict: 'keep', assessment: 'flat export, no projection needed', output: '', quad: null }),
+            roles: rectifyRoles({ verdict: 'keep', assessment: 'flat export, no projection needed', screens: [] }),
             config: defaults,
         });
         assert.equal(result.rectified.length, 0);
@@ -192,30 +366,71 @@ test('rectify: a corrected file replaces the reference, a path outside the direc
 
         const accepted = await rectifyReferences({
             root: dir, dir: '.tmp/w1', files: [{ path: 'mockup.png' }],
-            roles: rectifyRoles({ verdict: 'rectified', assessment: 'фото под углом', output: inside, quad: null }),
+            roles: rectifyRoles({ verdict: 'rectified', assessment: 'фото под углом', screens: [{ label: 'app', output: inside, quad: null }] }),
             config: defaults,
         });
         assert.deepEqual(accepted.rectified.map((item) => item.to), [inside],
             accepted.warnings.join('; '));
+        assert.equal(accepted.rectified[0].screen, 'app', 'the label travels — it is what names the screen later');
 
         // The role names a file it was never allowed to write — the reference has to stay untouched.
         await writeFile(path.join(dir, 'somewhere-else.png'), TINY_PNG);
         const escaped = await rectifyReferences({
             root: dir, dir: '.tmp/w1', files: [{ path: 'mockup.png' }],
-            roles: rectifyRoles({ verdict: 'rectified', assessment: '', output: 'somewhere-else.png', quad: null }),
+            roles: rectifyRoles({ verdict: 'rectified', assessment: '', screens: [{ label: '', output: 'somewhere-else.png', quad: null }] }),
             config: defaults,
         });
         assert.equal(escaped.rectified.length, 0);
         assert.match(escaped.warnings.join('\n'), /вне каталога выхода/);
 
-        // "rectified" with no path is a claim with no file behind it.
-        const silent = await rectifyReferences({
-            root: dir, dir: '.tmp/w1', files: [{ path: 'mockup.png' }],
-            roles: rectifyRoles({ verdict: 'rectified', assessment: '', output: '', quad: null }),
+        // "rectified" with no file behind it is a claim, and an entry without a path is the same claim
+        // in a list — neither moves the reference.
+        for (const screens of [[], [{ label: 'app', output: '', quad: null }]]) {
+            const silent = await rectifyReferences({
+                root: dir, dir: '.tmp/w1', files: [{ path: 'mockup.png' }],
+                roles: rectifyRoles({ verdict: 'rectified', assessment: '', screens }),
+                config: defaults,
+            });
+            assert.equal(silent.rectified.length, 0);
+            assert.equal(silent.kept[0].path, 'mockup.png');
+        }
+    } finally {
+        await rm(dir, { recursive: true, force: true });
+    }
+});
+
+test('rectify: a collage returns one file per screen, each kept on its own', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-rectify-collage-'));
+    try {
+        await writeFile(path.join(dir, 'app.png'), TINY_PNG);
+        const outDir = path.join(dir, '.tmp', 'w1', RECTIFIED_DIR);
+        await mkdir(outDir, { recursive: true });
+        const first = `.tmp/w1/${RECTIFIED_DIR}/01-home.png`;
+        const second = `.tmp/w1/${RECTIFIED_DIR}/02-transfer.png`;
+        const third = `.tmp/w1/${RECTIFIED_DIR}/03-profile.png`;
+        await writeFile(path.join(dir, ...first.split('/')), TINY_PNG);
+        await writeFile(path.join(dir, ...second.split('/')), TINY_PNG);
+        // The third screen is named but never written: the tool call for it failed.
+        const result = await rectifyReferences({
+            root: dir, dir: '.tmp/w1', files: [{ path: 'app.png' }],
+            roles: rectifyRoles({
+                verdict: 'rectified',
+                assessment: 'коллаж из трёх экранов под наклоном',
+                screens: [
+                    { label: 'home', output: first, quad: null },
+                    { label: 'transfer', output: second, quad: null },
+                    { label: 'profile', output: third, quad: null },
+                ],
+            }),
             config: defaults,
         });
-        assert.equal(silent.rectified.length, 0);
-        assert.match(silent.warnings.join('\n'), /без пути к результату/);
+        assert.deepEqual(result.rectified.map((item) => item.to), [first, second], result.warnings.join('; '));
+        assert.match(result.warnings.join('\n'), /не принят — выходной файл не найден/);
+        // One reference becomes two: both take the slot the collage occupied.
+        const { paths, swapped } = swapReferencePaths(['app.png'], result.rectified);
+        assert.deepEqual(paths, [first, second]);
+        assert.equal(swapped.length, 2);
+        assert.ok(swapped.every((item) => item.from === 'app.png'));
     } finally {
         await rm(dir, { recursive: true, force: true });
     }
@@ -287,15 +502,18 @@ test('restore: the prompt the role wrote travels under the fragment contract', (
     assert.match(text, /fragment cut out of a larger interface screenshot/);
 });
 
-test('restore: auto looks only at the files a transform produced', () => {
+test('restore: auto reads the crops, and never a file it already repaired', () => {
     const files = [
         { rel: 'a.png', kind: 'crop' },
         { rel: 'b.png', kind: 'repaired' },
         { rel: 'c.png', kind: 'regenerated' },
     ];
-    assert.deepEqual(restorableFiles(files, 'auto', 6).map((file) => file.rel), ['b.png', 'c.png']);
-    assert.equal(restorableFiles(files, 'always', 6).length, 3);
-    assert.equal(restorableFiles(files, 'auto', 1).length, 1);
+    // A crop is exactly where a neighbour's strip or a clipped keyboard shows up, so `auto` has to
+    // read it — filtering to transformed kinds left the phase with no candidate and it never ran.
+    assert.deepEqual(restorableFiles(files, 'auto', 6).map((file) => file.rel), ['a.png']);
+    assert.equal(restorableFiles(files, 'always', 6).length, 3, 'always re-reads a repaired file too');
+    assert.equal(restorableFiles(files, 'off', 6).length, 0);
+    assert.deepEqual(restorableFiles([{ rel: 'x.png', kind: 'split' }], 'auto', 1).map((f) => f.rel), ['x.png']);
 });
 
 test('restore: a replaced file is renamed everywhere the decomposition lists it', () => {

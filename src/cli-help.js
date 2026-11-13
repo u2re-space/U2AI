@@ -25,6 +25,7 @@ export const HELP = `ai — CLI-агент на OpenAI Responses API (Node.js 26
   ai component [list|publish|search|show|rm|path]  локальный реестр компонентов (~/.ai-agent/components)
   ai install <tag>[@версия] …        установить компонент из реестра в проект как file:-пакет
   ai image "описание"               генерация изображения (image_generation)
+  ai decompose --image <путь>       разбор референсов: делегирует в отдельный CLI ai-decompose (@u2ai/decomposer)
   ai resume                         последний незавершённый шаг в этом каталоге
   ai resume --id <имя> ["текст"]    продолжить конкретную работу .tmp/<имя>
   ai resume "что доработать"        продолжить и добавить, исправить или доработать
@@ -222,6 +223,15 @@ context=false запускает роль на чистом контексте. 
   --kind landing|site|backend|app  вид генерации. У memory --kind по-прежнему вид записи
   --no-memory            не использовать долговременную память (SQLite в ~/.ai-agent/memory.db)
   --global               memory: работать с глобальными записями   --tags a,b
+
+Разбор референсов (decompose):
+  ai decompose --image <путь> [--image <путь> …] [--out <каталог>] [--stages a,b,…] [--stop-after <стадия>]
+                [--dry-run] [--advanced] [--model <id>] [--effort <уровень>] [--image-model <id>]
+  Делегирует в отдельный CLI ai-decompose (@u2ai/decomposer): шесть стадий extend → decompose → rectify →
+  reconstruct → overlap → resolve; файлы в ./decomposition/{extended,screens,rectified,restored,overlap}/ и
+  decomposition.json. Конфиг нового CLI — ~/.ai-decompose/config.json (AI_DECOMPOSE_*); ключ и модели
+  берутся из окружения как есть (OPENAI_API_KEY, AI_MODEL, AI_IMAGE_MODEL).
+  Бинарник ищется в AI_DECOMPOSE_BIN, в submodules/u2ai-decomposer, в node_modules/@u2ai/decomposer и в PATH.
 
 Фон:
   --background, -b       фоновый режим Responses API (сервер считает, можно переподключиться: ai resume <resp_id>)

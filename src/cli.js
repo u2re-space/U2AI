@@ -39,6 +39,7 @@ import { decide, moderate, channels, telegram } from './commands/channels.js';
 import { serve } from './commands/serve.js';
 import { componentCommand } from './commands/component.js';
 import { installCommand } from './commands/install.js';
+import { decompose } from './commands/decompose.js';
 import { attachPublisher, splitServeUrl } from './server/publish.js';
 
 const pkg = createRequire(import.meta.url)('../package.json');
@@ -98,9 +99,11 @@ const OPTIONS = {
     tag: { type: 'string' }, link: { type: 'boolean', default: false }, dev: { type: 'boolean', default: false },
     force: { type: 'boolean', default: false }, save: { type: 'boolean', default: true },
     'keep-files': { type: 'boolean', default: false }, 'cross-origin-isolated': { type: 'boolean', default: false },
+    // Flags of the delegated decomposition CLI (`ai decompose` → `ai-decompose`).
+    'stages': { type: 'string', multiple: true }, 'dry-run': { type: 'boolean', default: false }, 'advanced': { type: 'boolean', default: false },
 };
 
-const COMMANDS = { ask, chat, run, image, jobs, memory: memoryCommand, resume, cancel, models, config: configCommand, agents: agentsCommand, map: mapCommand, complete, gen, mcp: mcpCommand, decide, moderate, channels, telegram, serve, component: componentCommand, install: installCommand };
+const COMMANDS = { ask, chat, run, image, jobs, memory: memoryCommand, resume, cancel, models, config: configCommand, agents: agentsCommand, map: mapCommand, complete, gen, mcp: mcpCommand, decide, moderate, channels, telegram, serve, component: componentCommand, install: installCommand, decompose };
 const NEEDS_API_KEY = new Set(['ask', 'chat', 'run', 'image', 'resume', 'cancel', 'models', 'gen', 'decide', 'moderate', 'channels']);
 const DETACHABLE = new Set(['ask', 'run', 'image', 'gen']);
 

@@ -356,6 +356,12 @@ Stateless-история пересылается целиком, поэтому
 
 ### Разбор референсов
 
+Фазы разбора живут теперь в отдельном CLI: `ai decompose` делегирует в `ai-decompose` (@u2ai/decomposer) —
+extend → decompose → rectify → reconstruct → overlap → resolve; файлы в `./decomposition/{extended,screens,rectified,restored,overlap}/`
+и `decomposition.json`. Бинарник ищется в `AI_DECOMPOSE_BIN`, в `submodules/u2ai-decomposer`, в `node_modules/@u2ai/decomposer`
+и в `PATH`; конфиг нового CLI — `~/.ai-decompose/config.json` (`AI_DECOMPOSE_*`), ключ и модели берутся из окружения как есть
+(`OPENAI_API_KEY`, `AI_MODEL`, `AI_IMAGE_MODEL`).
+
 Роль `decomposer` идёт сразу после планировщика и до `measurer`: она читает приложенные скриншоты и ссылки на Figma
 и раскладывает макет на отдельные экраны, фреймы и переиспользуемые фрагменты. Ответ — JSON: `summary`, `screens`
 (имя, источник, `nodeId`, назначение, границы, на какие референсы опирается экран, путь к суб-референсу

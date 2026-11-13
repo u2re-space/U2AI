@@ -1,5 +1,13 @@
 # Reference Phases — archived
 
+> **The phases live in their own package now.** They were ported to `@u2ai/decomposer`
+> (`submodules/u2ai-decomposer/`), where they are the six stages of the pipeline:
+> `extend` → `decompose` → `rectify` → `reconstruct` → `overlap` → `resolve`.
+> The port is covered by tests and is green, so this folder is now the archive of what the phases
+> meant — the reference for the behaviour — and not the code that runs.
+> The monolith reaches the new package through `ai decompose`, which delegates to `ai-decompose`
+> (`src/commands/decompose.js`).
+
 Three phases were removed from the `decompose` stage because they failed to work reliably
 and consumed API budget without returning usable sub-references:
 
@@ -36,6 +44,10 @@ archive/reference-phases/
 
 ## How to revive
 
+The phases do not need to be revived inside the monolith: they run in `@u2ai/decomposer`
+(`submodules/u2ai-decomposer/src/stages/`), and `ai decompose` delegates to that CLI. To bring them
+back into the monolith itself, the old way is still in the history:
+
 1. Copy the four schemas back into `src/agent/schemas.js` (after `SUB_REFERENCE_KINDS`, before
    `IMAGE_PROCESSOR_SCHEMA`).
 2. Restore the role files under `src/roles/` and add the imports + entries in
@@ -50,6 +62,11 @@ archive/reference-phases/
    `git show HEAD~6:src/agent/team.js` shows the state before the archive).
 8. Re-enable `correct_perspective` in the decomposer's tool set (step 25 in the original plan
    removed it to give it to rectifier).
+
+The port to the new package kept the behaviour and dropped the switches: the stages of
+`@u2ai/decomposer` always run in the same order, and each one is switched off as a whole through
+`stages.<id>.enabled`. The `off | auto | always` modes of steps 4 and 5 above are therefore not
+restored.
 
 ## What changed in the live pipeline
 

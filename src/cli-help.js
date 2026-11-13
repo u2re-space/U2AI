@@ -20,7 +20,8 @@ export const HELP = `ai — CLI-агент на OpenAI Responses API (Node.js 26
   ai [ask] "запрос"                 один запрос → ответ (текст, код, документ)
   ai chat                           интерактивный чат (/help — команды чата)
   ai run "задача"                   автономный агент: файлы, команды, URL, web, картинки
-  ai gen [landing|site|backend|app|component] "задача"   то же, что run; первое слово-вид выбирает генерацию
+  ai run landing "задача"           веб-часть: делегирует в отдельный CLI ai-webdev (@u2ai/webdev)
+  ai gen [landing|site|backend|app|component] "задача"   веб-генерация: делегирует в ai-webdev (@u2ai/webdev)
   ai gen component "описание"        переиспользуемый web-компонент: референс не обязателен, довольно описание поведения
   ai component [list|publish|search|show|rm|path]  локальный реестр компонентов (~/.ai-agent/components)
   ai install <tag>[@версия] …        установить компонент из реестра в проект как file:-пакет

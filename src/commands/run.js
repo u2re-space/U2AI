@@ -2,7 +2,7 @@
  * @file src/commands/run.js
  * @module commands/run
  * @purpose Run an autonomous task as a role team or as a single tool loop.
- * @depends agent/map, agent/tools, agent/roles, agent/team, agent/workspace-scan, core/config, util/text, commands/instructions, commands/flow, commands/shared, mcp/session, node:path
+ * @depends agent/map, agent/tools, agent/roles, agent/team, agent/workspace-scan, core/config, util/text, commands/instructions, commands/flow, commands/shared, commands/webdev, mcp/session, node:path
  * @usedBy cli
  * @exports run, resumeLocal
  * @ai.tags cli, agent, team
@@ -10,6 +10,7 @@
  * @changed 2026-10-16 Prepared scaffold files are written before the model plans.
  * @changed 2026-10-30 The dependency install announces itself and streams npm output.
  * @changed 2026-11-07 --id names the run's `.tmp/<id>` directory; `ai resume --id <имя>` continues it.
+ * @changed 2026-11-13 The web part of a run is delegated to `@u2ai/webdev`.
  */
 import path from 'node:path';
 import { stat } from 'node:fs/promises';
@@ -28,6 +29,7 @@ import { UsageError, readStdin, resolveTextArg, loadAttachments, composeInstruct
     turnExtender } from './shared.js';
 import { openMcpSources } from '../mcp/session.js';
 import { prepareTeamInvocation } from './team-args.js';
+import { delegateWebdev, isWebTask } from './webdev.js';
 import { WORK_ID_HINT, findLatestResumable, loadWork, normalizeWorkId, resolveResumeStep } from '../agent/work-plan.js';
 import { imageTransport } from '../openai/images.js';
 import { formatWorkspace, scanWorkspace } from '../agent/workspace-scan.js';
@@ -61,11 +63,13 @@ function workIdFlag(values) {
  *                     each role with its own model (config.roles / --role).
  *   single (--single): one model, one tool loop (plus memory tools).
  * @param {object} ctx Command context from cli.main.
+ * @param {{ delegate?: boolean }} [options] delegate forces the web delegation even when the task
+ *   does not name a kind (`ai gen` is the web entry point of the monolith).
  * @returns {Promise<number>} Exit code from the team or single flow.
  * @exports
  * @ai.hint io
  */
-export async function run(ctx) {
+export async function run(ctx, { delegate = false } = {}) {
     const { config, renderer, values, positionals } = ctx;
     const stdinText = await readStdin({ maxBytes: config.limits.maxStdinBytes, stdin: ctx.stdin ?? process.stdin });
     const prepared = await prepareTeamInvocation({ positionals, values, cwd: ctx.cwd, stdinText: stdinText ?? '' });
@@ -78,6 +82,13 @@ export async function run(ctx) {
     // A directory that already holds a plan belongs to another run; an empty one is still free.
     if (workId && await stat(path.join(ctx.cwd, '.tmp', workId, 'plan.json')).catch(() => null)) {
         throw new UsageError(`В .tmp/${workId} уже лежит план другой работы. Продолжите её: ai resume --id ${workId} "…" — или возьмите другое имя.`);
+    }
+    // The web part of the work lives in `@u2ai/webdev` since 0.3.x: a task that names a kind, or
+    // that asks for the generation knobs, is forwarded to it. A package that is not installed
+    // leaves the work to the own team of the monolith.
+    if (delegate || isWebTask(prepared)) {
+        const code = await delegateWebdev(ctx, { kind: prepared.kind, task: prepared.task });
+        if (code != null) return code;
     }
     const hasFigmaSource = [...(values.url ?? []), task].some((value) => /https?:\/\/(?:www\.)?figma\.com\//i.test(value));
     if (hasFigmaSource) {

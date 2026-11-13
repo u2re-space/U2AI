@@ -292,7 +292,9 @@ test('ai gen landing sends the mockup and records an unmeasured 87% contract', a
         });
         const child = spawn(process.execPath, [bin, 'gen', 'landing', 'Повтори макет', '--image', image, '--no-memory', '--approve', 'write', '--json'], {
             cwd: work,
-            env: { ...process.env, OPENAI_API_KEY: 'sk-test', OPENAI_BASE_URL: server.baseURL, AI_AGENT_HOME: home, AI_MODEL: 'mock-model', NO_COLOR: '1' },
+            // The web part lives in `@u2ai/webdev` since 0.3.x; this test covers the own team of
+            // the monolith, so the delegation is switched off.
+            env: { ...process.env, OPENAI_API_KEY: 'sk-test', OPENAI_BASE_URL: server.baseURL, AI_AGENT_HOME: home, AI_MODEL: 'mock-model', AI_WEBDEV_BIN: 'none', NO_COLOR: '1' },
             stdio: ['ignore', 'pipe', 'pipe'],
             windowsHide: true,
         });

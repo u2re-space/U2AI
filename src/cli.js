@@ -2,7 +2,7 @@
  * @file src/cli.js
  * @module cli
  * @purpose Parse argv, dispatch one command, and map failures to process exit codes.
- * @depends node:path, node:util, node:fs/promises, node:url, node:module, core/config, ui/renderer, jobs/manager, openai/errors, commands/shared, commands/ask, commands/chat, commands/run, commands/image, commands/jobs, commands/memory, commands/misc, commands/map, commands/complete, commands/gen, commands/mcp, commands/channels, cli-help
+ * @depends node:path, node:util, node:fs/promises, node:url, node:module, core/config, ui/renderer, jobs/manager, openai/errors, commands/shared, commands/ask, commands/chat, commands/run, commands/image, commands/jobs, commands/memory, commands/misc, commands/map, commands/complete, commands/gen, commands/webdev, commands/mcp, commands/channels, cli-help
  * @usedBy bin/ai
  * @exports HELP, stripDetach, parseArgv, main
  * @ai.tags cli, dispatch
@@ -40,6 +40,7 @@ import { serve } from './commands/serve.js';
 import { componentCommand } from './commands/component.js';
 import { installCommand } from './commands/install.js';
 import { decompose } from './commands/decompose.js';
+import { resolveWebdev } from './commands/webdev.js';
 import { attachPublisher, splitServeUrl } from './server/publish.js';
 
 const pkg = createRequire(import.meta.url)('../package.json');
@@ -209,7 +210,13 @@ export async function main(argvInput = process.argv.slice(2)) {
             configPath: values.config, overrides: overridesFrom(values, { command: commandName }), env: runtimeEnv, cwd,
         });
         if (NEEDS_API_KEY.has(commandName) && !config.apiKey) {
-            throw new UsageError('Не задан OPENAI_API_KEY. Укажите его в .env, в окружении или в ~/.ai-agent/config.json.');
+            // The web part of a run lives in `@u2ai/webdev` since 0.3.x: the key of that
+            // package is its own, so the monolith does not ask for one when the package is
+            // installed and ready to do the work.
+            const delegated = (commandName === 'gen' || commandName === 'run') && await resolveWebdev();
+            if (!delegated) {
+                throw new UsageError('Не задан OPENAI_API_KEY. Укажите его в .env, в окружении или в ~/.ai-agent/config.json.');
+            }
         }
 
         if (values.detach) {

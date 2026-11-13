@@ -19,7 +19,7 @@
 | Изображения и файлы во входе | `ai --image screenshot.png "что не так на экране?"`, `ai -f spec.pdf "сделай план"` |
 | Автономные задачи | `ai run "добавь тесты для src/utils.js и прогони их"` — инструменты: файлы, команды, URL, web-поиск, картинки |
 | Браузер агента | `ai run --browser "проверь страницу http://localhost:3000"` — Ego Lite (если установлен) открывает страницу, выдаёт accessibility snapshot и позволяет кликать/вводить; без Ego — headless Chrome/Edge для чтения и снимков |
-| Сайты, лендинги, бэкенды | `ai gen landing "собери страницу" --image test-gen/landing.png` — точность 87% (цель, не измерение), креативность, профиль Chromium 156 based browser |
+| Сайты, лендинги, бэкенды | `ai gen landing "собери страницу" --image test-gen/landing.png` — веб-часть делегирует в отдельный CLI `ai-webdev` (@u2ai/webdev): точность 87% (цель, не измерение), креативность, профиль Chromium 156 based browser |
 | Свои MCP-серверы | `ai mcp add design --mcp-command node --mcp-arg server.js` — инструменты и ресурсы по stdio; сторонний https-сервер уходит в API как `type: mcp` |
 | Макеты Figma | `ai gen landing "собери страницу" --url https://www.figma.com/design/<file>/…` — ссылка сама добавляет MCP `https://mcp.figma.com/mcp`, decomposer разбирает файл на экраны до замеров |
 | Решения и модерация | `ai decide`, `ai moderate` — `/v1/decisions` (`openai/gpt-6-luna-decisions`) или `omni-moderation-latest`, если шлюз отдаёт `/v1/moderations` |
@@ -517,6 +517,21 @@ worker может вызвать роль повторно через `delegate_
 Клик — по координатам, заголовку окна, элементу управления или картинке.
 
 ## Генерация проектов
+
+Веб-разработка живёт теперь в отдельном CLI: `ai gen` и веб-часть `ai run` делегируют в `ai-webdev`
+(@u2ai/webdev) — стадии `collect → plan → architect → setup → markup → coding → styling → vector →
+iconify → review → audit → learn`, свой реестр компонентов, своя постоянная память и свои тесты.
+Бинарник ищется в `AI_WEBDEV_BIN`, в `submodules/u2ai-webdev`, в `node_modules/@u2ai/webdev` и в `PATH`;
+конфиг нового CLI — `~/.ai-webdev/config.json` (`AI_WEBDEV_*`), ключ и модели берутся из окружения как есть
+(`OPENAI_API_KEY`, `AI_MODEL`). `AI_WEBDEV_BIN=none` выключает делегирование: тогда монолит выполняет
+задачу своей командой ролей, как раньше.
+
+Флаги переводятся один в один: `--kind`, `--fidelity`, `--creativity`, `--platform` (`chrome-156-stable`
+становится `chromium`), `--frontend-framework`, `--frontend-markup-language`, `--frontend-style-language`,
+`--frontend-script-language`, `--icon-set`, `--model`, `--effort`, `--extract`, `--approve`, `--role`,
+`--stop-after`, `--id`, `--json`. Референсы `--image` раскладываются в `.ai/refs/` — новый CLI читает
+картинки оттуда. Значения, которых в новом CLI нет (фреймворк `angular`, стадия `decompose`), в вызов не
+попадают: там своё значение по умолчанию.
 
 `ai gen` собирает лендинг, статический сайт, бэкенд или небольшое приложение. Команда пишет контракт в `.ai/generation.json` и запускает ту же команду ролей, что и `ai run`.
 

@@ -24,7 +24,7 @@ export const HELP = `ai — CLI-агент на OpenAI Responses API (Node.js 26
   ai gen component "описание"        переиспользуемый web-компонент: референс не обязателен, довольно описание поведения
   ai component [list|publish|search|show|rm|path]  локальный реестр компонентов (~/.ai-agent/components)
   ai install <tag>[@версия] …        установить компонент из реестра в проект как file:-пакет
-  ai image "описание"               генерация изображения (image_generation)
+  ai image "описание"               работа с картинками: делегирует в отдельный CLI ai-image (@u2ai/images)
   ai decompose --image <путь>       разбор референсов: делегирует в отдельный CLI ai-decompose (@u2ai/decomposer)
   ai resume                         последний незавершённый шаг в этом каталоге
   ai resume --id <имя> ["текст"]    продолжить конкретную работу .tmp/<имя>

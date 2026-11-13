@@ -1,121 +1,234 @@
 /**
  * @file src/commands/image.js
  * @module commands/image
- * @purpose Generate or edit images through the Responses image_generation tool.
- * @depends agent/loop, commands/instructions, commands/flow, commands/shared
+ * @purpose `ai image` — delegate the work with the pictures to the dedicated CLI `@u2ai/images`
+ *   (`ai-image`).
+ *
+ *   The picture work (generation, editing, sizing, cropping, padding, the alpha channel and the
+ *   background) lives in its own package since 0.3.x: it has its own configuration, its own
+ *   purposes, its own raster layer and its own tests. The monolith keeps one command that
+ *   forwards to it, so the old entry point keeps working and the code stays in one place.
+ *
+ *   The binary is looked up in this order: `AI_IMAGE_BIN`, the `submodules/u2ai-images` checkout
+ *   of this repository, the installed `node_modules/@u2ai/images`, and the `PATH`.
+ * @depends node:path, node:fs/promises, node:child_process, commands/shared
  * @usedBy cli
- * @exports image
- * @ai.tags cli, image
+ * @exports image, imageArgs, resolveImageCli, imageCandidates
+ * @ai.tags cli, image, delegation
  * @ai.hint io
- * @changed 2026-10-15 JSDoc card, 4-space indent.
+ * @changed 2026-11-13 The picture work moved to `@u2ai/images`; the monolith forwards to it.
  */
+
 import path from 'node:path';
-import { readFile, mkdir, writeFile } from 'node:fs/promises';
-import { builtinTools } from '../agent/loop.js';
-import { IMAGE_BASE } from './instructions.js';
-import { runOnce } from './flow.js';
-import { UsageError, readStdin, loadAttachments, composeInstructions, resolveTextArg, createClientFor } from './shared.js';
-import { imageModelFor, imageTransport, sniffImage } from '../openai/images.js';
-import { createImageSink } from '../core/images.js';
-import { applyGeneratedAlphaMask } from '../agent/image-alpha.js';
-import { resolveInside } from '../agent/paths.js';
+import { access } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { UsageError } from './shared.js';
+
+/** The root of the monolith: two levels above src/commands/. */
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 /**
- * `ai image <prompt>` — generate (or edit, with --image) pictures through the Responses API
- * image_generation tool. Partial images are written progressively; final files are listed.
+ * The files that may hold the new CLI, in the order they are tried.
+ * @param {object} [options]
+ * @param {string} [options.root] the root of the monolith
+ * @param {object} [options.env] the environment to read AI_IMAGE_BIN from
+ * @returns {string[]}
+ * @exports
+ * @ai.hint pure
+ */
+export function imageCandidates({ root = ROOT, env = process.env } = {}) {
+    const candidates = [];
+    if (env.AI_IMAGE_BIN) candidates.push(path.resolve(env.AI_IMAGE_BIN));
+    candidates.push(path.join(root, 'submodules', 'u2ai-images', 'bin', 'ai-image.js'));
+    candidates.push(path.join(root, 'node_modules', '@u2ai', 'images', 'bin', 'ai-image.js'));
+    return candidates;
+}
+
+/**
+ * Find the CLI to delegate to.
+ *
+ * A `.js` entry is run with the same Node that runs the monolith; anything else is an executable
+ * and is started as it is.
+ * @param {object} [options]
+ * @param {string} [options.root] the monolith root
+ * @param {object} [options.env] the environment
+ * @returns {Promise<{ command: string, args: string[] }|null>} null when the CLI is not installed
+ * @exports
+ * @ai.hint io
+ */
+export async function resolveImageCli({ root = ROOT, env = process.env } = {}) {
+    for (const candidate of imageCandidates({ root, env })) {
+        const found = await access(candidate).then(() => true).catch(() => false);
+        if (!found) continue;
+        if (candidate.endsWith('.js')) return { command: process.execPath, args: [candidate] };
+        // A `.cmd` of Windows is a script for the shell, not an executable.
+        if (candidate.endsWith('.cmd')) return { command: candidate, args: [], shell: true };
+        return { command: candidate, args: [] };
+    }
+    return await findOnPath(env);
+}
+
+/**
+ * The `ai-image` executable in PATH.
+ * @param {object} env
+ * @returns {Promise<{ command: string, args: string[] }|null>}
+ * @exports
+ * @ai.hint io
+ */
+async function findOnPath(env) {
+    const names = process.platform === 'win32' ? ['ai-image.cmd', 'ai-image.exe', 'ai-image'] : ['ai-image'];
+    for (const dir of String(env.PATH ?? '').split(path.delimiter)) {
+        if (!dir) continue;
+        for (const name of names) {
+            const full = path.join(dir, name);
+            if (!await access(full).then(() => true).catch(() => false)) continue;
+            if (process.platform === 'win32' && name.endsWith('.cmd')) {
+                return { command: full, args: [], shell: true };
+            }
+            return { command: full, args: [] };
+        }
+    }
+    return null;
+}
+
+/**
+ * The arguments of the new CLI, built from the flags of the monolith.
+ *
+ * The two CLIs share most of their vocabulary: the pictures (`--image`), the output
+ * (`--out`), the configuration (`--config`), the models (`--model`, `--image-model`), the frame
+ * (`--size`), the format (`--format`), the background (`--image-background`), the tier
+ * (`--image-resolution`) and the count (`--count`).
+ *
+ * One picture is a source of an edit; the rest are references. No picture at all is a
+ * generation. The names of the flags change, the meaning does not.
+ * @param {object} values the parsed flags of the monolith
+ * @param {string[]} [positionals] the prompt of the run
+ * @returns {string[]}
+ * @exports
+ * @ai.hint pure
+ */
+export function imageArgs(values = {}, positionals = []) {
+    const args = [];
+    const images = Array.isArray(values.image) ? values.image : [];
+    const prompt = positionals.map((value) => String(value)).join(' ').trim();
+    if (images.length) {
+        args.push('edit', images[0]);
+        for (const extra of images.slice(1)) args.push('--reference', extra);
+    } else {
+        args.push('generate');
+    }
+    if (prompt) args.push(prompt);
+    if (values.out) args.push('--out', values.out);
+    if (values.config) args.push('--config', values.config);
+    if (values.model) args.push('--model', values.model);
+    if (values['image-model']) args.push('--image-model', values['image-model']);
+    if (values.size) args.push('--size', values.size);
+    if (values.format) args.push('--format', values.format);
+    if (values['image-background']) args.push('--background', values['image-background']);
+    const resolution = String(values['image-resolution'] ?? '').trim();
+    if (resolution && resolution !== 'auto' && resolution !== 'off') args.push('--resolution', resolution);
+    if (values.count) args.push('--count', values.count);
+    if (values.json) args.push('--json');
+    if (values['dry-run']) args.push('--dry-run');
+    return args;
+}
+
+/**
+ * `ai image` — run the dedicated picture CLI.
  * @param {object} ctx Command context from cli.main.
- * @returns {Promise<number>} Worst exit code across --count images.
+ * @returns {Promise<number>} the exit code of the delegated run.
  * @exports
  * @ai.hint io
  */
 export async function image(ctx) {
-    const { config, renderer, values, positionals } = ctx;
-    let prompt = positionals.join(' ').trim();
-    if (!prompt) prompt = (await readStdin({ maxBytes: config.limits.maxStdinBytes, stdin: ctx.stdin ?? process.stdin })) ?? '';
-    if (!prompt.trim()) throw new UsageError('Укажите описание изображения: ai image "…"');
-    const count = Math.max(1, Math.min(10, Number(values.count ?? 1) || 1));
-    const parts = await loadAttachments({ images: values.image ?? [], files: [], detail: values.detail ?? 'auto', cwd: ctx.cwd, config, renderer });
-    const extra = await resolveTextArg(values.instructions, { cwd: ctx.cwd, what: 'инструкции' });
-    const instructions = composeInstructions(IMAGE_BASE, config, extra);
-    if (imageTransport(config) === 'images') return runImagesEndpoint(ctx, prompt, count);
-    const builtin = builtinTools({ ...config, tools: { ...config.tools, images: true } }, { images: true, web: true });
-    const target = values.out ?? config.image.outputDir;
-    renderer.line('info', `Генерация: ${config.imageModel ?? 'модель по умолчанию инструмента'} · ${config.image.size} · сложность ${config.image.complexity} · ${config.image.format} → ${target}`, { dim: true });
-
-    let code = 0;
-    const produced = [];
-    for (let i = 0; i < count; i++) {
-        if (count > 1) renderer.line('info', `Изображение ${i + 1} из ${count}`);
-        const exit = await runOnce({ ...ctx, values: { ...values, session: null, out: null } }, {
-            prompt: parts.length ? `${prompt}\n(Use the attached image(s) as the reference / source to edit. Never paint a checkerboard or a fake transparency pattern; keep the background flat and even.)` : prompt,            parts, instructions, builtin, toolChoice: { type: 'image_generation' }, imageTarget: target, maxTurns: 1,
-            summaryTitle: count > 1 ? `изображение ${i + 1}/${count}` : 'итог',
-            extraRows: (result) => { produced.push(...result.images); return []; },
-        });
-        code = Math.max(code, exit);
+    const { values, cwd, renderer, positionals } = ctx;
+    const target = await resolveImageCli();
+    if (!target) {
+        throw new UsageError('Пакет @u2ai/images не найден. Установите его (npm i -g @u2ai/images) '
+            + 'или укажите путь к ai-image в AI_IMAGE_BIN.');
     }
-    if (count > 1) renderer.line('ok', `Готово: ${produced.length} файл(ов): ${produced.join(', ')}`);
-    return code;
+    const args = [...target.args, ...imageArgs(values, positionals)];
+    renderer.line('info', `делегирую в ai-image: ${args.slice(1).join(' ') || '(без аргументов)'}`);
+    return await run(target.command, args, cwd, renderer, target.shell === true);
 }
 
 /**
- * Draw or edit through /images/generations and /images/edits. No Responses image tool.
- * @param {object} ctx
- * @param {string} prompt
- * @param {number} count
+ * Run the delegated CLI and wait for it.
+ *
+ * In a terminal the child writes straight into the terminal: its own colors and its own
+ * line breaks stay as they are. In the JSON mode the output is read line by line and goes
+ * through the renderer: a JSON line becomes an event of the bus, a plain line becomes a
+ * text delta.
+ * @param {string} command
+ * @param {string[]} args
+ * @param {string} cwd
+ * @param {object} renderer
+ * @param {boolean} [shell]
  * @returns {Promise<number>}
+ * @exports
  * @ai.hint io
  */
-async function runImagesEndpoint(ctx, prompt, count) {
-    const { config, renderer, values, signal } = ctx;
-    const sources = values.image ?? [];
-    const model = imageModelFor(config, { hasImage: sources.length > 0 });
-    const target = values.out ?? config.image.outputDir;
-    const format = config.image.format;
-    const background = config.image.background;
-    const wantsTransparent = background === 'transparent';
-    renderer.line('info', `Изображения API: ${model} · ${sources.length ? 'редактирование' : 'генерация'} · ${format} · фон ${background} → ${target}`, { dim: true });
-    const client = createClientFor(config);
-    try {
-        const payloads = sources.length
-            ? await client.images.edit({
-                model, prompt, size: config.image.size, format, background, signal, resolution: config.image.resolution,
-                files: await Promise.all(sources.map(async (file) => {
-                    const located = await resolveInside(ctx.cwd, file, { allowRoot: false });
-                    const bytes = await readFile(located.abs);
-                    return { filename: path.basename(located.rel), mime: sniffImage(bytes).mime, bytes };
-                })),
-            })
-            : await client.images.generate({ model, prompt, size: config.image.size, complexity: config.image.complexity, n: count, format, background, signal, resolution: config.image.resolution });
-        const sink = createImageSink({ target: path.resolve(ctx.cwd, target), format, prefix: 'image' });
-        const saved = [];
-        for (const [index, b64] of payloads.entries()) {
-            const written = await sink.saveFinal(`gen-${index}`, b64, format);
-            if (!written) continue;
-            const rel = path.relative(ctx.cwd, written.file);
-            saved.push(rel);
-            if (wantsTransparent) {
-                const alpha = await applyGeneratedAlphaMask({ client, config, file: written.file, signal, alphaSource: sources[0] });
-                if (alpha.reason === 'already') {
-                    renderer.line('info', `Альфа-канал настоящий: модель отдала прозрачный фон, маска не потребовалась (${rel})`, { dim: true });
-                } else if (alpha.changed) {
-                    const how = alpha.reason === 'mask'
-                        ? `по anti-aliased маске ${alpha.model}${alpha.painted ? ' после заливки фона цветом объекта' : ''}`
-                        : alpha.reason === 'contour' ? 'по локальному контуру' : 'заливкой от углов';
-                    renderer.line('info', `Альфа-канал собран ${how}: ${rel}`, { dim: true });
-                } else if (alpha.reason === 'opaque') renderer.line('info', `Прозрачность ${rel}: фоном оказался сам объект, файл оставлен непрозрачным.`, { dim: true });
-                else if (alpha.reason === 'no-magick') renderer.line('warn', `Прозрачность ${rel}: ImageMagick не найден.`);
-                else if (alpha.reason === 'format') renderer.line('warn', `Прозрачность ${rel}: JPEG не хранит альфа-канал, нужен PNG.`);
-            }
-            renderer.line('ok', `Изображение сохранено: ${rel}`);
+function run(command, args, cwd, renderer, shell = false) {
+    const events = renderer.mode === 'json';
+    return new Promise((resolve) => {
+        const child = spawn(command, args, {
+            cwd,
+            stdio: events ? ['inherit', 'pipe', 'pipe'] : 'inherit',
+            env: process.env,
+            shell,
+            windowsHide: true,
+        });
+        if (events) {
+            forward(child.stdout, renderer);
+            forward(child.stderr, renderer);
         }
-        renderer.line('ok', `Готово: ${saved.join(', ')}`);
-        if (values.json) renderer.json({ type: 'result', status: 'completed', text: `Готово: ${saved.join(', ')}`, images: saved });
-        return saved.length ? 0 : 1;
-    } catch (error) {
-        renderer.line('fail', error.message);
-        if (values.json) renderer.json({ type: 'result', status: 'failed', text: '', images: [], error: { message: error.message, code: null } });
-        return 1;
-    } finally {
-        client.close();
-    }
+        child.on('error', (error) => {
+            process.stderr.write(`Не удалось запустить ai-image: ${error.message}\n`);
+            resolve(1);
+        });
+        child.on('close', (code, signal) => {
+            if (signal) resolve(130);
+            else resolve(code ?? 1);
+        });
+    });
+}
+
+/**
+ * Read a stream of the child line by line and give every line to the renderer.
+ * @param {Readable} stream
+ * @param {object} renderer
+ * @returns {void}
+ * @exports
+ * @ai.hint io
+ */
+function forward(stream, renderer) {
+    let rest = '';
+    /**
+     * Give one line to the renderer: a JSON line as an event, a plain line as text.
+     * @param {string} line
+     * @returns {void}
+     * @ai.hint pure
+     */
+    const emit = (line) => {
+        if (!line.trim()) return;
+        try {
+            const payload = JSON.parse(line);
+            // Only an object becomes an event: a number or a string would be spread
+            // into the fields of the event instead of being carried by it.
+            if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+                renderer.json(payload);
+                return;
+            }
+        } catch { /* not a JSON line: plain text */ }
+        renderer.text(`${line}\n`);
+    };
+    stream.on('data', (chunk) => {
+        const lines = (rest + chunk.toString()).split('\n');
+        rest = lines.pop() ?? '';
+        for (const line of lines) emit(line);
+    });
+    stream.on('end', () => {
+        if (rest) emit(rest);
+    });
 }

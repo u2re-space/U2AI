@@ -190,16 +190,6 @@ test('run: --url rejects a non-HTTP source', async () => {
     assert.match(stderr, /--url/);
 });
 
-test('image: forces the image_generation tool and saves files to --out', async () => {
-    const { code, stdout, stderr } = await runCli(['image', 'кот', '--out', 'pics/cat.png', '--json']);
-    assert.equal(code, 0, stderr);
-    const result = jsonLines(stdout).find((l) => l.type === 'result');
-    assert.equal(result.images.length, 1);
-    assert.equal(path.basename(result.images[0]), 'cat.png');
-    const png = await readFile(path.join(work, result.images[0]));
-    assert.equal(png.subarray(1, 4).toString('latin1'), 'PNG');
-});
-
 test('--schema sends a strict json_schema text format', async () => {
     await writeFile(path.join(work, 'schema.json'), JSON.stringify({ type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false }));
     script = (body) => {

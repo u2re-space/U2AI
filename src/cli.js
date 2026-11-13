@@ -104,7 +104,7 @@ const OPTIONS = {
 };
 
 const COMMANDS = { ask, chat, run, image, jobs, memory: memoryCommand, resume, cancel, models, config: configCommand, agents: agentsCommand, map: mapCommand, complete, gen, mcp: mcpCommand, decide, moderate, channels, telegram, serve, component: componentCommand, install: installCommand, decompose };
-const NEEDS_API_KEY = new Set(['ask', 'chat', 'run', 'image', 'resume', 'cancel', 'models', 'gen', 'decide', 'moderate', 'channels']);
+const NEEDS_API_KEY = new Set(['ask', 'chat', 'run', 'resume', 'cancel', 'models', 'gen', 'decide', 'moderate', 'channels']);
 const DETACHABLE = new Set(['ask', 'run', 'image', 'gen']);
 
 /**

@@ -171,3 +171,7 @@ package-lock.json
 .dbg-*
 .debug-*
 test/*.png
+
+# Decomposer output artifacts (ai decompose)
+/decomposition/
+/decomposition.json

@@ -5,7 +5,7 @@
  *          differences, alpha masks, crops, trims, splits, and SVG-to-raster conversion through ReSVG.
  * @depends node:path, node:fs/promises
  * @usedBy agent/tools, agent/image-alpha
- * @exports rasterEngine, rasterInfo, rasterCompare, rasterApplyAlphaMask, rasterColorKeyAlpha, rasterLocalAlphaMatte, rasterDetectFakeTransparency, rasterCrop, rasterTrim, rasterSplit, rasterizeSvg, fitBox, frameFor, decodeRgba
+ * @exports rasterEngine, rasterInfo, rasterCompare, rasterApplyAlphaMask, rasterColorKeyAlpha, rasterLocalAlphaMatte, rasterDetectFakeTransparency, rasterCrop, rasterPatch, rasterTrim, rasterSplit, rasterizeSvg, fitBox, frameFor, decodeRgba
  * @ai.tags sharp, canvas, resvg, image, compare, alpha, crop, svg
  * @ai.hint io
  * @changed 2026-10-28 First version: comparison and matte work moved off the browser and off ImageMagick.
@@ -851,12 +851,67 @@ export async function rasterCrop({ input, output, x = 0, y = 0, width, height, c
 }
 
 /**
+ * Stitch a repaired fragment back into its picture at the exact box it was cut from.
+ *
+ * The counterpart of `rasterCrop`, and the reason a generative repair can be called targeted: the
+ * model never sees or returns the whole screen, only the box, and every pixel outside that box is
+ * copied from the untouched source file rather than resampled. A model that returns a different
+ * frame size (the families that round to their own grid) is scaled back onto the box, so the patch
+ * always lands where the crop was taken and the screen keeps its original dimensions.
+ * @param {{ input: string, patch: string, output: string, x: number, y: number, width?: number|null, height?: number|null, cwd: string, signal?: AbortSignal, engine?: string }} options
+ *   `width`/`height` override the box the patch is stretched to; by default the patch keeps its own
+ *   size, which is the crop size when it comes back unchanged.
+ * @returns {Promise<{ rel: string, bytes: number, width: number, height: number, box: {x:number,y:number,width:number,height:number}, resized: boolean }>}
+ * @exports
+ * @ai.hint io
+ */
+export async function rasterPatch({
+    input, patch, output, x = 0, y = 0, width = null, height = null, cwd, signal, engine = 'auto',
+}) {
+    const baseBytes = await readFile(toAbs(cwd, input));
+    const patchBytes = await readFile(toAbs(cwd, patch));
+    signal?.throwIfAborted();
+    const base = await decodeRgba(baseBytes, engine);
+    let frame = await decodeRgba(patchBytes, engine);
+    signal?.throwIfAborted();
+
+    const box = {
+        x: Math.max(0, Math.round(x)),
+        y: Math.max(0, Math.round(y)),
+        width: Math.max(1, Math.round(width ?? frame.width)),
+        height: Math.max(1, Math.round(height ?? frame.height)),
+    };
+    // A patch wider or taller than the frame cannot be placed honestly; refusing is better than
+    // silently clipping the repair into a corner of the screen.
+    if (box.x + box.width > base.width || box.y + box.height > base.height) {
+        throw new Error(`rasterPatch: латка ${box.width}×${box.height} в (${box.x},${box.y}) не помещается в кадр ${base.width}×${base.height}.`);
+    }
+    const resized = frame.width !== box.width || frame.height !== box.height;
+    if (resized) frame = await scaleRgba(frame, box.width, box.height, engine);
+
+    // Copy, not blit: the repair replaces what was there, and an alpha the model returned must not
+    // let the damaged pixel show through underneath.
+    for (let row = 0; row < box.height; row++) {
+        const from = ((box.y + row) * box.width) * 4;
+        frame.data.copy(base.data, ((box.y + row) * base.width + box.x) * 4, from, from + box.width * 4);
+    }
+
+    const png = await encodePng(base, engine);
+    const outAbs = toAbs(cwd, output);
+    await mkdir(path.dirname(outAbs), { recursive: true });
+    await writeFile(outAbs, png);
+    return {
+        rel: String(output).split(path.sep).join('/'),
+        bytes: png.length, width: base.width, height: base.height, box, resized,
+    };
+}
+
+/**
  * Cover the target frame from the reply's pixels and center-crop the 16-grid rounding
  * residual. This is the correction for a model that returns a larger frame than requested
  * (its own pipeline upscales and rounds to a 16-pixel grid): the entire picture is scaled
  * uniformly so the target box is covered, and the small remainder is cropped from the
- * centre. When the reply's aspect already matches the target the crop is zero.
- * When the aspect mismatch is too large (more than 1/16 of either side) the function falls
+ * centre. When the aspect mismatch is too large (more than 1/16 of either side) the function falls
  * back to `inside` so no content is destroyed.
  * @param {{ bytes: Buffer, width: number, height: number, engine?: 'auto'|'sharp'|'canvas'|'magick' }} options
  * @returns {Promise<Buffer|null>} the rescaled PNG, or null when no engine is available

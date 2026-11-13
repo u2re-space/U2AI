@@ -497,10 +497,10 @@ export const TOOL_SPECS = {
     // ---- deterministic image tools (decomposer re-projection) ----
     correct_perspective: {
         category: 'write', group: 'images',
-        description: 'Apply a deterministic projective transform to an image using ImageMagick `-distort Perspective`. Takes four source corner coordinates (x,y) and maps them to a destination rectangle, producing a flat front-view image. Unlike generative restoration (edit_image/generate_image), this preserves every pixel exactly — no hallucination, no color shift, no text distortion. Use when the reference is a photo of a screen taken at an angle, a tilted device frame, or a skewed collage.',
+        description: 'Apply a deterministic projective transform to an image using ImageMagick `-distort Perspective`. Takes four source corner coordinates (x,y) and maps them to a destination rectangle, producing a flat front-view image. Unlike generative restoration (edit_image/generate_image), this preserves every pixel exactly — no hallucination, no color shift, no text distortion. The corners are first snapped onto the real boundaries found in the pixels, so a few pixels of error in the guess are corrected before the warp; the picture is resampled exactly once and never rotated afterwards. The result reports the tilt actually measured in the output — read that number instead of judging the corners you typed in. Refuses to re-warp a file it already warped twice, and warns when the input already contains transparent regions, which means a previous edit damaged it: always start from the original.',
         parameters: schema({
             path: str('Source image path relative to the working directory.'),
-            corners_json: str('JSON array of four corner objects: [{"x":0,"y":0},{"x":100,"y":0},{"x":0,"y":100},{"x":100,"y":100}]. Each has source_x (x), source_y (y), dest_x (tx), dest_y (ty). The source corners are in the input image; the dest corners form the output rectangle (usually [0,0], [W,0], [0,H], [W,H]).'),
+            corners_json: str('JSON array of four corner objects in order top-left, top-right, bottom-left, bottom-right: [{"x":0,"y":0},{"x":100,"y":0},{"x":0,"y":100},{"x":100,"y":100}]. The destination rectangle is computed automatically from the quad dimensions.'),
             output: str('Output path. Empty string = .tmp/perspective-<timestamp>.png.'),
             reason: str('One sentence: why this perspective correction is needed (shown to the user for approval).'),
         }),

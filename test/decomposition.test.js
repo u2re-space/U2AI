@@ -109,10 +109,12 @@ test('decomposition: the schema makes every produced image name its kind', () =>
     const screen = DECOMPOSER_SCHEMA.properties.screens.items;
     assert.ok(screen.required.includes('subReference'), 'screens carry a sub-reference field');
     assert.ok(screen.required.includes('subReferenceKind'), 'and how it was produced');
-    assert.deepEqual(screen.properties.subReferenceKind.enum, ['', 'crop', 'split', 'restored', 'regenerated', 'figma-export']);
+    assert.deepEqual(screen.properties.subReferenceKind.enum, ['', 'crop', 'split', 'restored', 'repaired', 'regenerated', 'figma-export']);
     const list = DECOMPOSER_SCHEMA.properties.subReferences;
     assert.equal(list.items.required.join(','), 'path,screen,kind,source,note');
     assert.ok(list.items.properties.kind.enum.includes('restored'));
+    // Phase 1.5 writes a repaired copy of a sub-reference, and the kind has to say so.
+    assert.ok(list.items.properties.kind.enum.includes('repaired'));
 });
 
 test('decomposition: a read-access stage may generate only inside .tmp', async () => {

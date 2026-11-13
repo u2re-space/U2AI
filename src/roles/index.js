@@ -2,7 +2,7 @@
  * @file src/roles/index.js
  * @module roles/index
  * @purpose Collect the prompt of every named role.
- * @depends roles/default, roles/planner, roles/architect, roles/orchestrator, roles/worker, roles/coder, roles/styler, roles/iconifier, roles/reviewer, roles/solver, roles/clicker, roles/typer, roles/encoder, roles/classifier, roles/decomposer, roles/measurer, roles/decorator, roles/image-processor, roles/designer, roles/installer
+ * @depends roles/default, roles/planner, roles/architect, roles/orchestrator, roles/worker, roles/coder, roles/styler, roles/iconifier, roles/reviewer, roles/solver, roles/clicker, roles/typer, roles/encoder, roles/classifier, roles/decomposer, roles/extender, roles/rectifier, roles/restorer, roles/measurer, roles/decorator, roles/image-processor, roles/designer, roles/installer
  * @usedBy commands/instructions, agent/team
  * @exports ROLE_INSTRUCTIONS
  * @ai.tags roles, prompts
@@ -26,6 +26,9 @@ import * as typer from './typer.js';
 import * as encoder from './encoder.js';
 import * as classifier from './classifier.js';
 import * as decomposer from './decomposer.js';
+import * as extender from './extender.js';
+import * as rectifier from './rectifier.js';
+import * as restorer from './restorer.js';
 import * as measurer from './measurer.js';
 import * as decorator from './decorator.js';
 import * as imageProcessor from './image-processor.js';
@@ -55,6 +58,10 @@ export const ROLE_INSTRUCTIONS = {
     encoder: encoder.instructions,
     classifier: classifier.instructions,
     decomposer: decomposer.instructions,
+    extender: extender.instructions,
+    rectifier: rectifier.instructions,
+    restorer: restorer.instructions,
+    restorerVerify: restorer.verifyInstructions,
     measurer: measurer.instructions,
     decorator: decorator.instructions,
     'image-processor': imageProcessor.instructions,

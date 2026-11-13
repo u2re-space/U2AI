@@ -55,6 +55,10 @@ import { EXTRACT_MAX_BYTES, EXTRACT_MAX_FILES, extractHandoff, hasExtractableArt
 import { assessQuality, assessmentImages } from './quality.js';
 import { stageMeasurementCrops, measurementConclusion } from './measure-crops.js';
 import { canRunAdvanced, advancedDecompose, shouldUseReasoningPro } from './advanced.js';
+import { canExtend, extendableFiles, extendReferences } from './extend.js';
+import { canRectify, rectifyReferences, rectifyTargets } from './rectify.js';
+import { rasterInfo } from '../shared/image-raster.js';
+import { applyRepairs, canRestore, restorableFiles, restoreSubReferences } from './restore.js';
 import { createPipeline } from './pipeline.js';
 import { resolveInside } from './paths.js';
 
@@ -138,6 +142,16 @@ export function toolNamesForRole(allNames, role, spec = null) {
         return allNames.filter((name) => spec.tools.includes(name));
     }
     if (role === 'architect' || role === 'collector' || role === 'coordinator') return allNames.filter((name) => READ_ONLY_TOOLS.includes(name));
+    // The rectifier owns the geometry of a reference and nothing else: it may look, cut a straight
+    // margin, compare what it produced, and run the deterministic projection. No generation tool is in
+    // this set on purpose — a generative "straightening" lands the geometry wherever its sampler
+    // happens to put it, and the measurer cannot tell that drawing from a correction.
+    if (role === 'rectifier' || role === 'extender' || role === 'restorer') {
+        const allowed = new Set(role === 'rectifier'
+            ? ['view_image', 'crop_image', 'compare_images', 'correct_perspective']
+            : ['view_image', 'crop_image', 'compare_images']);
+        return allNames.filter((name) => allowed.has(name));
+    }
     if (role === 'reviewer') {
         return allNames.filter((name) => READ_ONLY_TOOLS.includes(name) || SHELL_TOOL_NAMES.includes(name) || DESKTOP_TOOL_NAMES.includes(name) || BROWSER_TOOL_NAMES.includes(name) || name === 'run_subagent' || name === 'delegate_role');
     }
@@ -149,7 +163,7 @@ export function toolNamesForRole(allNames, role, spec = null) {
             : role === 'measurer'
                 ? ['view_image', 'crop_image', 'split_image', 'fetch_url']
                 : role === 'decomposer'
-                    ? ['view_image', 'fetch_url', 'crop_image', 'split_image', 'compare_images', 'correct_perspective', 'generate_image', 'edit_image']
+                    ? ['view_image', 'fetch_url', 'crop_image', 'split_image', 'compare_images', 'generate_image', 'edit_image']
                     : role === 'decorator'
                         ? [...READ_ONLY_TOOLS, 'write_file', 'replace_text', 'generate_svg', 'fetch_url']
                         : [...READ_ONLY_TOOLS, 'view_image', 'generate_image', 'edit_image', 'fetch_url', 'write_file']);
@@ -800,7 +814,16 @@ export async function runTeam({
         let review = null;
         let decisionsAccepted = false;
         const iconifierMarkup = new Set();
-        const referenceParts = parts.filter((part) => part?.type === 'input_image');
+        const referencePartsIn = parts.filter((part) => part?.type === 'input_image');
+        // The reference set a run works on is not fixed at the attachment step. Phase 0.5 (grow the
+        // frame) and phase 1 (rectify the projection) of the decompose stage can each hand back a
+        // better picture of the same screen, and from then on every role — decomposer, measurer,
+        // architect, reviewer — must see that picture and not the clipped or skewed one. The two lists
+        // stay index-aligned because an attached image is matched to a path by position, so replacing a
+        // reference means replacing its part at the same index, and `referencePartsIn` keeps the
+        // originals for the roles that compare a result against what it came from.
+        let referenceFiles = [...referencePaths];
+        let referenceParts = [...referencePartsIn];
         const hasFigmaReference = /https?:\/\/(?:www\.)?figma\.com\//i.test(task);
         let decomposition = null;
         // Whether the resumed work already carries a measurement sheet: a resume with no sheet
@@ -845,7 +868,7 @@ export async function runTeam({
             if (collected.files.length) {
                 ctx.set('references', 'Reference image files (on-disk paths)',
                     'File paths on disk, not the order of attached images. An attached image is matched to a path only by the "Attached image N" caption written directly above that picture in the task.\n'
-                    + [...referencePaths.map((item) => `- ${item} (original)`),
+                    + [...referenceFiles.map((item) => `- ${item} (original)`),
                         ...collected.files.map((file) => `- ${file.rel} (sub-reference, ${file.kind})`)].join('\n'),
                     { priority: 9 });
             }
@@ -1122,7 +1145,7 @@ export async function runTeam({
                         designMdText = await readFile(path.join(root, 'DESIGN.md'), 'utf8');
                     } catch { /* DESIGN.md not present */ }
                     const taskLines = [
-                        ...referencePaths.map((source) => `- ${source}`),
+                        ...referenceFiles.map((source) => `- ${source}`),
                         ...[...task.matchAll(/https?:\/\/[^\s)]+/gi)].map(([source]) => `- ${source}`),
                     ];
                     const designBrief = [
@@ -1194,18 +1217,160 @@ export async function runTeam({
                         }
                     }
                     const subRefMode = config.agent.decomposerSubReferences ?? 'auto';
+                    // ── Phase 0.5 and phase 1: prepare the picture before anybody reads it ───────
+                    // The two phases run here, inside decompose, because their output is the input of
+                    // everything after them: the screens are named on the grown, levelled frame, the
+                    // layers are cut from it, and the measurer measures the same pixels the decomposer
+                    // looked at. Each accepted copy takes the place of the reference it improves, in the
+                    // path list and in the attachment at the same index, so "Attached image N" keeps
+                    // meaning the same screen.
+                    const tierForPhase = plan.complexity === 'trivial' || plan.complexity === 'complex' ? plan.complexity : 'normal';
+                    const rasterEngine = config.image?.rasterEngine ?? 'auto';
+                    const swapReference = async (from, to) => {
+                        const at = referenceFiles.indexOf(from);
+                        if (at < 0) return false;
+                        referenceFiles[at] = to;
+                        if (at < referenceParts.length) {
+                            const reloaded = await loadImageAttachment(to, { cwd: root, maxBytes: config.limits.maxImageBytes }).catch(() => null);
+                            if (reloaded?.part) referenceParts[at] = reloaded.part;
+                        }
+                        return true;
+                    };
+                    const announceReferences = (changed) => {
+                        if (!changed.length) return;
+                        const prepared = new Map(changed.map((pair) => [pair.to, pair.from]));
+                        ctx.set('references', 'Reference image files (on-disk paths)',
+                            'File paths on disk, not the order of attached images. An attached image is matched to a path only by the "Attached image N" caption written directly above that picture in the task.\n'
+                            + referenceFiles
+                                .map((item) => `- ${item}${prepared.has(item) ? ` (prepared from ${prepared.get(item)})` : ' (original)'}`)
+                                .join('\n'),
+                            { priority: 9 });
+                    };
+                    // Phase 0.5: a 1024×768 mock-up ends in the middle of the keyboard and cuts the list
+                    // under it in half. Left alone, every later role measures a screen that never
+                    // existed, so the frame is grown first — on the role's instruction, and only when the
+                    // answer leaves the original pixels where they were.
+                    const extendMode = config.agent.extend ?? 'auto';
+                    if (extendMode !== 'off' && referenceFiles.length) {
+                        if (!canExtend(config) || !client?.images) {
+                            if (extendMode === 'always') notify({ type: 'warning', message: 'agent.extend: images API недоступен — доращивание кадра пропущено, замеры пойдут по обрезанному кадру.' });
+                        } else {
+                            const extenderRole = roles.resolve('extender', tierForPhase);
+                            const extenderModel = paced?.ready
+                                ? clampModel(extenderRole.model, paceSettings.models, paced.ceilingIndex, Boolean(pins.extender?.model))
+                                : extenderRole.model;
+                            const measured = [];
+                            for (const rel of referenceFiles) {
+                                const frame = await rasterInfo(rel, { cwd: root, engine: rasterEngine }).catch(() => null);
+                                if (frame?.width && frame?.height) measured.push({ path: rel, width: frame.width, height: frame.height });
+                            }
+                            const candidates = extendableFiles(measured, extendMode, extenderModel, config.agent.extendMaxFiles ?? 4);
+                            if (candidates.length) {
+                                notify({
+                                    type: 'decompose.extend', role: 'extender', model: extenderModel,
+                                    candidates: candidates.length,
+                                    files: candidates.map((item) => `${item.path} ${item.width}×${item.height} → ${item.target.width}×${item.target.height}`),
+                                });
+                                try {
+                                    const grown = await extendReferences({
+                                        root, files: candidates, roles, client, config, signal, notify,
+                                        model: extenderModel, effort: extenderRole.effort, dir,
+                                    });
+                                    for (const warning of grown.warnings) notify({ type: 'warning', message: warning });
+                                    const changed = [];
+                                    for (const item of grown.extended) {
+                                        if (await swapReference(item.from, item.to)) changed.push({ from: item.from, to: item.to });
+                                    }
+                                    announceReferences(changed);
+                                    progress.notes ??= [];
+                                    progress.notes.push({
+                                        kind: 'extender', status: 'completed',
+                                        report: `проверено ${candidates.length}, доращено ${grown.extended.length}, без изменений ${grown.kept.length}`,
+                                    });
+                                    if (changed.length) {
+                                        notify({
+                                            type: 'decompose.extend.done', count: changed.length,
+                                            files: changed.map((item) => ({ from: item.from, to: item.to })),
+                                        });
+                                    }
+                                } catch (error) {
+                                    if (error?.name === 'AbortError') throw error;
+                                    notify({ type: 'warning', message: `Доращивание кадра не завершилось (${errorMessage(error)}); работа идёт по исходным референсам.` });
+                                }
+                            }
+                        }
+                    }
+                    // Phase 1: the projections. The `rectifier` role owns every distort and perspective
+                    // operation in the run and is the only role that reaches correct_perspective; the
+                    // decomposer below gets no geometry tool at all, because naming corners and naming
+                    // screens in one pass is how a tilt survived a "correction". The harness re-measures
+                    // the tilt in the file the role produced and keeps the original unless the copy came
+                    // out flatter.
+                    const rectifyMode = config.agent.rectify ?? 'auto';
+                    if (rectifyMode !== 'off' && referenceFiles.length) {
+                        const rectifierNames = toolNamesForRole(enabled, 'rectifier', config.roles?.rectifier);
+                        if (!canRectify(config) || !rectifierNames.includes('correct_perspective')) {
+                            if (rectifyMode === 'always') notify({ type: 'warning', message: 'agent.rectify: correct_perspective недоступен (tools.images или ImageMagick) — проекции пропущены, замеры пойдут по скошенному кадру.' });
+                        } else {
+                            const rectifierRole = roles.resolve('rectifier', tierForPhase);
+                            const rectifierModel = paced?.ready
+                                ? clampModel(rectifierRole.model, paceSettings.models, paced.ceilingIndex, Boolean(pins.rectifier?.model))
+                                : rectifierRole.model;
+                            const limit = rectifyMode === 'always' ? Number.MAX_SAFE_INTEGER : (config.agent.rectifyMaxFiles ?? 4);
+                            const candidates = rectifyTargets(referenceFiles.map((rel) => ({ path: rel })), rectifyMode, limit);
+                            if (candidates.length) {
+                                notify({
+                                    type: 'decompose.rectify', role: 'rectifier', model: rectifierModel,
+                                    candidates: candidates.length, files: candidates.map((item) => item.path),
+                                });
+                                try {
+                                    const straightened = await rectifyReferences({
+                                        root, dir, files: candidates, roles, config, signal, notify,
+                                        model: rectifierModel, effort: rectifierRole.effort,
+                                        maxTurns: config.agent.rectifyMaxTurns ?? 6,
+                                        toolset: createToolset({
+                                            ...toolBase, names: rectifierNames, approvalLevel: 'read',
+                                            allowWrite: ['correct_perspective', 'crop_image', 'compare_images'],
+                                            role: 'rectifier', extras: mcpRead,
+                                        }),
+                                    });
+                                    for (const warning of straightened.warnings) notify({ type: 'warning', message: warning });
+                                    const changed = [];
+                                    for (const item of straightened.rectified) {
+                                        if (await swapReference(item.from, item.to)) changed.push({ from: item.from, to: item.to });
+                                    }
+                                    announceReferences(changed);
+                                    progress.notes ??= [];
+                                    progress.notes.push({
+                                        kind: 'rectifier', status: 'completed',
+                                        report: `проверено ${candidates.length}, выпрямлено ${straightened.rectified.length}, без изменений ${straightened.kept.length}`,
+                                    });
+                                    if (changed.length) {
+                                        notify({
+                                            type: 'decompose.rectify.done', count: changed.length,
+                                            files: straightened.rectified.map((item) => ({
+                                                from: item.from, to: item.to, before: item.before, after: item.after,
+                                            })),
+                                        });
+                                    }
+                                } catch (error) {
+                                    if (error?.name === 'AbortError') throw error;
+                                    notify({ type: 'warning', message: `Проекции не завершились (${errorMessage(error)}); работа идёт по исходным референсам.` });
+                                }
+                            }
+                        }
+                    }
                     const role = roles.resolve('decomposer', plan.complexity === 'trivial' || plan.complexity === 'complex' ? plan.complexity : 'normal');
                     const model = paced?.ready
                         ? clampModel(role.model, paceSettings.models, paced.ceilingIndex, Boolean(pins.decomposer?.model))
                         : role.model;
                     // Local cuts belong to the decomposer the same way they belong to the measurer;
-                    // generation needs the images API and an enabled `tools.images`.
-                    // correct_perspective is the deterministic first choice for rectifying a
-                    // photographed or skewed reference: it preserves pixels exactly, unlike a
-                    // generative "restoration" whose geometry lands wherever the sampler lands.
+                    // generation needs the images API and an enabled `tools.images`. Geometry is not in
+                    // this list: the projections ran in phase 1, and a role that names screens while it
+                    // names corners is the reason a tilt used to survive the stage.
                     const names = [...new Set([
                         ...toolNamesForRole(enabled, 'decomposer', config.roles?.decomposer),
-                        'view_image', 'crop_image', 'split_image', 'compare_images', 'correct_perspective',
+                        'view_image', 'crop_image', 'split_image', 'compare_images',
                     ])];
                     const canGenerate = subRefMode !== 'off' && names.includes('generate_image');
                     // `always` demands pictures: say out loud when the run cannot make them, instead of
@@ -1213,18 +1378,19 @@ export async function runTeam({
                     if (subRefMode === 'always' && !canGenerate) {
                         notify({ type: 'warning', message: 'agent.decomposerSubReferences: always, но генерация изображений недоступна (tools.images или image API) — decomposer ограничится локальными кропами.' });
                     }
-                    const autoWrite = ['crop_image', 'split_image', 'compare_images', 'correct_perspective', ...(canGenerate ? ['generate_image', 'edit_image'] : [])];
+                    const autoWrite = ['crop_image', 'split_image', 'compare_images', ...(canGenerate ? ['generate_image', 'edit_image'] : [])];
                     const imageDir = `${dir}/${SUB_REFERENCE_DIR}`;
                     const taskLines = [
-                        ...referencePaths.map((source) => `- ${source}`),
+                        ...referenceFiles.map((source) => `- ${source}`),
                         ...[...task.matchAll(/https?:\/\/[^\s)]+/gi)].map(([source]) => `- ${source}`),
                     ];
                     const subRefBrief = subRefMode === 'off'
                         ? 'Mode: names only. Do not write any image; return the screen list and leave subReference null.'
                         : [
                             `Mode: produce sub-references. Write every image you produce under ${imageDir}/ — that directory is the only place you may write.`,
-                            'For each screen either cut it out of the source (crop_image, split_image) or, when the source is a rotated, mirrored, tilted or perspective shot, first rectify the geometry: call correct_perspective with the four corners of the screen (top-left, top-right, bottom-left, bottom-right), or crop_image for a quarter-turn tilt. Only when the geometry cannot be recovered from the pixels, fall back to edit_image or generate_image with that source as reference. Then cut the screens from the rectified picture.',
-                            'Check what you wrote: look at the file with view_image and, when a screen was restored, compare_images the result against the source region. Keep a screen out rather than ship an image that is not it.',
+                            'For each screen either cut it out of the source (crop_image, split_image) or, when the source cannot be cut at all, fall back to edit_image or generate_image with that source as reference.',
+                            'The geometry is already settled: every reference listed for you has been through the rectifier, so a picture that still looks skewed was left that way on purpose and is reported, not corrected. You have no perspective tool and must not rotate, deskew or warp anything — cut from what is there, or say in notes that the source is unusable.',
+                            'Check what you wrote: look at the file with view_image and, when a screen was regenerated, compare_images the result against the source region. Keep a screen out rather than ship an image that is not it.',
                             'Name each file by its order and screen, e.g. 01-home.png, 02-checkout.png.',
                             canGenerate ? '' : 'Image generation is unavailable in this run: use local crops and splits only and say so in notes.',
                         ].filter(Boolean).join(' ');
@@ -1245,6 +1411,77 @@ export async function runTeam({
                     if (result.data) {
                         decomposition = result.data;
                         await collectScreenReferences(decomposition);
+                        // Phase 1.5, between the two phases of this stage: the projections are done
+                        // (phase 1 — correct_perspective and the crops put every pixel where it
+                        // belongs), and the layer split has not started yet (phase 2, advanced mode).
+                        // What phase 1 cannot do is remove content that does not belong to the screen
+                        // or continue a control the frame clipped, so the `restorer` role looks at each
+                        // sub-reference, names the obstruction, and writes the image-editor instruction
+                        // for that region itself. Only the named box is repaired — cut out, edited,
+                        // stitched back — and the verification role must call the result better before
+                        // the repaired copy replaces the sub-reference. Running it here means phase 2
+                        // and the measurer both work on the clean picture, and nobody re-reads a layer
+                        // cut from a dirty one.
+                        const restoreMode = config.agent.restore ?? 'auto';
+                        if (restoreMode !== 'off' && screenReferences.files.length) {
+                            if (!canRestore(config) || !client?.images) {
+                                notify({ type: 'warning', message: 'agent.restore: images API недоступен — восстановление суб-референсов пропущено, слои и замеры идут по тому, что есть.' });
+                            } else {
+                                const candidates = restorableFiles(
+                                    screenReferences.files, restoreMode, config.agent.restoreMaxFiles ?? 6,
+                                );
+                                const tier = plan.complexity === 'trivial' || plan.complexity === 'complex' ? plan.complexity : 'normal';
+                                const restorerRole = roles.resolve('restorer', tier);
+                                const restorerModel = paced?.ready
+                                    ? clampModel(restorerRole.model, paceSettings.models, paced.ceilingIndex, Boolean(pins.restorer?.model))
+                                    : restorerRole.model;
+                                // The role reads the original only to tell a clipped element from a
+                                // missing one; the coordinates it returns belong to the sub-reference.
+                                const originals = new Map();
+                                for (const file of candidates) {
+                                    const at = referenceFiles.indexOf(file.source);
+                                    if (at >= 0 && referenceParts[at]) originals.set(file.rel, referenceParts[at]);
+                                }
+                                if (candidates.length) {
+                                    notify({
+                                        type: 'decompose.restore', role: 'restorer', model: restorerModel,
+                                        candidates: candidates.length, files: candidates.map((file) => file.rel),
+                                    });
+                                    try {
+                                        const repaired = await restoreSubReferences({
+                                            root, files: candidates, roles, client, config, signal, notify,
+                                            originals,
+                                            maxPatches: config.agent.restoreMaxPatches ?? 3,
+                                            verify: config.agent.restoreVerify !== false,
+                                            model: restorerModel, effort: restorerRole.effort,
+                                            maxBytes: config.limits.maxImageBytes,
+                                            outDir: dir,
+                                        });
+                                        for (const warning of repaired.warnings) notify({ type: 'warning', message: warning });
+                                        if (repaired.replaced.length) {
+                                            applyRepairs(decomposition, repaired.replaced);
+                                            // Re-read the list so phase 2 and the measurer both pick up
+                                            // the repaired paths instead of the files they replace.
+                                            await collectScreenReferences(decomposition);
+                                            notify({
+                                                type: 'decompose.restore.done', count: repaired.replaced.length,
+                                                files: repaired.replaced.map((item) => ({
+                                                    from: item.from, to: item.to, patches: item.patches.length,
+                                                })),
+                                            });
+                                        }
+                                        progress.notes ??= [];
+                                        progress.notes.push({
+                                            kind: 'restorer', status: 'completed',
+                                            report: `проверено ${candidates.length}, исправлено ${repaired.replaced.length}, без изменений ${repaired.kept.length}`,
+                                        });
+                                    } catch (error) {
+                                        if (error?.name === 'AbortError') throw error;
+                                        notify({ type: 'warning', message: `Восстановление суб-референсов не завершилось (${errorMessage(error)}); слои и замеры идут по исходным.` });
+                                    }
+                                }
+                            }
+                        }
                         // Advanced decomposer mode: after the role has flattened and cut the screens,
                         // the harness splits the first flat screen into seedream-5.5 layers. The layer
                         // boxes go to `decomposition.json` as hints; the measurer verifies them on the
@@ -1254,7 +1491,7 @@ export async function runTeam({
                             notify({ type: 'warning', message: 'agent.decomposerMode: advanced, но seedream-5.5 не найден ни среди image-моделей, ни среди бэкендов (imageModel / modelsBackends / imagesBackends) — разложение на слои пропущено.' });
                         }
                         else if (decomposerMode === 'advanced') {
-                            const layerTarget = screenReferences.files[0]?.rel ?? referencePaths[0] ?? null;
+                            const layerTarget = screenReferences.files[0]?.rel ?? referenceFiles[0] ?? null;
                             if (!layerTarget) {
                                 notify({ type: 'warning', message: 'agent.decomposerMode: advanced, но плоского экрана для разложения нет — слои не создаются.' });
                             } else {
@@ -1311,7 +1548,7 @@ export async function runTeam({
                     const measureMode = config.agent.measure ?? 'auto';
                     // Restored sub-references count as measurable sources too: a two-phase run resumes
                     // without new --image and still measures against the decomposition output.
-                    const canMeasure = (referenceParts.length || referencePaths.length || hasFigmaReference || screenReferences.files.length > 0);
+                    const canMeasure = (referenceParts.length || referenceFiles.length || hasFigmaReference || screenReferences.files.length > 0);
                     const wantsMeasure = measureMode === 'always' || (measureMode === 'auto' && plan.complexity !== 'trivial');
                     const needsMeasure = !resumedWork || !hasMeasurements || measureMode === 'always';
                     const forcedMeasure = measureMode === 'off' && stopAfter === 'measure';
@@ -1402,7 +1639,7 @@ export async function runTeam({
                             }
                             if (!subRefsOnly) {
                                 for (const [originalIndex, part] of referenceParts.entries()) {
-                                    const rel = referencePaths[originalIndex] ?? `(unnamed original #${originalIndex + 1})`;
+                                    const rel = referenceFiles[originalIndex] ?? `(unnamed original #${originalIndex + 1})`;
                                     if (coveredBySubReferences(rel)) {
                                         hidden += 1;
                                         continue;
@@ -1432,7 +1669,7 @@ export async function runTeam({
                                 + 'Match every sub-reference path to the picture under its "Attached image N" caption. '
                                 + (attachments.originals
                                     ? 'The original references attached after them are context only. '
-                                    : (referencePaths.length || screenReferences.files.some((file) => String(file?.source ?? '').trim()))
+                                    : (referenceFiles.length || screenReferences.files.some((file) => String(file?.source ?? '').trim()))
                                         ? 'The original references are not attached: they exist only as paths in the shared context, and view_image can open one when a sub-reference misses a panel or cuts a screen in half. '
                                         : '')
                                 + (attachments.hidden && attachments.originals
@@ -1514,7 +1751,7 @@ export async function runTeam({
                                 // Cut the overview regions and reusable elements first, then let the measurer inspect
                                 // the actual fragments instead of guessing from the full-size picture.
                                 const preliminary = await stageMeasurementCrops({
-                                    root, workId: work.id, sheet, referencePaths, subReferences: screenReferences.files, measureSource, config, signal,
+                                    root, workId: work.id, sheet, referenceFiles, subReferences: screenReferences.files, measureSource, config, signal,
                                     ...cropBudget,
                                 });
                                 const fragmentList = preliminary.crops.length
@@ -1547,12 +1784,12 @@ export async function runTeam({
                                     notify({ type: 'warning', message: `Второй проход замеров не завершён (${detailed.status}); остаётся лист обзорного прохода.` });
                                 }
                                 stagedCrops = await stageMeasurementCrops({
-                                    root, workId: work.id, sheet, referencePaths, subReferences: screenReferences.files, measureSource, config, signal, reuse: preliminary.crops,
+                                    root, workId: work.id, sheet, referenceFiles, subReferences: screenReferences.files, measureSource, config, signal, reuse: preliminary.crops,
                                     ...cropBudget,
                                 });
                             } else if (sheet) {
                                 stagedCrops = await stageMeasurementCrops({
-                                    root, workId: work.id, sheet, referencePaths, subReferences: screenReferences.files, measureSource, config, signal,
+                                    root, workId: work.id, sheet, referenceFiles, subReferences: screenReferences.files, measureSource, config, signal,
                                     ...cropBudget,
                                 });
                             }
@@ -1589,7 +1826,7 @@ export async function runTeam({
                         const effort = paced?.roles.architect?.effort
                             ?? stageEffort(role.effort, defaultFineQuality(paceSettings.speed, paceSettings.quality), fineQuality(paceSettings, 'architectQuality'));
                         const stepsBrief = plan.steps.map((step) => `${step.id ?? '(no id)'}: ${step.goal}\n  details: ${step.details || '(none)'}\n  files: ${(step.files ?? []).join(', ') || '(none)'}`).join('\n\n');
-                        const references = referencePaths.length ? `\n\n# Reference image paths\n${referencePaths.map((item) => `- ${item}`).join('\n')}` : '';
+                        const references = referenceFiles.length ? `\n\n# Reference image paths\n${referenceFiles.map((item) => `- ${item}`).join('\n')}` : '';
                         const architectureText = `${ctx.render({ maxBytes, exclude: ['tree'] })}\n\n# Plan steps to design for\n${stepsBrief}${references}`;
                         notify({ type: 'stage.start', stage: 'architect', role: 'architect', model });
                         let architected = await roles.run('architect', {
@@ -1738,7 +1975,7 @@ export async function runTeam({
                             await persist('running');
                             notify({ type: 'stage.start', stage: 'image-processing', role: 'image-processor', model });
                             const tasks = imageTasks.map((item, index) => `${index + 1}. ${item.goal}\n   ${item.details}`).join('\n');
-                            const refs = referencePaths.length ? referencePaths.map((item) => `- ${item}`).join('\n') : '(none)';
+                            const refs = referenceFiles.length ? referenceFiles.map((item) => `- ${item}`).join('\n') : '(none)';
                             const imageParts = parts.filter((part) => part?.type === 'input_image');
                             const processed = await roles.run('image-processor', {
                                 text: `${ctx.render({ maxBytes })}\n\n# Image preparation tasks\n${tasks}\n\n# Reference image paths\n${refs}`,
@@ -1816,7 +2053,7 @@ export async function runTeam({
                     const tasks = decorationTasks.length
                         ? decorationTasks.map((item, index) => `${index + 1}. ${item.goal}\n   ${item.details || ''}`).join('\n')
                         : 'The plan does not list decoration tasks. Read the plan and the architecture brief and build the complex decorative elements the page needs.';
-                    const refs = referencePaths.length ? referencePaths.map((item) => `- ${item}`).join('\n') : '(none)';
+                    const refs = referenceFiles.length ? referenceFiles.map((item) => `- ${item}`).join('\n') : '(none)';
                     const decorated = await roles.run('decorator', {
                         text: `${ctx.render({ maxBytes })}\n\n# Decoration tasks\n${tasks}\n\n# Reference image paths\n${refs}`,
                         parts: parts.filter((part) => part?.type === 'input_image'),

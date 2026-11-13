@@ -552,7 +552,9 @@ export async function magickTrimImage({ exe, input, output = input, cwd, signal,
     await mkdir(path.dirname(outPath), { recursive: true });
     const suffix = path.extname(outPath) || '.png';
     const tmpPath = path.join(path.dirname(outPath), `.tmp-trim-${process.pid}-${Date.now()}${suffix}`);
-    const passes = [['-transparent', '-bordercolor', "none", '-border', '1', '-trim']];
+    // A plain -trim already removes a uniform border, whether it is transparent or one opaque
+    // colour. The fuzz pass is the fallback for padding that is not exactly uniform.
+    const passes = [['-trim']];
     if (Number.isFinite(fuzz) && fuzz > 0) passes.push(['-fuzz', `${fuzz}%`, '-trim']);
     try {
         let after = before;

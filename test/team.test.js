@@ -214,7 +214,8 @@ test('resolveRole merges role, default role and top-level settings; --role flags
     });
     assert.deepEqual(overridesFrom(parseArgv(['run', 'draw', '--no-web', '--no-tools']).values).tools,
         { web: false, fs: false, shell: false, fetch: false, mcp: false, channels: false, subagents: false, browser: false, images: false, askUser: false, desktop: false, skills: false });
-    assert.equal(Object.keys(overridesFrom({ role: ['all=cheap'] }).roles).length, 20);
+    // `--role all=` expands over every built-in role, so the count follows the role table.
+    assert.equal(Object.keys(overridesFrom({ role: ['all=cheap'] }).roles).length, Object.keys(defaults.roles).length);
     assert.equal(overridesFrom({ extract: 'always' }).agent.extract, 'always');
     assert.equal(overridesFrom({ 'no-extract': true }).agent.extract, 'off');
     assert.throws(() => overridesFrom({ extract: 'nope' }), /--extract/);
@@ -1802,7 +1803,10 @@ test('decomposer builds one clean sub-reference per screen before the measurer',
     for (const name of ['crop_image', 'split_image', 'compare_images', 'generate_image', 'edit_image']) {
         assert.ok(decomposerTools.includes(name), `the decomposer must own ${name}: ${decomposerTools.join(', ')}`);
     }
-    assert.match(userText(decomposeBodies[0]), /correct_perspective with the four corners/);
+    // Phase 1 owns the projections: the decomposer gets no geometry tool and is told not to warp.
+    assert.equal(decomposerTools.includes('correct_perspective'), false, `the decomposer must not own the projection: ${decomposerTools.join(', ')}`);
+    assert.match(userText(decomposeBodies[0]), /geometry is already settled/i);
+    assert.match(userText(decomposeBodies[0]), /must not rotate, deskew or warp/i);
     const workDir = `.tmp/${result.workId}/decomposition`;
     const restored = await readFile(path.join(dir, workDir, '00-restored.png')).catch(() => null);
     assert.ok(restored?.length, 'the restored reference is written under the work directory');

@@ -15,6 +15,22 @@ async function rootFor(name) {
     return mkdtemp(path.join(os.tmpdir(), `ai-proc-${name}-`));
 }
 
+// An opaque, two-tone PNG built with sharp: TINY_PNG is a single transparent pixel, which makes
+// sample_colors report "no colours" and gives perspective a degenerate frame. Both tools need real
+// pixels.
+async function opaquePng(size = 16) {
+    const sharp = (await import('sharp')).default;
+    const channels = 3;
+    const buf = Buffer.alloc(size * size * channels);
+    for (let i = 0; i < size * size; i++) {
+        const left = (i % size) < size / 2;
+        buf[i * channels] = left ? 220 : 20;
+        buf[i * channels + 1] = left ? 30 : 200;
+        buf[i * channels + 2] = left ? 40 : 60;
+    }
+    return sharp(buf, { raw: { width: size, height: size, channels } }).png().toBuffer();
+}
+
 test('processing: null uses Node and a host result does not touch the disk', async () => {
     const root = await rootFor('null');
     try {
@@ -232,6 +248,67 @@ test('processing: read access auto-approves measurement crops only under .tmp', 
     }
 });
 
+// correct_perspective is category 'write' (it writes a rectified PNG), so it must be listed in
+// allowWrite AND in AUTO_WRITE_TOOLS to pass decide() at read access. A missing entry in
+// either list silently blocked the decomposer's whole deterministic rectification path.
+test('processing: read access auto-approves correct_perspective only under .tmp', async (t) => {
+    const exe = await detectMagick();
+    if (!exe) return t.skip('ImageMagick is not installed');
+    const root = await rootFor('perspective');
+    try {
+        const img = await opaquePng(64);
+        await writeFile(path.join(root, 'mockup.png'), img);
+        const toolset = createToolset({
+            root, config: defaults, names: ['correct_perspective'], approvalLevel: 'read', allowWrite: ['correct_perspective'],
+        });
+        // corners: top-left, top-right, bottom-left, bottom-right — must use {x,y}, not source_x/dest_x
+        const corners = JSON.stringify([
+            { x: 0, y: 0 }, { x: 63, y: 0 }, { x: 0, y: 63 }, { x: 63, y: 63 },
+        ]);
+        const allowed = await toolset.execute({
+            name: 'correct_perspective', call_id: 'p1',
+            arguments: JSON.stringify({
+                path: 'mockup.png', corners_json: corners,
+                output: '.tmp/perspective/flat.png', reason: 'rectify a photographed screen',
+            }),
+        });
+        assert.equal(allowed.ok, true, allowed.output);
+        assert.ok((await stat(path.join(root, '.tmp/perspective/flat.png'))).size > 0);
+        const denied = await toolset.execute({
+            name: 'correct_perspective', call_id: 'p2',
+            arguments: JSON.stringify({
+                path: 'mockup.png', corners_json: corners,
+                output: 'flat.png', reason: 'must not write outside .tmp at read access',
+            }),
+        });
+        assert.equal(denied.ok, false);
+        assert.match(denied.output, /\.tmp/);
+    } finally {
+        await rm(root, { recursive: true, force: true });
+    }
+});
+
+// sample_colors is category 'read' — it reads pixels and writes nothing — so decide() must allow it
+// at every approval level without any allowWrite entry.
+test('processing: sample_colors runs at read access without any write grant', async (t) => {
+    const root = await rootFor('colors');
+    try {
+        const img = await opaquePng(32);
+        await writeFile(path.join(root, 'mockup.png'), img);
+        const toolset = createToolset({
+            root, config: defaults, names: ['sample_colors'], approvalLevel: 'read', allowWrite: [],
+        });
+        const result = await toolset.execute({
+            name: 'sample_colors', call_id: 's1',
+            arguments: JSON.stringify({ path: 'mockup.png', k: 3 }),
+        });
+        assert.equal(result.ok, true, result.output);
+        assert.match(result.output, /Палитра mockup\.png/);
+    } finally {
+        await rm(root, { recursive: true, force: true });
+    }
+});
+
 test('processing: the backup row appears only when a change has a backup path', () => {
     const remote = backupSummaryRows([{ op: 'edit', path: 'a.js' }], '/tmp/backup');
     assert.deepEqual(remote, [['изменения', '~ a.js']]);
@@ -239,3 +316,4 @@ test('processing: the backup row appears only when a change has a backup path', 
     assert.deepEqual(local, [['изменения', '~ a.js'], ['резервные копии', '/tmp/backup']]);
     assert.deepEqual(backupSummaryRows([], '/tmp/backup'), []);
 });
+

@@ -33,7 +33,7 @@ import { BROWSER_TOOL_NAMES, createBrowserHandlers } from './browser.js';
 import { createImageHandlers } from './image-tools.js';
 import { createChannelHandlers } from '../channels/tool-handlers.js';
 import { detectMagick, magickSplit, magickCrop, magickTrimImage, magickIdentify } from './image-magick.js';
-import { rasterEngine, rasterCompare, rasterCrop, rasterSplit, rasterTrim, rasterInfo } from './image-raster.js';
+import { rasterEngine, rasterCompare, rasterCrop, rasterSplit, rasterTrim, rasterInfo, rasterAlphaShare } from './image-raster.js';
 import { perspectiveRectify } from './image-distort.js';
 import { sampleColors, contrastRatio } from './image-colors.js';
 import { readSkill, discoverSkills } from './skills.js';
@@ -161,7 +161,9 @@ const CHANGE_OPS = new Set(['create', 'overwrite', 'edit', 'delete']);
  * Image tools a read-only stage may still run, provided the file lands inside `.tmp/`:
  * the measurer's crops and the decomposer's sub-references are temporary artifacts, not project output.
  */
-const AUTO_WRITE_TOOLS = new Set(['crop_image', 'split_image', 'compare_images', 'generate_image', 'edit_image']);
+// Write-category image tools that may run at read access, confined to `.tmp/` by
+// guardTemporaryOutput. sample_colors is not here: it is category 'read' and writes nothing.
+const AUTO_WRITE_TOOLS = new Set(['crop_image', 'split_image', 'compare_images', 'generate_image', 'edit_image', 'correct_perspective']);
 /** Tools of that set whose output path the handler itself does not guard. */
 const GENERATED_OUTPUT_TOOLS = new Set(['generate_image', 'edit_image']);
 /**
@@ -837,6 +839,14 @@ export function createToolset({
             const requested = String(args.output ?? '').trim() || `.tmp/perspective-${Date.now()}.png`;
             guardTemporaryOutput('correct_perspective', requested);
             const output = (await resolveInside(root, requested, { forWrite: true, allowRoot: false })).rel;
+            // A frame that already carries transparent regions has been through a destructive edit —
+            // a rotation leaves diagonal wedges, a bad cut-out leaves the rest of the canvas. Those
+            // wedge edges are perfectly straight, so corner refinement would happily snap the quad
+            // onto the damage instead of onto the screen. Measured here and reported, because it is
+            // the one case where a good-looking refinement means the input is not salvageable.
+            const cleared = await rasterAlphaShare({
+                input: abs, cwd: root, engine: config.image?.rasterEngine ?? 'auto',
+            }).catch(() => null);
             const result = await perspectiveRectify({
                 input: abs, output, quad, cwd: root,
                 magickPath: config.magickPath ?? null, signal,
@@ -845,8 +855,36 @@ export function createToolset({
             const note = err.aspectError > 0.06
                 ? `\nКвад не похож на прямоугольник (aspectError ${err.aspectError}): исходник был не просто скошен, а искажён или криво отмечен.`
                 : '';
+
+            // Report what the corners were snapped to, and the tilt actually measured in the output.
+            // The measurement is the only honest signal about the result: the corners describe the
+            // source, and the homography has already removed the tilt they encoded.
+            const lines = [];
+            if (cleared != null && cleared > 0.005) {
+                lines.push(`ВНИМАНИЕ: в исходнике уже есть прозрачные области (${Math.round(cleared * 100)}% кадра) — файл пережил разрушительную правку (поворот или вырезание). Границы этого «вырезанного» прямые, и угла притягиваются к ним, а не к экрану. Бери файл до правки.`);
+            }
+            if (result.refinement?.success) {
+                const moved = result.refinement.deltas
+                    .map((d) => Math.round(Math.hypot(d.dx, d.dy)))
+                    .join(', ');
+                lines.push(`Углы притянуты к границам на пикселях (сдвиги px: ${moved}).`);
+            } else if (result.refinement?.reason && result.refinement.reason !== 'отключено') {
+                lines.push(`Углы не уточнены (${result.refinement.reason}) — использован quad как задан.`);
+            }
+            if (result.residual?.measured) {
+                const { angleDeg, confidence } = result.residual;
+                const verdict = Math.abs(angleDeg) <= 0.6
+                    ? 'горизонтали ровные, повторная коррекция не нужна'
+                    : `остаток ${Math.abs(angleDeg).toFixed(1)}° — quad был неточен; исправь углы по исходному файлу и вызови один раз, а не поверх этого результата`;
+                lines.push(`Наклон выхода измерен: ${angleDeg.toFixed(2)}° (уверенность ${confidence.toFixed(2)}) — ${verdict}.`);
+            }
+
             return {
-                output: `Перспектива исправлена детерминированно (${result.engine}): ${rel} (${result.source.width}×${result.source.height}) → ${result.rel} (${result.width}×${result.height}, ${formatBytes(result.bytes)}).${note}`,
+                output: [
+                    `Перспектива исправлена детерминированно (${result.engine}, один проход ресемплинга): ${rel} (${result.source.width}×${result.source.height}) → ${result.rel} (${result.width}×${result.height}, ${formatBytes(result.bytes)}).`,
+                    note.trim(),
+                    ...lines,
+                ].filter(Boolean).join('\n'),
                 summary: `${result.rel} ${result.width}×${result.height}`,
             };
         },

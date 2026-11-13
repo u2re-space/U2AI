@@ -336,6 +336,15 @@ export const defaults = Object.freeze({
         installer        : r({ model: 'gpt-6.1-terra', effort: 'xhigh' }),
         architect        : r({ model: 'moonshotai/kimi-k3.1-pro', effort: 'xhigh' }),
         decomposer       : r({ model: 'moonshotai/kimi-k3.1-pro', effort: 'xhigh' }),
+        // Phase 0.5: reads one reference, says whether its frame ends inside real content, and writes
+        // the image-editor prompt for the band that has to be grown.
+        extender         : r({ model: 'moonshotai/kimi-k3.1-pro', effort: 'high' }),
+        // Phase 1: owns the geometry — tilt, perspective, rotation — of every reference, and is the
+        // only role allowed to call correct_perspective.
+        rectifier        : r({ model: 'moonshotai/kimi-k3.1-pro', effort: 'high' }),
+        // Phase 1.5: reads one sub-reference, names what blocks measurement, and writes the image
+        // editor prompt for each damaged region. A judgement about a picture, not about the codebase.
+        restorer         : r({ model: 'moonshotai/kimi-k3.1-pro', effort: 'high' }),
         designer         : r({ model: 'moonshotai/kimi-k3.1-pro', effort: 'xhigh' }),
         worker           : r({ model: 'moonshotai/kimi-k3.1-pro', effort: 'xhigh' }),
         'image-processor': r({ model: "moonshotai/kimi-k3.1-pro", effort: 'xhigh' }), // will be fixed in 0.2.16, I was too hurry when used `gpt-6-luna` in 0.2.15 release
@@ -399,7 +408,7 @@ export const defaults = Object.freeze({
         mode: 'team',                   // team (planner → architect → orchestrator → worker → reviewer) | single (one model, one loop)
         /**
      * Stage order for team runs. null = the catalog order; a list reorders or drops stages
-     * (answer, classify, plan, decompose, measure, architect, collect, install, images, decor, work, iconify, review, outcome, memory).
+     * (answer, classify, plan, decompose, restore, measure, architect, collect, install, images, decor, work, iconify, review, outcome, memory).
          * The plan may supply its own order, which wins over this list for that task.
          */
         pipeline: null,
@@ -463,6 +472,60 @@ export const defaults = Object.freeze({
         decomposerMode: 'standard',       // standard | advanced
         advancedMaxLayers: 32,            // PNG layers one seedream-5.5 decomposition may return
         decomposerCropLimit: 0,           // crop ceiling when layer hints are on: 0 = no cap, a number re-applies a ceiling
+        /**
+         * Phase 0.5 inside the decompose stage, before any geometry is touched: grow a reference whose
+         * frame ends inside real content. The 1024×768 mock-up is the usual case — the keyboard loses its
+         * bottom row, the last list row is cut through the middle — and every later role then measures a
+         * screen that never existed. The `extender` role says whether anything real is clipped and writes
+         * the instruction for the grown band itself; the harness pads the canvas locally, asks the editor
+         * for the larger frame explicitly, and accepts the answer only when the original area of it is
+         * still the original, measured pixel by pixel. Grown copies land in
+         * `.tmp/<id>/extended/` and replace the reference for the rest of the run; the input file is
+         * never rewritten, and a rejected answer leaves nothing behind.
+         * off = never; auto = only a picture whose frame the editor model cannot serve as it stands;
+         * always = every reference. Needs the images API.
+         */
+        extend: 'auto',                 // off | auto | always
+        extendMaxFiles: 4,              // references one decomposition may send to the extender
+        /**
+         * Phase 1 inside the decompose stage, before the decomposer cuts any screen: the `rectifier`
+         * role looks at each reference and, when the screen was photographed, scanned or rotated, places
+         * its four corners and runs `correct_perspective` on them. This role owns every distort and
+         * perspective operation in the run — the decomposer no longer touches geometry, because naming
+         * corners and naming screens in one pass is how a tilt survives a "correction". The projection
+         * itself stays deterministic: the corners are snapped onto the boundaries measured in the pixels
+         * and the file is warped exactly once. The harness then re-measures the tilt in the file the role
+         * produced and keeps the original unless the copy came out flatter. Corrected copies land in
+         * `.tmp/<id>/rectified/` and replace the reference for the decomposer, the measurer and the layer
+         * split. off = never; auto = every attached reference (the role answers "keep" for a flat export,
+         * which is the common case); always = the same, and the count cap is ignored.
+         */
+        rectify: 'auto',                // off | auto | always
+        rectifyMaxFiles: 4,             // references one decomposition may send to the rectifier
+        rectifyMaxTurns: 6,             // tool turns the rectifier may spend on one reference
+        /**
+         * Phase 1.5 inside the decompose stage: after the projections (phase 1 — `correct_perspective`
+         * and the crops have put every pixel where it belongs) and before the layer split (phase 2,
+         * `decomposerMode: advanced`). What the projections cannot do is remove content that does not
+         * belong to the screen, or continue a control the frame clipped. The `restorer` role looks at
+         * each sub-reference and names what stops it from being measured — the strip of a neighbouring
+         * screen that came with the crop, a device bezel or a finger, the wedge an earlier rotation
+         * left, a smeared rectified edge — and writes the instruction for the image editor itself, per
+         * region; no fixed prompt is reused across references. The harness then cuts exactly that box,
+         * sends only the cut-out to the editor, and stitches the answer back into exactly that box, so
+         * every pixel outside it stays untouched and the paddings, type sizes and colours around the
+         * repair still measure the original screen. Repairs land in
+         * `.tmp/<id>/decomposition/restored/`; the sub-reference itself is never overwritten, and a
+         * repair the verification role calls worse than the original is dropped. Both phase 2 and the
+         * measurer then read the repaired file.
+         * off = never; auto = only the sub-references a transform produced (`restored`,
+         * `regenerated`, `repaired`) — a plain crop of a flat export has nothing to recover;
+         * always = every sub-reference. Needs the images API; without it the phase is skipped.
+         */
+        restore: 'auto',                // off | auto | always
+        restoreMaxFiles: 6,             // sub-references one decomposition may send to the restorer
+        restoreMaxPatches: 3,           // repair regions accepted per sub-reference, in the order reported
+        restoreVerify: true,            // compare before/after and keep the original unless the repair is better
         /**
          * Which images the measurer measures on and the harness cuts measurement crops from.
          * auto = sub-references first in the attachments, and when the sheet source names an

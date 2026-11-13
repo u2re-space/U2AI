@@ -268,6 +268,31 @@ export function handleRendererEvent(event, api) {
             line('info', `кропы замеров: ${event.count} готово`, { dim: true });
             if (verbose) for (const item of event.crops ?? []) line('info', `  ${item.crop}`, { dim: true });
             break;
+        // The three reference phases of the decompose stage: the frame grown (0.5), the projection
+        // applied (1), the sub-reference repaired (1.5). Each one replaces a picture the measurer
+        // would otherwise read, so the line says which file stopped being the original.
+        case 'decompose.extend':
+            line('action', `фаза 0.5 (extender · ${sanitizeTerminal(String(event.model ?? ''))}): кадр доращивается ${event.files ? `— ${event.files.map((item) => sanitizeTerminal(String(item))).join(', ')}` : `${event.candidates} референсов`}`);
+            break;
+        case 'decompose.extend.done':
+            line('ok', `доращено кадров: ${event.count}${verbose ? ` — ${(event.files ?? []).map((item) => `${item.from} → ${item.to}`).join(', ')}` : ''}`);
+            break;
+        case 'decompose.rectify':
+            line('action', `фаза 1 (rectifier · ${sanitizeTerminal(String(event.model ?? ''))}): ${event.candidates} референсов на проекции`);
+            break;
+        case 'decompose.rectify.done': {
+            const tilt = (event.files ?? [])
+                .filter((item) => Number.isFinite(item.before) && Number.isFinite(item.after))
+                .map((item) => `${Math.abs(item.before).toFixed(1)}°→${Math.abs(item.after).toFixed(1)}°`);
+            line('ok', `выпрямлено кадров: ${event.count}${tilt.length ? ` (наклон ${tilt.join(', ')})` : ''}`);
+            break;
+        }
+        case 'decompose.restore':
+            line('action', `фаза 1.5 (restorer · ${sanitizeTerminal(String(event.model ?? ''))}): ${event.candidates} суб-референсов на дефекты`);
+            break;
+        case 'decompose.restore.done':
+            line('ok', `восстановлено суб-референсов: ${event.count}`);
+            break;
         case 'measure.progress':
             if (verbose) line('info', `разложение: ${event.phase} ${event.status} (опрос ${event.polls})`, { dim: true });
             break;

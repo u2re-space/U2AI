@@ -3,7 +3,7 @@
  * @module agent/schemas
  * @purpose Strict JSON schemas for structured role outputs (Responses API text.format = json_schema).
  * @usedBy agent/team, agent/roles
- * @exports PLAN_SCHEMA, ARCHITECT_SCHEMA, IMAGE_PROCESSOR_SCHEMA, DECORATOR_SCHEMA, COLLECTOR_SCHEMA, REVIEW_SCHEMA, COORDINATION_SCHEMA, MEMORY_SCHEMA, SCREEN_SCHEMA, BATCH_SCHEMA, CLASSIFIER_SCHEMA, EXTRACT_SCHEMA, MEASURER_SCHEMA, DECOMPOSER_SCHEMA, SUB_REFERENCE_KINDS, DESIGNER_SCHEMA
+ * @exports PLAN_SCHEMA, ARCHITECT_SCHEMA, IMAGE_PROCESSOR_SCHEMA, DECORATOR_SCHEMA, COLLECTOR_SCHEMA, REVIEW_SCHEMA, COORDINATION_SCHEMA, MEMORY_SCHEMA, SCREEN_SCHEMA, BATCH_SCHEMA, CLASSIFIER_SCHEMA, EXTRACT_SCHEMA, MEASURER_SCHEMA, DECOMPOSER_SCHEMA, SUB_REFERENCE_KINDS, RESTORE_SCHEMA, RESTORE_DEFECT_KINDS, DESIGNER_SCHEMA
  * @ai.tags schema, roles
  * @ai.hint pure
  * @changed 2026-10-27 The planner may request decoration tasks; the decorator answers with its artifacts.
@@ -31,7 +31,7 @@ export const CLASSIFIER_SCHEMA = object({
     label: { type: 'string', enum: ['trivial', 'normal', 'complex'], description: 'How large the task is.' },
 });
 
-export const SUB_REFERENCE_KINDS = ['crop', 'split', 'restored', 'regenerated', 'figma-export'];
+export const SUB_REFERENCE_KINDS = ['crop', 'split', 'restored', 'repaired', 'regenerated', 'figma-export'];
 
 /**
  * Design direction produced by the designer role.
@@ -166,7 +166,7 @@ export const DECOMPOSER_SCHEMA = object({
             subReferenceKind: {
                 type: 'string',
                 enum: ['', ...SUB_REFERENCE_KINDS],
-                description: 'How that sub-reference was produced: crop, split, restored (rectified from a rotated or perspective shot), regenerated, figma-export; empty when there is none.',
+                description: 'How that sub-reference was produced: crop, split, restored (rectified from a rotated or perspective shot), repaired (a named region of a restored view was cleaned), regenerated, figma-export; empty when there is none.',
             },
         }),
     },
@@ -182,6 +182,121 @@ export const DECOMPOSER_SCHEMA = object({
         }),
     },
     notes: { ...strings, description: 'Ambiguities, inferred relationships, or inaccessible sources.' },
+});
+
+/** What the restorer is allowed to name as a defect. Anything else is not a defect. */
+export const RESTORE_DEFECT_KINDS = ['leftover', 'missing', 'seam', 'artefact'];
+
+/**
+ * The verdict on one repaired file: before against after.
+ * The measurer has no way to tell a repaired reference from an original one, so the run decides here
+ * whether the repaired file replaces the sub-reference or gets thrown away with the original kept.
+ */
+export const RESTORE_VERIFY_SCHEMA = object({
+    verdict: {
+        type: 'string', enum: ['better', 'same', 'worse'],
+        description: 'better only when the defect is gone and the text, positions, sizes and colours survived; worse when anything else changed.',
+    },
+    reason: { ...string, description: 'One sentence naming what changed between the two files.' },
+});
+
+/**
+ * The extension plan for one reference, produced by the `extender` role (phase 0.5).
+ *
+ * Like the repair prompt, the wording is authored by the role: whether the content is really cut
+ * off, which edge is short, and what the grown band has to continue are facts about one picture.
+ * The target frame is not the role's to choose — it comes from the editor model's own floor.
+ */
+export const EXTEND_SCHEMA = object({
+    verdict: {
+        type: 'string', enum: ['keep', 'extend'],
+        description: 'keep when every element that matters is complete inside the frame; extend when the picture is cut through real content.',
+    },
+    assessment: { ...string, description: 'What is cut off and where, or why the frame is complete. Say "nothing is cut" when keeping.' },
+    edge: {
+        type: 'string', enum: ['', 'bottom', 'right', 'top', 'left'],
+        description: 'The edge the content is clipped by, the one the grown band has to continue from; empty when the verdict is keep.',
+    },
+    prompt: {
+        ...string,
+        description: 'The instruction for the image editor for the empty band only: what content continues into it and in what style, and what colours to carry on. Written from what this picture shows. Empty when the verdict is keep.',
+    },
+});
+
+const quadCorner = object({
+    x: { type: 'number', description: 'X in pixels, measured from the left edge of this image.' },
+    y: { type: 'number', description: 'Y in pixels, measured from the top edge of this image.' },
+});
+
+/**
+ * The projection verdict for one reference, produced by the `rectifier` role (phase 1).
+ *
+ * The role owns every geometric operation on the reference: it names the four corners and calls the
+ * deterministic projection tool itself (`correct_perspective`, which snaps those corners onto the
+ * boundaries it measures in the pixels and warps exactly once). That split is the point: naming a
+ * screen and its corners is something a model does well, computing a homography is something it does
+ * badly, and the pixel pass is exact at snapping yet cannot tell a screen from a bezel. The harness
+ * does not trust the claim — it re-measures the tilt in the file the role produced and keeps the
+ * original unless the copy came back flatter.
+ */
+export const RECTIFY_SCHEMA = object({
+    verdict: {
+        type: 'string', enum: ['keep', 'rectified', 'unresolved'],
+        description: 'keep when the screen content is already a flat front-facing rectangle and you wrote no file; rectified when you produced a corrected file and named it in output; unresolved when the picture is distorted but a corner could not be placed — say what is missing.',
+    },
+    assessment: { ...string, description: 'What the picture is (export or photograph of a screen) and how the screen is tilted. Say "flat export, no projection needed" when keeping.' },
+    output: {
+        ...string,
+        description: 'The path of the file correct_perspective produced, exactly as the tool reported it, or an empty string when the verdict is not rectified.',
+    },
+    quad: {
+        ...object({
+            tl: { ...quadCorner, description: 'The corner nearest the top-left of the screen as a viewer reads it.' },
+            tr: { ...quadCorner, description: 'The corner nearest the top-right of the screen as a viewer reads it.' },
+            br: { ...quadCorner, description: 'The corner nearest the bottom-right of the screen as a viewer reads it.' },
+            bl: { ...quadCorner, description: 'The corner nearest the bottom-left of the screen as a viewer reads it.' },
+        }),
+        type: ['object', 'null'],
+        description: 'The four corners you passed to correct_perspective, in the pixel coordinates of the original image, or null when the verdict is keep or unresolved. Corners of the interface itself — not the device bezel, not the desk behind it.',
+    },
+});
+
+
+
+/**
+ * The repair plan for one sub-reference, produced by the `restorer` role.
+ *
+ * The role writes the `prompt` of every patch itself: what the image editor has to do is a judgement
+ * about this particular picture (which neighbour leaked into the crop, which half of a control the
+ * frame cut off), and no fixed sentence can cover it. The box is what keeps the repair targeted —
+ * the harness cuts exactly that box, sends exactly that box to the editor, and stitches the answer
+ * back into exactly that box, so every pixel outside it stays the byte it was.
+ */
+export const RESTORE_SCHEMA = object({
+    verdict: {
+        type: 'string', enum: ['clean', 'repair'],
+        description: 'clean when the picture is a usable flat screen as it is; repair when something blocks measuring it.',
+    },
+    assessment: { ...string, description: 'One or two sentences on what you see and why it is or is not usable. Say "no defects" when clean.' },
+    patches: {
+        type: 'array',
+        description: 'Regions to repair, in the pixel coordinates of the sub-reference image. Empty when the verdict is clean.',
+        items: object({
+            kind: {
+                type: 'string', enum: RESTORE_DEFECT_KINDS,
+                description: 'leftover = something that is not this screen (a strip of the neighbouring screen, a device bezel, a finger, a glare, a transparent wedge from an earlier rotation, a duplicated band at a seam); missing = part of a real element the frame cut off, which the visible pixels determine unambiguously; seam = a resampling artefact along a rectified edge; artefact = other damage that blocks measurement.',
+            },
+            x: { type: 'integer', description: 'Left edge of the region in pixels of the sub-reference image.' },
+            y: { type: 'integer', description: 'Top edge of the region in pixels of the sub-reference image.' },
+            width: { type: 'integer', description: 'Width of the region in pixels. Tight around the damage, not the whole screen.' },
+            height: { type: 'integer', description: 'Height of the region in pixels. Tight around the damage, not the whole screen.' },
+            finding: { ...string, description: 'What is wrong there, stated as an observed fact about this picture ("the left 18 px carry the right edge of the previous screen").' },
+            prompt: {
+                ...string,
+                description: 'The instruction for the image editor, written for this region only: what to remove or to continue, and what to keep identical. Name the colours, the edge, and the direction the missing part must continue in. Never ask for a restyle, a cleanup, a translation, or new content.',
+            },
+        }),
+    },
 });
 
 export const IMAGE_PROCESSOR_SCHEMA = object({

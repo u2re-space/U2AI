@@ -2,12 +2,13 @@
  * @file src/commands/serve.js
  * @module commands/serve
  * @purpose `ai serve` — localhost WebSocket bus for ask, run, chat, and image.
- * @depends node:path, node:fs/promises, node:crypto, node:stream, server/protocol, server/hub, ui/sanitize, ui/renderer, core/config, util/text, commands/shared, commands/flags, commands/ask, commands/run, commands/chat, commands/image, complete/server, complete/complete, complete/channels, complete/errors, structure/structure
+ * @depends node:path, node:fs/promises, node:crypto, node:stream, server/protocol, server/hub, server/bridge, ui/sanitize, ui/renderer, core/config, util/text, commands/shared, commands/flags, commands/ask, commands/run, commands/chat, commands/image, complete/server, complete/complete, complete/channels, complete/errors, structure/structure
  * @usedBy cli
- * @exports pidAlive, startServe, serve
+ * @exports pidAlive, startServe, startServeBridge, serve
  * @ai.tags cli, websocket
  * @ai.hint io
  * @changed 2026-10-15 Bind --port, write serve.json, and accept extra start fields.
+ * @changed 2026-11-14 The server is raised by `@u2ai/server` when the package is installed.
  */
 
 import path from 'node:path';
@@ -16,6 +17,7 @@ import { randomBytes } from 'node:crypto';
 import { Writable, Readable } from 'node:stream';
 import { listenProtocol } from '../server/protocol.js';
 import { createHub } from '../server/hub.js';
+import { resolveServerPackage } from '../server/bridge.js';
 import { sanitizeValue } from '../ui/sanitize.js';
 import { createRenderer } from '../ui/renderer.js';
 import { loadConfig } from '../core/config.js';
@@ -232,6 +234,90 @@ export async function startServe({ home, port = 0, token = randomBytes(32).toStr
 }
 
 /**
+ * Start the server through the package `@u2ai/server`.
+ *
+ * The package raises the server: the WebSocket listener with the limits of the protocol,
+ * the HTTP part and the address of the server. The monolith keeps the hub and the
+ * commands, so the frames of the extension do not change: the same `serve.json`, the
+ * same port and the same token.
+ *
+ * @param {{ pkg: object, home: string, port?: number, token?: string, baseConfig?: object|null,
+ *           cwd?: string, completionTokens?: string[], signal?: AbortSignal }} options
+ * @returns {Promise<{ url: string, token: string, port: number, file: string, httpURL: string,
+ *           structureURL: string, completeWsURL: string, close: () => Promise<void> }>}
+ * @exports
+ * @ai.hint io
+ */
+export async function startServeBridge({ pkg, home, port = 0, token = randomBytes(32).toString('hex'), baseConfig = null, cwd = process.cwd(), completionTokens = [], signal = null } = {}) {
+    const file = path.join(home, 'serve.json');
+    let existing = null;
+    try { existing = JSON.parse(await readFile(file, 'utf8')); } catch { /* absent or stale */ }
+    if (existing && pidAlive(existing.pid)) throw new UsageError(`Не удалось запустить: сервер уже работает (pid ${existing.pid}).`);
+
+    const completion = editorCompletion({ baseConfig, cwd, tokens: [token, ...completionTokens] });
+    const hub = createHub({
+        token,
+        onStart: (run, frame) => commandRunner({ get hub() { return hub; }, baseConfig })(run, frame),
+    });
+
+    let handle;
+    try {
+        handle = await pkg.startServe({
+            home,
+            port,
+            token,
+            // The hub of the monolith keeps the publisher of the terminal runs.
+            onConnection: (conn) => bindConnection(hub, conn),
+            onRequest: completion.handleRequest,
+            onUpgrade: completion.handleUpgrade,
+            config: { services: [], limits: {}, server: {}, completion: { tokens: completionTokens } },
+            // The file is written by the monolith: the contract of `serve.json` is its own.
+            writeFile: false,
+        });
+    } catch (error) {
+        completion.stop();
+        if (error?.code === 'PORT_BUSY' || error?.code === 'EADDRINUSE') {
+            const busy = new UsageError(`Порт ${port} занят.`);
+            busy.code = 'PORT_BUSY';
+            throw busy;
+        }
+        throw error;
+    }
+
+    const httpOrigin = handle.httpURL ?? handle.url.replace(/^ws:/, 'http:');
+    const record = {
+        pid: process.pid, url: handle.url, httpURL: httpOrigin, token, protocol: '0.3',
+        startedAt: new Date().toISOString(),
+        complete: `${httpOrigin}/v1/complete`, structure: `${httpOrigin}/v1/structure`, completeWs: `${handle.url}/v1/complete`,
+    };
+    await mkdir(home, { recursive: true });
+    await writeFile(file, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+    process.stderr.write(`WebSocket: ${handle.url}\nДополнение: ${record.complete}\nСтруктура: ${record.structure}\nФайл: ${file}\n`);
+
+    let closed = false;
+    /**
+     * @returns {Promise<void>}
+     * @ai.hint io
+     */
+    const close = async () => {
+        if (closed) return;
+        closed = true;
+        hub.shutdown();
+        completion.stop();
+        await handle.close();
+        await rm(file, { force: true });
+    };
+    if (signal) {
+        if (signal.aborted) await close();
+        else signal.addEventListener('abort', () => { void close(); }, { once: true });
+    }
+    return {
+        url: handle.url, token, port: handle.port, file, close,
+        httpURL: record.complete, structureURL: record.structure, completeWsURL: record.completeWs,
+    };
+}
+
+/**
  * Editor completion on the same port as the bus. The serve token and any extra completion tokens are accepted.
  * @param {{ baseConfig: object | null, cwd: string, tokens: string[] }} options
  * @returns {{ handleRequest: Function, handleUpgrade: Function, stop: Function }}
@@ -304,6 +390,10 @@ function bindConnection(hub, conn) {
 /**
  * `ai serve [--port n]`. Blocks until the process signal aborts, then returns 0.
  * Extra CLI flags become the default config. Per-run fields arrive in the start frame.
+ *
+ * The server is raised by the package `@u2ai/server` when the package is installed; the
+ * monolith keeps the hub and the commands. Without the package the server is raised the
+ * old way.
  * @param {object} ctx
  * @returns {Promise<number>}
  * @exports
@@ -318,6 +408,20 @@ export async function serve(ctx) {
         if (!Number.isInteger(port) || port < 0 || port > 65535) throw new UsageError('--port: 0..65535');
     }
     const extraTokens = [ctx.values.token, envValue('AI_COMPLETE_TOKEN'), ctx.config.completion?.token].filter((item) => typeof item === 'string' && item);
+    const pkg = await resolveServerPackage();
+    if (pkg) {
+        const handle = await startServeBridge({
+            pkg, home: ctx.config.home, port, signal: ctx.signal, baseConfig: ctx.config, cwd: ctx.cwd, completionTokens: extraTokens,
+        });
+        if (ctx.signal.aborted) {
+            await handle.close();
+            return 0;
+        }
+        await new Promise((resolve) => {
+            ctx.signal.addEventListener('abort', () => { handle.close().then(resolve); }, { once: true });
+        });
+        return 0;
+    }
     const handle = await startServe({
         home: ctx.config.home, port, signal: ctx.signal, baseConfig: ctx.config, cwd: ctx.cwd, completionTokens: extraTokens,
     });

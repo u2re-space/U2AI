@@ -311,6 +311,9 @@ MCP:
   ai mcp add <id> --mcp-url <https://…> [--mcp-description <текст>] [--mcp-approval never|always]
       [--mcp-header "Имя=значение" ...]
   ai mcp remove <id>     ai mcp list     ai mcp probe <id>
+  ai mcp serve [--mcp-http]  тонкий клиент к MCP-серверу пакета @u2ai/server: stdio по умолчанию,
+                         HTTP с --mcp-http. Пакет ставится отдельно (npm i -g @u2ai/server),
+                         путь к ai-serve указывается в AI_SERVE_BIN.
   Локальный сервер — stdio. Сторонний https-адрес уходит в API как type mcp, процесс не запускается.
   --mcp-header повторяется; пишет headers сервера в ~/.ai-agent/config.json. В конфиге то же поле
   headers: { "Authorization": "{{env:FIGMA_TOKEN}}" } — скаляр становится строкой, имя заголовка

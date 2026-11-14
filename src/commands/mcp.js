@@ -2,18 +2,20 @@
  * @file src/commands/mcp.js
  * @module commands/mcp
  * @purpose `ai mcp` — list, add, remove, and probe user MCP servers, stdio and by URL.
- * @depends node:path, node:fs/promises, commands/shared, mcp/servers, mcp/session
+ * @depends node:path, node:fs/promises, commands/shared, mcp/servers, mcp/session, server/bridge
  * @usedBy cli
  * @exports mcpCommand, parseHeaderArgs
  * @ai.tags cli, mcp
  * @ai.hint io
  * @changed 2026-11-04 --mcp-header stores headers of a URL server; list shows their names.
+ * @changed 2026-11-14 `ai mcp serve` is a thin client to the MCP server of `@u2ai/server`.
  */
 import path from 'node:path';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { UsageError } from './shared.js';
 import { normalizeMcpServer } from '../mcp/servers.js';
 import { openMcpSources } from '../mcp/session.js';
+import { resolveServerCli, runServerCli } from '../server/bridge.js';
 
 /**
  * Read `~/.ai-agent/config.json`, or an empty object when the file is missing.
@@ -182,5 +184,15 @@ export async function mcpCommand(ctx) {
             await session.close();
         }
     }
-    throw new UsageError('Доступно: ai mcp list | add | remove | probe');
+    if (sub === 'serve') {
+        const target = await resolveServerCli();
+        if (!target) {
+            throw new UsageError('Пакет @u2ai/server не найден. Установите его (npm i -g @u2ai/server) '
+                + 'или укажите путь к ai-serve в AI_SERVE_BIN.');
+        }
+        const args = ['mcp'];
+        if (values['mcp-http']) args.push('--http');
+        return await runServerCli(target, args, process.cwd());
+    }
+    throw new UsageError('Доступно: ai mcp list | add | remove | probe | serve');
 }

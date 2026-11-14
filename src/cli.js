@@ -92,7 +92,7 @@ const OPTIONS = {
     template: { type: 'string', multiple: true }, example: { type: 'string', multiple: true },
     'mcp-command': { type: 'string' }, 'mcp-arg': { type: 'string', multiple: true },
     'mcp-url': { type: 'string' }, 'mcp-description': { type: 'string' }, 'mcp-approval': { type: 'string' },
-    'mcp-header': { type: 'string', multiple: true },
+    'mcp-header': { type: 'string', multiple: true }, 'mcp-http': { type: 'boolean', default: false },
     // Generation stacks
     'frontend-framework': { type: 'string' }, 'frontend-script-language': { type: 'string' },
     'frontend-style-language': { type: 'string' }, 'frontend-markup-language': { type: 'string' }, 'icon-set': { type: 'string' },

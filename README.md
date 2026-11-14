@@ -536,7 +536,8 @@ iconify → review → audit → learn`, свой реестр компонен�
 становится `chromium`), `--frontend-framework`, `--frontend-markup-language`, `--frontend-style-language`,
 `--frontend-script-language`, `--icon-set`, `--model`, `--effort`, `--extract`, `--approve`, `--role`,
 `--stop-after`, `--id`, `--json`. Референсы `--image` раскладываются в `.ai/refs/` — новый CLI читает
-картинки оттуда. Значения, которых в новом CLI нет (фреймворк `angular`, стадия `decompose`), в вызов не
+картинки оттуда. Флаг `--input` (файл с сутью задачи) передаётся новому CLI как есть: роли веб-части
+читают его до работы. Значения, которых в новом CLI нет (фреймворк `angular`, стадия `decompose`), в вызов не
 попадают: там своё значение по умолчанию.
 
 `ai gen` собирает лендинг, статический сайт, бэкенд или небольшое приложение. Команда пишет контракт в `.ai/generation.json` и запускает ту же команду ролей, что и `ai run`.

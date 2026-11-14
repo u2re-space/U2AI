@@ -243,6 +243,9 @@ export function webdevArgs(values = {}, { kind = null, task = '' } = {}) {
         args.push('--context', String(values.context).trim().toLowerCase());
     }
     if (values.id) args.push('--id', String(values.id));
+    // The essence of the task and the pictures of the task: the new CLI reads them itself.
+    for (const file of values.input ?? []) args.push('--input', String(file));
+    for (const file of values.image ?? []) args.push('--image', String(file));
     if (values['stop-after']) {
         const stage = STAGES[String(values['stop-after']).trim().toLowerCase()];
         if (stage) args.push('--stop-after', stage);

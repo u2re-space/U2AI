@@ -87,6 +87,19 @@ test('webdev: the values the new CLI does not know are left out', () => {
     assert.deepEqual(args, ['run', 'задача', '--kind', 'landing']);
 });
 
+test('webdev: the essence of the task and the pictures of the task are forwarded', () => {
+    const values = parseArgv([
+        'gen', 'landing', 'задача', '--input', 'what-needs.md', '--input', 'notes.md',
+        '--image', 'landing.png',
+    ]).values;
+    const args = webdevArgs(values, { kind: 'landing', task: 'задача' });
+    assert.deepEqual(args, [
+        'run', 'задача', '--kind', 'landing',
+        '--input', 'what-needs.md', '--input', 'notes.md',
+        '--image', 'landing.png',
+    ]);
+});
+
 test('webdev: the roles of the monolith are named as the roles of the new CLI', () => {
     assert.equal(webdevRoleName('worker'), 'coder');
     assert.equal(webdevRoleName('planner'), 'planner');

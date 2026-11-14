@@ -127,7 +127,7 @@ function measurementReport(sheet, conclusion, dir) {
  */
 export function toolNamesForRole(allNames, role, spec = null) {
     if (role === 'iconifier') {
-        const allowed = new Set(['list_files', 'read_file', 'search_files', 'view_image', 'write_file', 'replace_text', 'fetch_url', 'download_font', 'download_icons', 'generate_svg', 'vectorize_image']);
+        const allowed = new Set(['list_files', 'read_file', 'search_files', 'view_image', 'write_file', 'replace_text', 'fetch_url', 'download_font', 'download_icons', 'search_icons', 'generate_svg', 'vectorize_image']);
         return allNames.filter((name) => allowed.has(name) && (!Array.isArray(spec?.tools) || !spec.tools.length || spec.tools.includes(name)));
     }
     if (role === 'styler') {

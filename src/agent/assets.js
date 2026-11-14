@@ -2,18 +2,21 @@
  * @file src/agent/assets.js
  * @module agent/assets
  * @purpose Generate SVG files, download fonts from Google Fonts, and download icon sets (Phosphor, Lucide).
- * @depends node:path, node:fs/promises, util/text, agent/paths
+ * @depends node:path, node:fs/promises, util/text, agent/paths, agent/icon-sets
  * @usedBy agent/tools
- * @exports generateSvg, downloadFont, downloadIcons
+ * @exports generateSvg, downloadFont, downloadIcons, COMMON_ICONS
  * @ai.tags svg, fonts, icons, cdn
  * @ai.hint io
  * @changed 2026-10-22 Initial implementation.
+ * @changed 2026-11-15 The icons are taken all at once, and a name the set does not have is
+ *           reported instead of thrown.
  */
 
 import path from 'node:path';
 import { mkdir, writeFile, stat } from 'node:fs/promises';
 import { resolveInside } from './paths.js';
 import { formatBytes } from '../util/text.js';
+import { iconName, iconSetConfig, iconUrl, ICON_SET_NAMES } from './icon-sets.js';
 
 const MAX_FONT_BYTES = 32 * 1024 * 1024;
 const MAX_ICON_BYTES = 2 * 1024 * 1024;
@@ -195,101 +198,98 @@ export async function downloadFont({ name = '', style = '', url = null, output =
 // ─── Icon Download ──────────────────────────────────────────────────────────────
 
 /**
- * Download icon sets from CDN (Phosphor, Lucide).
- * @param {{ name?: string, icon?: string | null, variant?: string, output?: string, cwd: string, signal?: AbortSignal }} opts
- * @returns {Promise<{ count: number, paths: string[] }>}
+ * The icons every set has: the names that are common to most of the interfaces.
+ *
+ * They are the fallback of a run that does not name the icons: the catalogue of the set is
+ * the better source, but it costs a request.
+ * @type {string[]}
+ */
+export const COMMON_ICONS = Object.freeze([
+    'home', 'user', 'settings', 'search', 'menu', 'x', 'check', 'plus', 'minus', 'arrow-right',
+    'arrow-left', 'arrow-up', 'arrow-down', 'star', 'heart', 'bell', 'mail', 'camera', 'image',
+    'file', 'folder', 'trash', 'edit', 'copy', 'download', 'upload', 'share', 'link', 'lock',
+    'unlock', 'eye', 'sun', 'moon', 'zap', 'shield', 'globe', 'code', 'github', 'twitter',
+    'linkedin', 'youtube', 'chat', 'message', 'calendar', 'clock', 'map', 'phone', 'tag',
+    'bookmark', 'grid', 'list', 'layers', 'layout', 'maximize', 'minimize', 'pause', 'play',
+    'volume', 'wifi', 'battery', 'keyboard', 'monitor', 'mouse', 'printer', 'smartphone', 'tablet',
+]);
+
+/**
+ * The names of the icons of the request: the list and the single name.
+ * @param {unknown} list
+ * @param {unknown} one
+ * @returns {string[]}
+ * @ai.hint pure
+ */
+function wantedIcons(list, one) {
+    const names = [];
+    const push = (item) => {
+        const name = iconName(item);
+        if (name) names.push(name);
+    };
+    for (const item of Array.isArray(list) ? list : []) push(item);
+    if (one) push(one);
+    return [...new Set(names)];
+}
+
+/**
+ * Download the icons of a set from the CDN (Phosphor, Lucide).
+ *
+ * The names may be given one by one or all at once: a role that picks ten icons of one
+ * interface should not pay for ten turns. A name the set does not have is reported, not
+ * thrown: the role can then pick another one.
+ * @param {{ name?: string, icon?: string | null, icons?: string[], variant?: string,
+ *   output?: string, cwd: string, signal?: AbortSignal }} opts
+ * @returns {Promise<{ count: number, paths: string[], missing: string[], failed: string[] }>}
  * @exports
  * @ai.hint io
  */
-export async function downloadIcons({ name = '', icon = null, variant = 'regular', output = '', cwd, signal }) {
+export async function downloadIcons({ name = '', icon = null, icons = [], variant = 'regular', output = '', cwd, signal }) {
     signal?.throwIfAborted();
 
-    const iconSets = {
-        phosphor: {
-            cdn: 'https://cdn.jsdelivr.net/npm/@phosphor-icons/core@2.1.1/assets',
-            variants: ['thin', 'light', 'regular', 'bold', 'duotone', 'fill'],
-            ext: 'svg',
-        },
-        lucide: {
-            cdn: 'https://cdn.jsdelivr.net/npm/lucide-static@latest/icons',
-            variants: ['default'],
-            ext: 'svg',
-        },
-    };
-
-    const setName = name.toLowerCase();
-    const setConfig = iconSets[setName];
-
-    if (!setConfig && !setName) {
-        throw new Error('Укажите name: phosphor или lucide.');
+    const set = iconSetConfig(name);
+    if (!set) {
+        throw new Error(`Неизвестный набор иконок: "${name}". Поддерживаются: ${ICON_SET_NAMES().join(', ')}.`);
     }
 
-    if (!setConfig) {
-        throw new Error(`Неизвестный набор иконок: "${name}". Поддерживаются: phosphor, lucide.`);
-    }
-
-    const outDir = (output || `assets/icons/${setName}/`).split(path.win32.sep).join('/').replace(/\/?$/, '/');
+    const outDir = (output || `assets/icons/${set.name}/`).split(path.win32.sep).join('/').replace(/\/?$/, '/');
     const { abs: outAbs } = await resolveInside(cwd, outDir, { forWrite: true, allowRoot: false });
     await mkdir(outAbs, { recursive: true });
 
+    const wanted = wantedIcons(icons, icon);
+    const names = wanted.length ? wanted : COMMON_ICONS.slice(0, set.name === 'lucide' ? 50 : 100);
+
     const paths = [];
+    const missing = [];
+    const failed = [];
 
-    if (icon) {
-        // Download a single icon
-        const iconName = String(icon).replace(/\.svg$/i, '').toLowerCase();
-        const iconUrl = setConfig.cdn.includes('phosphor')
-            ? `${setConfig.cdn}/${variant}/${iconName}.svg`
-            : `${setConfig.cdn}/${iconName}.svg`;
-
+    for (const iconName of names) {
+        const url = iconUrl(set, iconName, variant);
         try {
-            const res = await fetch(iconUrl, { signal, headers: { 'User-Agent': 'ai-agent-cli/1.0' } });
-            if (!res.ok) throw new Error(`HTTP ${res.status} для иконки ${icon}`);
+            const res = await fetch(url, {
+                signal,
+                headers: { 'User-Agent': 'ai-agent-cli/1.0' },
+                redirect: 'follow',
+            });
+            if (res.status === 404) {
+                // The set does not have this name: the role has to pick another one.
+                missing.push(iconName);
+                continue;
+            }
+            if (!res.ok) {
+                failed.push(iconName);
+                continue;
+            }
             const svg = (await readCapped(res, MAX_ICON_BYTES)).toString('utf8');
             const rel = `${outDir}${iconName}.svg`;
             const { abs } = await resolveInside(cwd, rel, { forWrite: true, allowRoot: false });
             await writeFile(abs, svg, 'utf8');
-            const info = await stat(abs);
             paths.push(rel);
-            return { count: 1, paths };
         } catch (error) {
-            throw new Error(`Не удалось скачать иконку ${icon}: ${error.message}`);
+            if (error?.name === 'AbortError') throw error;
+            failed.push(iconName);
         }
     }
 
-    // Download entire set (limit to avoid huge downloads)
-    // For Phosphor, download common icons; for Lucide, download common icons
-    const commonIcons = [
-        'home', 'user', 'settings', 'search', 'menu', 'x', 'check', 'plus', 'minus', 'arrow-right',
-        'arrow-left', 'arrow-up', 'arrow-down', 'star', 'heart', 'bell', 'mail', 'camera', 'image',
-        'file', 'folder', 'trash', 'edit', 'copy', 'download', 'upload', 'share', 'link', 'lock',
-        'unlock', 'eye', 'eye-off', 'sun', 'moon', 'zap', 'shield', 'globe', 'code', 'terminal',
-        'github', 'twitter', 'linkedin', 'youtube', 'chat', 'message', 'calendar', 'clock', 'map',
-        'map-pin', 'phone', 'star', 'tag', 'tool', 'bookmark', 'bookmark-minus', 'grid', 'list',
-        'layers', 'layout', 'maximize', 'minimize', 'pause', 'play', 'skip-back', 'skip-forward',
-        'volume', 'volume-off', 'wifi', 'battery', 'battery-charging', 'cable', 'hard-drive',
-        'keyboard', 'monitor', 'mouse', 'printer', 'smartphone', 'tablet', 'tv', 'watch',
-    ];
-
-    const maxIcons = setName === 'lucide' ? 50 : 100; // Lucide has ~2000 icons, limit download
-    const iconsToDownload = commonIcons.slice(0, maxIcons);
-
-    for (const iconName of iconsToDownload) {
-        try {
-            const iconUrl = setConfig.cdn.includes('phosphor')
-                ? `${setConfig.cdn}/${variant}/${iconName.toLowerCase()}.svg`
-                : `${setConfig.cdn}/${iconName.toLowerCase()}.svg`;
-
-            const res = await fetch(iconUrl, { signal, headers: { 'User-Agent': 'ai-agent-cli/1.0' }, redirect: 'follow' });
-            if (!res.ok) continue; // Skip missing icons
-            const svg = (await readCapped(res, MAX_ICON_BYTES)).toString('utf8');
-            const rel = `${outDir}${iconName}.svg`;
-            const { abs } = await resolveInside(cwd, rel, { forWrite: true, allowRoot: false });
-            await writeFile(abs, svg, 'utf8');
-            paths.push(rel);
-        } catch {
-            // Skip failed downloads
-        }
-    }
-
-    return { count: paths.length, paths };
+    return { count: paths.length, paths, missing, failed };
 }

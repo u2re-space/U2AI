@@ -66,7 +66,7 @@ export const EXECUTORS = Object.freeze({
         description: 'Implement one focused CSS or SCSS task: inspect the consuming markup and project style conventions, edit the named stylesheets, and report without running checks or comparisons.',
     },
     iconifier: {
-        tools: ['list_files', 'read_file', 'search_files', 'view_image', 'write_file', 'replace_text', 'fetch_url', 'download_font', 'download_icons', 'generate_svg', 'vectorize_image'], turns: 12, schema: null,
+        tools: ['list_files', 'read_file', 'search_files', 'view_image', 'write_file', 'replace_text', 'fetch_url', 'download_font', 'download_icons', 'search_icons', 'generate_svg', 'vectorize_image'], turns: 12, schema: null,
         description: 'Choose suitable project icons, Unicode symbols, or verified icon fonts and integrate them accessibly into generated HTML or component markup without taking over styles.',
     },
     worker: {

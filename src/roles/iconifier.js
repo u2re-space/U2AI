@@ -32,6 +32,10 @@ Choose in this order, using the first option that fits the project's conventions
   class names, source and required weights before referencing it. Prefer existing local assets; do not invent font
   families, class names, URLs, or dependencies. Download icons or fonts only when the tools are available and the
   project needs local assets. Do not install packages or add an unverified remote dependency.
+- With the Phosphor and Lucide sets, find the names with the search_icons tool first: the sets have more than a
+  thousand icons each, and a name the set does not have is a broken icon. Download the icons of one interface in one
+  call, with the list of the names, not one call per icon. A name the set does not have is reported back: pick
+  another one.
 - Generate or vectorize an SVG from a supplied source image only as a last resort when project icons, suitable
   Unicode, and verified icon/font sources cannot meet the need. Inspect the source image first, preserve its
   recognizable silhouette and colors, and do not claim fidelity that was not checked. Never invent a source image.

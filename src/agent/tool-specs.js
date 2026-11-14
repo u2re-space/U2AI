@@ -435,12 +435,22 @@ export const TOOL_SPECS = {
     },
     download_icons: {
         category: 'write', group: 'assets',
-        description: 'Download one icon or a common subset of an icon set (phosphor, lucide) as SVG files from a public CDN. Use a CDN link in the page instead when the icons do not need to be local.',
+        description: 'Download icons of an icon set (phosphor, lucide) as SVG files from a public CDN. The names may be given one by one or all at once; a name the set does not have is reported back. Use a CDN link in the page instead when the icons do not need to be local.',
         parameters: schema({
             name: str('Icon set name: "phosphor" or "lucide". Required.'),
-            icon: nullableStr('One icon name (e.g. "house", "user"). Null = download the common subset.'),
+            icon: nullableStr('One icon name (e.g. "house", "user").'),
+            icons: nullableStr('JSON array of the names of the icons, e.g. ["house","x"].'),
             variant: { type: 'string', enum: ['thin', 'light', 'regular', 'bold', 'duotone', 'fill'], description: 'Phosphor variant. Use regular for the default.' },
             output: str('Output directory. Empty string = assets/icons/<set>/.'),
+        }),
+    },
+    search_icons: {
+        category: 'network', group: 'assets',
+        description: 'Search the names of the icons of a set (phosphor, lucide). The sets name their icons after the thing they draw, so the word of the thing is the word of the name. Use it before downloading: a name the set does not have is a broken icon.',
+        parameters: schema({
+            name: str('Icon set name: "phosphor" or "lucide". Required.'),
+            query: str('The words to look for, e.g. "mail envelope".'),
+            limit: nullableInt('How many names to return. Null = 40.'),
         }),
     },
     browser: {
@@ -575,7 +585,7 @@ export function enabledToolNames(tools, { interactive = false, memory = false, s
     // correct_perspective and sample_colors are deterministic measurements on the file itself
     // (sharp/ImageMagick), so like split/crop/compare they need no generator, only `images`.
     if (tools.images && images) names.push('split_image', 'crop_image', 'compare_images', 'generate_svg', 'correct_perspective', 'sample_colors');
-    if (tools.fetch) names.push('download_font', 'download_icons');
+    if (tools.fetch) names.push('download_font', 'download_icons', 'search_icons');
     if (tools.channels) names.push('decide', 'moderate_text', 'channel_reply', 'telegram_call');
     if (tools.subagents) names.push('run_subagent', 'delegate_role');
     if (tools.skills) names.push(...SKILL_TOOL_NAMES);

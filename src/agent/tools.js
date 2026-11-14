@@ -38,6 +38,7 @@ import { perspectiveRectify } from './image-distort.js';
 import { sampleColors, contrastRatio } from './image-colors.js';
 import { readSkill, discoverSkills } from './skills.js';
 import { generateSvg, downloadFont, downloadIcons } from './assets.js';
+import { searchIcons } from './icon-sets.js';
 import {
     TOOL_SPECS,
     READ_ONLY_TOOLS,
@@ -50,6 +51,31 @@ import {
 } from './tool-specs.js';
 export { TOOL_SPECS, READ_ONLY_TOOLS, SHELL_TOOL_NAMES, IMAGE_TOOL_NAMES, BROWSER_TOOL_NAMES, toolDefinitions, enabledToolNames, describeTool, toolCategory };
 
+
+/**
+ * The names of a tool argument that carries a list.
+ *
+ * The list may come as an array or as a JSON string: a model writes both, and a name that is
+ * lost is a call that has to be repeated.
+ * @param {unknown} value
+ * @returns {string[]}
+ * @ai.hint pure
+ */
+function parseNames(value) {
+    if (value === undefined || value === null) return [];
+    if (Array.isArray(value)) return value.map((item) => String(item));
+    const text = String(value).trim();
+    if (!text) return [];
+    if (text.startsWith('[')) {
+        try {
+            const parsed = JSON.parse(text);
+            if (Array.isArray(parsed)) return parsed.map((item) => String(item));
+        } catch {
+            // Not a JSON list: the text is split by the commas.
+        }
+    }
+    return text.split(',').map((item) => item.trim()).filter(Boolean);
+}
 
 /**
  * Why `crop_image(trim=true)` left the file alone, in the wording the model reads back.
@@ -335,6 +361,7 @@ export function createToolset({
             case 'run_subagent': return `Суб-агент ${args.kind}: ${truncate(args.task ?? '', 400)}`;
             case 'download_font': return `Шрифт: ${args.name || args.url || '?'} ${args.style || ''}\nВыход: ${args.output || 'авто'}`;
             case 'download_icons': return `Иконки: ${args.name || '?'}${args.icon ? `/${args.icon}` : ' (набор)'} ${args.variant || 'regular'}\nВыход: ${args.output || 'авто'}`;
+            case 'search_icons': return `Иконки ${args.name || '?'}: ${truncate(args.query ?? '', 200)}`;
             case 'correct_perspective': return `Выпрямить перспективу ${args.path}\nУглы: ${truncate(args.corners_json ?? '', 300)}\nВыход: ${args.output || 'авто'}\nПричина: ${args.reason ?? '—'}`;
             case 'sample_colors': return `Сэмплировать цвета ${args.path}${args.width ? `: ${args.width}×${args.height} в (${args.x ?? 0},${args.y ?? 0})` : ' (весь кадр)'}`;
             case 'read_skill': return `Прочитать скилл ${args.skillName}`;
@@ -838,11 +865,32 @@ export function createToolset({
         },
         /** Download an icon set or single icon. */
         async download_icons(args) {
-            const result = await downloadIcons({ name: args.name, icon: args.icon ?? null, variant: args.variant || 'regular', output: args.output, cwd: root, signal });
+            const result = await downloadIcons({
+                name: args.name,
+                icon: args.icon ?? null,
+                icons: parseNames(args.icons),
+                variant: args.variant || 'regular',
+                output: args.output,
+                cwd: root,
+                signal,
+            });
+            const parts = [
+                `Скачано ${result.count} иконок:\n${result.paths.slice(0, 20).join('\n')}${result.paths.length > 20 ? `\n… ещё ${result.paths.length - 20}` : ''}`,
+            ];
+            if (result.missing.length) parts.push(`Нет в наборе: ${result.missing.join(', ')}.`);
+            if (result.failed.length) parts.push(`Не скачаны: ${result.failed.join(', ')}.`);
             return {
-                output: `Скачано ${result.count} иконок:\n${result.paths.slice(0, 20).join('\n')}${result.paths.length > 20 ? `\n… ещё ${result.paths.length - 20}` : ''}`,
+                output: parts.join('\n'),
                 summary: `${result.count} иконок`,
             };
+        },
+        /** Search the names of the icons of a set. */
+        async search_icons(args) {
+            const names = await searchIcons(String(args.name ?? ''), String(args.query ?? ''), {
+                limit: Number(args.limit) || 40,
+            });
+            if (!names.length) return { output: `В наборе ${args.name} нет иконок по слову "${args.query ?? ''}".`, summary: 'нет иконок' };
+            return { output: `Иконки набора ${args.name}: ${names.join(', ')}.`, summary: `${names.length} имён` };
         },
         /**
          * Deterministic perspective rectification: four corners of a photographed or skewed screen

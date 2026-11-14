@@ -69,7 +69,7 @@ test('the iconifier chooses icons and edits markup without taking over styles', 
     assert.match(ROLE_INSTRUCTIONS.iconifier, /Keep stylesheet edits to the styler/);
     //assert.equal(defaults.roles.iconifier.model, 'gpt-6.1-sol');
     assert.ok(defaults.documentation.roles.iconifier.includes('phosphorIcons'));
-    assert.deepEqual(EXECUTORS.iconifier.tools, ['list_files', 'read_file', 'search_files', 'view_image', 'write_file', 'replace_text', 'fetch_url', 'download_font', 'download_icons', 'generate_svg', 'vectorize_image']);
+    assert.deepEqual(EXECUTORS.iconifier.tools, ['list_files', 'read_file', 'search_files', 'view_image', 'write_file', 'replace_text', 'fetch_url', 'download_font', 'download_icons', 'search_icons', 'generate_svg', 'vectorize_image']);
 });
 
 test('the image processor preserves raster scale and never invents source dimensions', () => {

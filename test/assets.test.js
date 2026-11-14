@@ -50,6 +50,7 @@ test('image tools are enabled with images and asset downloads with fetch', () =>
     assert.ok(fetch.includes('fetch_url'));
     assert.ok(fetch.includes('download_font'));
     assert.ok(fetch.includes('download_icons'));
+    assert.ok(fetch.includes('search_icons'));
     assert.equal(fetch.includes('split_image'), false);
 });
 

@@ -41,6 +41,32 @@ test('project map', async (t) => {
         assert.equal(found.summary, '1 совпадений');
     });
 
+    await t.test('search_files greps the content, the names and the glob', async () => {
+        const own = await mkdtemp(path.join(os.tmpdir(), 'ai-map-search-'));
+        t.after(async () => { await rm(own, { recursive: true, force: true }); });
+        await mkdir(path.join(own, 'src', 'styles'), { recursive: true });
+        await writeFile(path.join(own, 'src', 'index.html'), '<h1>hi</h1>\n');
+        await writeFile(path.join(own, 'src', 'styles', 'main.scss'), '.card { color: red; }\n');
+        const toolset = createToolset({
+            root: own, config: { limits: { maxFileWriteBytes: 1024 * 1024, maxFileReadBytes: 1024, maxSearchResults: 20, maxListEntries: 50, maxCommandOutputBytes: 1000, commandTimeoutMs: 1000, maxFetchBytes: 1000, maxImageBytes: 1000 }, tools: { fs: true }, shell: null, image: {} },
+            names: ['search_files'], approvalLevel: 'read',
+        });
+
+        // The content: the grep.
+        const grep = await toolset.execute({ name: 'search_files', arguments: JSON.stringify({ query: 'color', scope: 'content' }) });
+        assert.match(grep.output, /src\/styles\/main\.scss:1/);
+
+        // The names: the files themselves.
+        const names = await toolset.execute({ name: 'search_files', arguments: JSON.stringify({ query: 'main', scope: 'path' }) });
+        assert.match(names.output, /src\/styles\/main\.scss/);
+        assert.doesNotMatch(names.output, /src\/index\.html/);
+
+        // The glob cuts the files before they are read.
+        const scss = await toolset.execute({ name: 'search_files', arguments: JSON.stringify({ query: '.', regex: true, glob: '*.scss', scope: 'content' }) });
+        assert.match(scss.output, /src\/styles\/main\.scss/);
+        assert.doesNotMatch(scss.output, /src\/index\.html/);
+    });
+
     await t.test('a second load with the same modification time does not observe a rewritten map file', async () => {
         const first = await loadProjectMap(root);
         assert.equal(first.files.has('lib.js'), true);

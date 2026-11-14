@@ -4,7 +4,7 @@
  * @purpose List, read, search, edit, and copy files inside the working directory.
  * @depends node:path, node:fs/promises, agent/paths, agent/project-backup, util/text
  * @usedBy agent/tools, agent/team
- * @exports listFiles, readTextFile, searchFiles, writeTextFile, replaceInFile, deleteFile, makeDirectory, copyPath
+ * @exports listFiles, readTextFile, searchFiles, globMatcher, writeTextFile, replaceInFile, deleteFile, makeDirectory, copyPath
  * @ai.tags filesystem, tools
  * @ai.hint io
  * @changed 2026-10-21 A direct search can include noisy directories; a missing path lists its parent.
@@ -155,24 +155,67 @@ export async function readTextFile({ root, file, startLine = null, endLine = nul
 }
 
 /**
- * Find `query` in text files and return `path:line: text` hits.
+ * The matcher of a pattern of the names of the files.
+ *
+ * A pattern is a glob: `*` is any text except the slash, `**` is any text, `?` is one
+ * character. A pattern without a slash matches the name of the file, a pattern with a
+ * slash matches the path of the file from the root.
+ * @param {string} pattern
+ * @returns {RegExp|null}
+ * @exports
+ * @ai.hint pure
+ */
+export function globMatcher(pattern) {
+    const text = String(pattern ?? '').trim();
+    if (!text) return null;
+    const body = text
+        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+        .replace(/\*\*\//g, '(?:.*/)?')
+        .replace(/\*\*/g, '.*')
+        .replace(/\*/g, '[^/]*')
+        .replace(/\?/g, '[^/]');
+    return new RegExp(`^${body}$`, 'i');
+}
+
+/**
+ * Find `query` in the text files or in the names of the files.
+ *
  * `search_files` uses this when the project map is missing or does not cover the requested path.
+ * With `inContent` the query is a grep over the text of the files and the hits are
+ * `path:line: text`. Without it the query is matched against the path of the files and the
+ * hits are the paths themselves. `glob` limits the files by their name, `regex` turns the
+ * query into a regular expression.
  * `includeNoisy` allows a direct search inside node_modules, dist, and similar directories.
- * @param {{ root: string, query: string, dir?: string, regex?: boolean, maxResults?: number, maxFileBytes?: number, includeNoisy?: boolean }} options
+ * @param {{ root: string, query: string, dir?: string, regex?: boolean, inContent?: boolean,
+ *   glob?: string, maxResults?: number, maxFileBytes?: number, includeNoisy?: boolean }} options
  * @returns {Promise<{ text: string, count: number, scanned: number, truncated: boolean }>}
  * @exports
  * @ai.hint io
  */
-export async function searchFiles({ root, query, dir = '.', regex = false, maxResults = 60, maxFileBytes = 1024 * 1024, includeNoisy = false }) {
+export async function searchFiles({
+    root,
+    query,
+    dir = '.',
+    regex = false,
+    inContent = true,
+    glob = '',
+    maxResults = 60,
+    maxFileBytes = 1024 * 1024,
+    includeNoisy = false,
+} = {}) {
     if (typeof query !== 'string' || !query) throw new Error('Пустой запрос поиска.');
     const { abs, rel } = await resolveInside(root, dir);
+    const names = globMatcher(glob);
+    // A pattern without a slash names the files, a pattern with a slash names the paths.
+    const onName = !String(glob ?? '').trim().includes('/');
     let matcher;
     if (regex) {
         try { matcher = new RegExp(query, 'i'); } catch (error) { throw new Error(`Некорректное регулярное выражение: ${error.message}`); }
     }
     const results = [];
     let scanned = 0, truncated = false;
-    /** Scan text files under this directory until `maxResults` hits. */
+    const byName = !inContent;
+    /** Scan the files under this directory until `maxResults` hits. */
     async function walk(current, prefix) {
         if (truncated) return;
         let entries;
@@ -188,6 +231,17 @@ export async function searchFiles({ root, query, dir = '.', regex = false, maxRe
             } else if (entry.isFile()) {
                 if (/^\.env|\.(pem|key|p12|pfx)$/i.test(entry.name)) continue;
                 const full = path.join(current, entry.name);
+                // The glob cuts the files before they are read: a search of the names does
+                // not open a file at all.
+                if (names && !names.test(onName ? entry.name : relative)) continue;
+                if (byName) {
+                    const hit = matcher ? matcher.test(relative) : relative.toLowerCase().includes(query.toLowerCase());
+                    if (!hit) continue;
+                    scanned++;
+                    results.push(relative);
+                    if (results.length >= maxResults) { truncated = true; break; }
+                    continue;
+                }
                 const info = await stat(full).catch(() => null);
                 if (!info || info.size > maxFileBytes) continue;
                 if (await isBinary(full, info.size)) continue;
@@ -206,7 +260,10 @@ export async function searchFiles({ root, query, dir = '.', regex = false, maxRe
         }
     }
     await walk(abs, rel === '.' ? '' : rel);
-    return { text: results.length ? `${results.join('\n')}${truncated ? `\n…результаты усечены (${maxResults})` : ''}` : `Совпадений не найдено (просмотрено файлов: ${scanned}).`,
+    const empty = byName
+        ? `Файлов по запросу нет (просмотрено файлов: ${scanned}).`
+        : `Совпадений не найдено (просмотрено файлов: ${scanned}).`;
+    return { text: results.length ? `${results.join('\n')}${truncated ? `\n…результаты усечены (${maxResults})` : ''}` : empty,
         count: results.length, scanned, truncated };
 }
 

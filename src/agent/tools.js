@@ -412,14 +412,38 @@ export function createToolset({
             if (!['path', 'symbol', 'content', 'all'].includes(scope)) throw new Error('scope: path, symbol, content или all.');
             const requested = String(args.path || '.').split(path.sep).join('/');
             const noisy = requested.split('/').some((part) => part && part !== '.' && NOISY_DIRS.test(part));
+            const glob = String(args.glob ?? '');
             const projectMap = noisy ? null : await loadProjectMap(root);
             if (projectMap) {
-                const result = await searchMapped(projectMap, { query: args.query, dir: args.path || '.', scope, regex: Boolean(args.regex), maxResults: limits.maxSearchResults });
+                const result = await searchMapped(projectMap, { query: args.query, dir: args.path || '.', scope, regex: Boolean(args.regex), glob, maxResults: limits.maxSearchResults });
                 return { output: result.text, summary: `${result.count} совпадений` };
+            }            const note = noisy ? 'Путь исключён из карты проекта; поиск по дереву.' : 'Карта проекта недоступна; поиск по дереву.';
+            // The tree knows the names of the files and their text: the scope says which of
+            // the two the search looks at.
+            const modes = [];
+            if (scope === 'path' || scope === 'all') modes.push(false);
+            if (scope === 'content' || scope === 'all') modes.push(true);
+            if (scope === 'symbol') modes.push(false);
+            const found = [];
+            let empty = 'Совпадений не найдено.';
+            let count = 0;
+            for (const inContent of modes) {
+                const part = await searchFiles({
+                    root,
+                    query: args.query,
+                    dir: args.path || '.',
+                    regex: Boolean(args.regex),
+                    inContent,
+                    glob,
+                    maxResults: limits.maxSearchResults,
+                    includeNoisy: noisy,
+                });
+                count += part.count;
+                if (part.count) found.push(part.text);
+                else if (!empty) empty = part.text;
             }
-            const result = await searchFiles({ root, query: args.query, dir: args.path || '.', regex: Boolean(args.regex), maxResults: limits.maxSearchResults, includeNoisy: noisy });
-            const note = noisy ? 'Путь исключён из карты проекта; поиск по дереву.' : 'Карта проекта недоступна; поиск по дереву.';
-            return { output: `${note}\n${result.text}`, summary: `${result.count} совпадений` };
+            const output = found.length ? found.join('\n') : empty;
+            return { output: `${note}\n${output}`, summary: `${count} совпадений` };
         },
         /** Write the file, record the change, and refresh that map path. */
         async write_file(args) {

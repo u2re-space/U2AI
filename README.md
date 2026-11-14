@@ -127,7 +127,7 @@ ai run "добавь тест" --serve ws://127.0.0.1:8765
 
 `ai map` строит `.ai/map.json`: пути, время изменения и символы. Повторный поиск читает эту карту из памяти процесса. `ai map path` печатает путь и число файлов и символов.
 
-`search_files` принимает `scope`: `path`, `symbol`, `content` или `all`. `scope=symbol` смотрит имя, `@purpose`, `@ai.hint` и `@ai.tags`.
+`search_files` принимает `scope`: `path`, `symbol`, `content` или `all`. `scope=symbol` смотрит имя, `@purpose`, `@ai.hint` и `@ai.tags`. `scope=path` и `scope=all` ищут и по именам файлов, а `glob` (`*.scss`, `src/**/*.js`) отсекает файлы по имени до чтения; `regex` читает запрос как регулярное выражение.
 
 Исходники в `src/` с отступом в 4 пробела. Карточка модуля (`@file`, `@purpose`, `@exports`, `@depends`, `@usedBy`) и типы функций (`@param`, `@returns`) описаны в `docs/jsdoc/TAGS.md`. Сборка карты кладёт их в `.ai/map.json`: у файла поле `doc`, у символа `purpose`, `params`, `returns`, `hint`, `tags`.
 

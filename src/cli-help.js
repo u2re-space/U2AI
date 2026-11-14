@@ -75,7 +75,7 @@ export const HELP = `ai — CLI-агент на OpenAI Responses API (Node.js 26
 
 Инструменты и автономность:
   --tools fs,shell,fetch,mcp,channels,subagents,browser  локальные инструменты для ask/chat (run включает их по конфигурации)   --no-tools
-  search_files scope=path|symbol|content|all читает карту проекта.
+  search_files scope=path|symbol|content|all читает карту проекта; glob=*.scss ищет по именам файлов.
   --web                  поиск web_search на /v1/responses (ProxyAPI), включён по умолчанию; --no-web выключает
                          запросы и страницы печатаются под ответом
   --images               генерация картинок в ответах; вместе с tools.images — split_image, crop_image, compare_images, generate_svg

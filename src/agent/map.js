@@ -12,6 +12,7 @@
 import path from 'node:path';
 import { readdir, readFile, writeFile, mkdir, stat, open } from 'node:fs/promises';
 import { NOISY_DIRS, isProtectedFileName, isForbiddenDirName } from './paths.js';
+import { globMatcher } from './fs-tools.js';
 import { extractSymbols, mayHaveImports, resolveImports } from './map-scan.js';
 
 const TEXT_CACHE_BYTES = 32 * 1024 * 1024;
@@ -508,19 +509,25 @@ export function countProjectMap(projectMap) {
  * `content` reads through the LRU. Symbol hits also match `@purpose`, `@ai.hint`, and `@ai.tags`.
  * Used by `search_files` when `.ai/map.json` is loaded.
  * @param {object} projectMap Entry from `loadProjectMap`.
- * @param {{ query: string, dir?: string, scope?: string, regex?: boolean, maxResults?: number }} options
+ * @param {{ query: string, dir?: string, scope?: string, regex?: boolean, glob?: string, maxResults?: number }} options
  * @returns {Promise<{ text: string, count: number }>}
  * @exports
  * @ai.hint io
  */
-export async function searchMapped(projectMap, { query, dir = '.', scope = 'all', regex = false, maxResults = 60 } = {}) {
+export async function searchMapped(projectMap, { query, dir = '.', scope = 'all', regex = false, glob = '', maxResults = 60 } = {}) {
     if (typeof query !== 'string' || query.length === 0) throw new Error('Пустой запрос поиска.');
     const scopeName = scope ?? 'all';
     if (!SCOPES.has(scopeName)) throw new Error('scope: path, symbol, content или all.');
     const needle = query.toLowerCase();
     const lines = [];
     let truncated = false;
-    const under = [...projectMap.files.keys()].filter((rel) => inDir(rel, dir)).sort();
+    const names = globMatcher(glob);
+    // A pattern without a slash names the files, a pattern with a slash names the paths.
+    const onName = !String(glob ?? '').trim().includes('/');
+    const under = [...projectMap.files.keys()]
+        .filter((rel) => inDir(rel, dir))
+        .filter((rel) => !names || names.test(onName ? rel.slice(rel.lastIndexOf('/') + 1) : rel))
+        .sort();
     const appeared = [];
     const seen = new Set();
 

@@ -328,7 +328,7 @@ function describeArgs(name, args) {
         case 'read_file': return `${args.path}${args.start_line || args.end_line ? ` [${args.start_line ?? 1}-${args.end_line ?? '…'}]` : ''}`;
         case 'write_file': return `${args.path} (${formatBytes(Buffer.byteLength(String(args.content ?? '')))})`;
         case 'replace_text': return `${args.path}`;
-        case 'search_files': return `"${truncate(args.query, 60)}"${args.path && args.path !== '.' ? ` в ${args.path}` : ''}`;
+        case 'search_files': return `"${truncate(args.query, 60)}"${args.path && args.path !== '.' ? ` в ${args.path}` : ''}${args.glob ? ` ${args.glob}` : ''}${args.scope && args.scope !== 'all' ? ` [${args.scope}]` : ''}${args.regex ? ' /regex' : ''}`;
         case 'list_files': return args.path || '.';
         case 'run_command': return truncate(`${args.shell ? `${args.shell}: ` : ''}${args.command}`, 100);
         case 'run_script': return truncate(args.path, 100);

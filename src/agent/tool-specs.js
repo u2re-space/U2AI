@@ -85,6 +85,7 @@ export const TOOL_SPECS = {
             path: nullableStr('Directory to search in, relative to the working directory. Null = whole working directory.'),
             regex: bool('Interpret query as a regular expression.'),
             scope: { type: 'string', enum: ['path', 'symbol', 'content', 'all'], description: 'path and symbol read the map only. content reads file text. all (use this unless a narrower scope is enough) returns path, then symbol, then content.' },
+            glob: nullableStr('The names of the files to search in, like `*.scss` or `src/**/*.js`. Null = every file.'),
         }),
     },
     write_file: {

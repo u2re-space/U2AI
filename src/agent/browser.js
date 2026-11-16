@@ -58,7 +58,7 @@ async function isFile(filePath) {
  * @ai.hint pure
  */
 export function egoCandidates(configured, env) {
-    const names = configured ? [path.basename(configured)] : ['ego-browser', 'ego-browser.exe', 'ego-browser.cmd', 'ego-browser.bat'];
+    const names = configured ? [path.basename(configured)] : ['ego', 'ego.exe', 'ego.cmd', 'ego.bat'];
     const result = configured ? [configured] : [];
     const push = (dir) => {
         for (const name of names) {
@@ -73,6 +73,12 @@ export function egoCandidates(configured, env) {
     if (home) {
         push(path.join(home, '.local', 'bin'));
         push(path.join(home, '.local', 'share', 'ego'));
+        push(path.join(home, 'Applications', 'ego lite.app', 'Contents', 'MacOS'));
+    }
+    // The install of the ego lite on Windows: «Citro Labs\ego lite\Application\ego.exe».
+    if (process.platform === 'win32') {
+        const roots = [env.ProgramFiles, env['ProgramFiles(x86)'], env.LOCALAPPDATA].filter(Boolean);
+        for (const root of roots) push(path.join(root, 'Citro Labs', 'ego lite', 'Application'));
     }
     return result;
 }

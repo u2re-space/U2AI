@@ -71,7 +71,7 @@ test('effortRank returns correct index', () => {
 
 test('profileFor resolves a known model from the registry', () => {
     const p = profileFor('gpt-6.1-sol');
-    assert.equal(p.window, 256 * 1024);
+    assert.equal(p.window, 1024 * 1024 * 4);
     assert.equal(p.maxOutput, 32768);
     assert.equal(p.ceiling, 'xhigh');
     assert.equal(p.efforts, null);
@@ -79,8 +79,19 @@ test('profileFor resolves a known model from the registry', () => {
 
 test('profileFor resolves a qualified model id', () => {
     const p = profileFor('openai/gpt-6.1-sol');
-    assert.equal(p.window, 256 * 1024);
+    assert.equal(p.window, 1024 * 1024 * 4);
     assert.equal(p.ceiling, 'xhigh');
+});
+
+test('the window of a model is the budget of the body, and the luna answers 128K', () => {
+    const luna = profileFor('openai/gpt-6-luna');
+    // 272K tokens of context are about a mebibyte of the body, and the output cap is 128K.
+    assert.equal(luna.window, 272 * 1024 * 4);
+    assert.equal(luna.maxOutput, 128 * 1024);
+    // The Kimi is found under its bare id: the vendor prefix is stripped before the lookup.
+    const kimi = profileFor('moonshotai/kimi-k3.1-pro');
+    assert.equal(kimi.window, 1024 * 1024 * 4);
+    assert.equal(kimi.maxOutput, 944_000);
 });
 
 test('profileFor returns DEFAULT_PROFILE for unknown models', () => {
@@ -94,7 +105,7 @@ test('profileFor returns DEFAULT_PROFILE for unknown models', () => {
 test('profileFor merges user overrides from config.models', () => {
     const overrides = { 'gpt-6.1-sol': { ceiling: 'high', maxOutput: 8192 } };
     const p = profileFor('gpt-6.1-sol', overrides);
-    assert.equal(p.window, 256 * 1024);
+    assert.equal(p.window, 1024 * 1024 * 4);
     assert.equal(p.maxOutput, 8192);
     assert.equal(p.ceiling, 'high');
     assert.equal(p.efforts, null);

@@ -587,13 +587,13 @@ test('auto resolves to the model window', async () => {
         overrides: { agent: { maxContextBytes: 'auto' } },
         ensureHome: false,
     });
-    assert.equal(sol.agent.maxContextBytes, 256 * 1024);
+    assert.equal(sol.agent.maxContextBytes, 1024 * 1024 * 4);
     const astra = await loadConfig({
         env: { AI_AGENT_HOME: 'test/.home-ctx', AI_MODEL: 'gpt-6-astra' },
         overrides: { agent: { maxContextBytes: 'auto' } },
         ensureHome: false,
     });
-    assert.equal(astra.agent.maxContextBytes, 200 * 1024);
+    assert.equal(astra.agent.maxContextBytes, 200 * 1024 * 4);
 });
 
 test('a raw number passes through unchanged', async () => {

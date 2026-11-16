@@ -108,7 +108,8 @@ export const DEFAULT_PROFILE = Object.freeze({ window: 128 * 1024, maxOutput: 16
 
 /**
  * Known models.
- * `window`    — context window in bytes; the `auto` context level and the model choice both read it.
+ * `window`    — context window in bytes of the request body; the `auto` context level and the model choice both read it.
+ *               One token of text is about four bytes, so a window of 1M tokens is 4 MiB.
  * `maxOutput` — largest `max_output_tokens` the model accepts; decides how much of a task fits one call.
  * `ceiling`   — hardest stop for reasoning effort: a request above it is lowered to it. Null means no stop.
  * `efforts`   — the ladder this model is configured to tear across. Null means the whole ladder down to the ceiling.
@@ -118,19 +119,33 @@ export const DEFAULT_PROFILE = Object.freeze({ window: 128 * 1024, maxOutput: 16
  * Override any field for one installation in the `models.<id>` section of the configuration.
  */
 export const MODEL_PROFILES = Object.freeze({
-    'gpt-6.1-sol': { window: 256 * 1024, maxOutput: 32768, ceiling: 'xhigh', efforts: null, modes: null },
-    'gpt-6.1-terra': { window: 256 * 1024, maxOutput: 32768, ceiling: 'max', efforts: null, modes: null },
-    'gpt-6-luna': { window: 256 * 1024, maxOutput: 16384, ceiling: 'max', efforts: null, modes: null },
-    'gpt-6-astra': { window: 200 * 1024, maxOutput: 32768, ceiling: 'xhigh', efforts: null, modes: null },
-    'gpt-6-luna-decisions': { window: 128 * 1024, maxOutput: 256, ceiling: null, efforts: null, modes: [] },
-    
-    'openai/gpt-6.1-sol': { window: 256 * 1024, maxOutput: 32768, ceiling: 'xhigh', efforts: null, modes: null },
-    'openai/gpt-6.1-terra': { window: 256 * 1024, maxOutput: 32768, ceiling: 'max', efforts: null, modes: null },
-    'openai/gpt-6-luna': { window: 256 * 1024, maxOutput: 16384, ceiling: 'max', efforts: null, modes: null },
-    'openai/gpt-6-astra': { window: 200 * 1024, maxOutput: 32768, ceiling: 'xhigh', efforts: null, modes: null },
-    'openai/gpt-6-luna-decisions': { window: 128 * 1024, maxOutput: 256, ceiling: null, efforts: null, modes: [] },
+    'gpt-6.1-sol': { window: 1024 * 1024 * 4, maxOutput: 32_768, ceiling: 'xhigh', efforts: null, modes: null },
+    'gpt-6.1-terra': { window: 512 * 1024 * 4, maxOutput: 16_384, ceiling: 'max', efforts: null, modes: null },
+    'gpt-6-luna': { window: 272 * 1024 * 4, maxOutput: 128 * 1024, ceiling: 'max', efforts: null, modes: null },
+    'gpt-6-astra': { window: 200 * 1024 * 4, maxOutput: 32_768, ceiling: 'xhigh', efforts: null, modes: null },
+    'gpt-6-luna-decisions': { window: 128 * 1024 * 4, maxOutput: 256, ceiling: null, efforts: null, modes: [] },
 
-    'moonshotai/kimi-k3.1-pro': { window: 256 * 1024, maxOutput: 32768, ceiling: 'max', efforts: null, modes: null },
+    'openai/gpt-6.1-sol': { window: 1024 * 1024 * 4, maxOutput: 32_768, ceiling: 'xhigh', efforts: null, modes: null },
+    'openai/gpt-6.1-terra': { window: 512 * 1024 * 4, maxOutput: 16_384, ceiling: 'max', efforts: null, modes: null },
+    'openai/gpt-6-luna': { window: 272 * 1024 * 4, maxOutput: 128 * 1024, ceiling: 'max', efforts: null, modes: null },
+    'openai/gpt-6-astra': { window: 200 * 1024 * 4, maxOutput: 32_768, ceiling: 'xhigh', efforts: null, modes: null },
+    'openai/gpt-6-luna-decisions': { window: 128 * 1024 * 4, maxOutput: 256, ceiling: null, efforts: null, modes: [] },
+
+    // Kimi K3.1 Pro: 1M tokens of context (4 MiB) and 944K of output. The bare id is the one
+    // the resolver looks for: the vendor prefix is stripped before the lookup.
+    'kimi-k3.1-pro': { window: 1024 * 1024 * 4, maxOutput: 944_000, ceiling: 'max', efforts: null, modes: null },
+    'moonshotai/kimi-k3.1-pro': { window: 1024 * 1024 * 4, maxOutput: 944_000, ceiling: 'max', efforts: null, modes: null },
+
+    // MiniMax M3.1 Flash: 1M tokens of context (4 MiB of text) and 512K of output. The endpoint
+    // refuses to work without the reasoning ("Reasoning is mandatory for this endpoint and cannot
+    // be disabled"), so `none` is not on its ladder.
+    'minimax/minimax-m3.1-flash': { window: 1024 * 1024 * 4, maxOutput: 512 * 1024, ceiling: 'xhigh', efforts: ['low', 'medium', 'high', 'xhigh'], modes: null },
+
+    // Gemini 4 Hydrogen: 1M tokens of context (4 MiB of text) and 64K of output. The card of the
+    // vendor names the four levels of the effort (low, medium, high, xhigh); there is no `none`,
+    // so the reasoning off is raised to `low`.
+    'google/gemini-4-hydrogen': { window: 1024 * 1024 * 4, maxOutput: 64 * 1024, ceiling: 'xhigh', efforts: ['low', 'medium', 'high', 'xhigh'], modes: null },
+    'gemini-4-hydrogen': { window: 1024 * 1024 * 4, maxOutput: 64 * 1024, ceiling: 'xhigh', efforts: ['low', 'medium', 'high', 'xhigh'], modes: null },
 });
 
 /** Default stand-ins. Keys may be bare or prefixed with openai/. */

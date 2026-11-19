@@ -362,7 +362,9 @@ export function chromeArgs({ mode, url, output = null, width = 1280, height = 80
     const args = [
         '--headless=new', '--disable-gpu', '--no-sandbox', '--no-first-run', '--no-default-browser-check',
         '--disable-background-networking', '--disable-extensions', '--disable-sync', '--disable-component-update',
-        '--hide-scrollbars', `--user-data-dir=${userDataDir}`,
+        // The scrollbars stay on the picture: a second scrollbar of the page is a defect the
+        // agent has to see, and a hidden scrollbar cannot be seen.
+        `--user-data-dir=${userDataDir}`,
         `--virtual-time-budget=${Math.max(100, Math.min(60000, Math.round(budgetMs)))}`,
     ];
     if (mode === 'screenshot') {

@@ -87,11 +87,11 @@ test('buildEgoScript renders the marker, the space id, and JSON argument literal
 
 test('egoCandidates and findEgo prefer PATH, then the Ego Lite install dirs', async () => {
     const candidates = egoCandidates(null, { PATH: 'C:\\tools', USERPROFILE: 'C:\\Home' });
-    assert.equal(candidates[0], path.join('C:\\tools', 'ego-browser'));
-    assert.ok(candidates.includes(path.join('C:\\Home', '.local', 'share', 'ego', 'ego-browser.exe')));
+    assert.equal(candidates[0], path.join('C:\\tools', 'ego'));
+    assert.ok(candidates.includes(path.join('C:\\Home', '.local', 'share', 'ego', 'ego.exe')));
     const custom = 'D:\\ego\\bin\\ego-browser.exe';
     assert.equal(egoCandidates(custom, { PATH: 'C:\\tools' })[0], custom);
-    assert.equal(await findEgo({ env: { PATH: 'C:\\tools' }, exists: async (p) => path.basename(p) === 'ego-browser.exe' }), path.join('C:\\tools', 'ego-browser.exe'));
+    assert.equal(await findEgo({ env: { PATH: 'C:\\tools' }, exists: async (p) => path.basename(p) === 'ego.exe' }), path.join('C:\\tools', 'ego.exe'));
     assert.equal(await findEgo({ executable: custom, env: { PATH: 'C:\\tools' }, exists: async () => true }), custom);
     assert.equal(await findEgo({ env: { PATH: '' }, exists: async () => false }), null);
 });
@@ -147,6 +147,9 @@ test('chromeArgs builds a headless read call with the url last', () => {
     assert.equal(dom.filter((arg) => arg.startsWith('--screenshot')).length, 0);
     assert.equal(dom.at(-1), 'file:///C:/work/index.html');
     assert.ok(chromeArgs({ mode: 'dump-dom', url: 'https://x.test', userDataDir: 'p' }).includes('--virtual-time-budget=60000') === false);
+    // The scrollbars stay on the picture: a second scrollbar of the page is a defect the
+    // agent has to see, and a hidden scrollbar cannot be seen.
+    assert.ok(!shot.includes('--hide-scrollbars'));
 });
 
 test('runEgoScript imports a UTF-8 file, parses the marker from stderr, and reports failures', async () => {

@@ -110,12 +110,12 @@ test('webdev: the binary is looked up in the environment, the checkout and node_
     const dir = await mkdtemp(path.join(os.tmpdir(), 'ai-agent-webdev-'));
     const empty = await mkdtemp(path.join(os.tmpdir(), 'ai-agent-webdev-empty-'));
     try {
-        const script = path.join(dir, 'submodules', 'u2ai-webdev', 'bin', 'ai-webdev.js');
+        const script = path.join(dir, 'submodules', 'u2ai-webdev', 'bin', 'ai-webdev-worker.js');
         await mkdir(path.dirname(script), { recursive: true });
         await writeFile(script, '// empty\n');
         const candidates = webdevCandidates({ root: dir, env: {} });
         assert.equal(candidates.length, 2);
-        assert.ok(candidates[0].endsWith(path.join('submodules', 'u2ai-webdev', 'bin', 'ai-webdev.js')));
+        assert.ok(candidates[0].endsWith(path.join('submodules', 'u2ai-webdev', 'bin', 'ai-webdev-worker.js')));
         const found = await resolveWebdev({ root: dir, env: {} });
         assert.equal(found.command, process.execPath);
         assert.deepEqual(found.args, [script]);

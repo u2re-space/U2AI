@@ -113,8 +113,8 @@ const ROLES = Object.freeze({
 export function webdevCandidates({ root = ROOT, env = process.env } = {}) {
     const candidates = [];
     if (env.AI_WEBDEV_BIN) candidates.push(path.resolve(env.AI_WEBDEV_BIN));
-    candidates.push(path.join(root, 'submodules', 'u2ai-webdev', 'bin', 'ai-webdev.js'));
-    candidates.push(path.join(root, 'node_modules', '@u2ai', 'webdev', 'bin', 'ai-webdev.js'));
+    candidates.push(path.join(root, 'submodules', 'u2ai-webdev', 'bin', 'ai-webdev-worker.js'));
+    candidates.push(path.join(root, 'node_modules', '@u2ai', 'webdev', 'bin', 'ai-webdev-worker.js'));
     return candidates;
 }
 
@@ -152,7 +152,9 @@ export async function resolveWebdev({ root = ROOT, env = process.env } = {}) {
  * @ai.hint io
  */
 async function findOnPath(env) {
-    const names = process.platform === 'win32' ? ['ai-webdev.cmd', 'ai-webdev.exe', 'ai-webdev'] : ['ai-webdev'];
+    const names = process.platform === 'win32'
+        ? ['ai-webdev-worker.cmd', 'ai-webdev-worker.exe', 'ai-webdev-worker']
+        : ['ai-webdev-worker'];
     for (const dir of String(env.PATH ?? '').split(path.delimiter)) {
         if (!dir) continue;
         for (const name of names) {
@@ -294,8 +296,12 @@ export async function delegateWebdev(ctx, { kind = null, task = '' } = {}) {
         }
     }
 
-    const args = [...target.args, ...webdevArgs(values, { kind, task: text })];
-    renderer.line('info', `делегирую в ai-webdev: ${args.slice(1).join(' ') || '(без аргументов)'}`);
+    const targetName = path.basename(String(target.command ?? '')).toLowerCase();
+    const graphical = target.args.some((item) => path.basename(String(item)).toLowerCase() === 'ai-webdev.js')
+        || (targetName.startsWith('ai-webdev') && !targetName.startsWith('ai-webdev-worker'));
+    const args = [...target.args, ...(graphical ? ['--headless'] : []), ...webdevArgs(values, { kind, task: text })];
+    const shown = args.slice(1).filter((item) => item !== '--headless');
+    renderer.line('info', `делегирую в ai-webdev: ${shown.join(' ') || '(без аргументов)'}`);
     return await run(target.command, args, cwd, renderer, target.shell === true);
 }
 

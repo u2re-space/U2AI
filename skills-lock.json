@@ -13,11 +13,24 @@
       "skillPath": "skills/ego-browser/SKILL.md",
       "computedHash": "b349979b1d30636fd234877f6ee40ab9571d6b39ae3bf7c8d6c24eed99aec5d1"
     },
+    "file-search": {
+      "source": "netresearch/file-search-skill",
+      "sourceType": "github",
+      "skillPath": "skills/file-search/SKILL.md",
+      "computedHash": "6f86c0750bcc9c6458de0f1c421a7db1f96c9cce57964d7eb697d55cf488b726"
+    },
     "modern-web-guidance": {
       "source": "GoogleChrome/modern-web-guidance",
       "sourceType": "github",
       "skillPath": "skills/modern-web-guidance/SKILL.md",
       "computedHash": "9e69ce00dc314b64f6664031b70295ea46c7de93ac682c624808df6e48e08b66"
+    },
+    "toon-format": {
+      "source": "closedloop-ai/claude-plugins",
+      "commit": "cf3640611aff4c67322e5ce7626fa26140c2ceee",
+      "sourceType": "github",
+      "skillPath": "plugins/self-learning/skills/toon-format/SKILL.md",
+      "computedHash": "07838a8d06eecd32ba11fdb7802ad41462ecb521d576f478266841e3af1fc1e7"
     }
   }
 }

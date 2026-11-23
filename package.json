@@ -41,13 +41,17 @@
     "@resvg/resvg-js": "^2.6.2",
     "@toon-format/toon": "^4.4.0",
     "@types/node": "^26.6.5",
-    "really-relaxed-json": "^0.4.0",
-    "zod": "^4.6.7",
     "canvas": "^4.0.0-rc3",
-    "sharp": "^0.35.5"
+    "really-relaxed-json": "^0.4.0",
+    "sharp": "^0.35.5",
+    "zod": "^4.6.7"
   },
   "allowScripts": {
     "canvas@3.2.3": true,
     "canvas@4.0.0-rc3": true
+  },
+  "devDependencies": {
+    "@netresearch/agent-skill-coordinator": "^0.2.0",
+    "@netresearch/file-search-skill": "github:netresearch/file-search-skill"
   }
 }

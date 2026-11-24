@@ -13,6 +13,7 @@
  */
 
 import { ApiError, BudgetError, CancelledError, isAbortError } from '../openai/errors.js';
+import JSON5 from 'json5';
 import { outputText, refusalText } from '../openai/stream.js';
 import { collectWebSources, webSearchTool } from '../openai/web-search.js';
 import { isReasoningModel, supportsVerbosity } from '../core/config.js';
@@ -402,7 +403,9 @@ export async function runTurn({
                 signal?.throwIfAborted();
                 result.toolCalls++;
                 let args = null;
-                try { args = JSON.parse(call.arguments ?? '{}'); } catch { args = null; }
+                // JSON5: аргументы вызова пишет модель, и «почти JSON» (одинарные
+                // кавычки, висячие запятые) разбирается так же, как строгий JSON.
+                try { args = JSON5.parse(call.arguments ?? '{}'); } catch { args = null; }
                 notify({ type: 'tool.exec.start', name: call.name, callId: call.call_id, args });
                 const outcome = await toolset.execute(call);
                 notify({ type: 'tool.exec.done', name: call.name, callId: call.call_id, ok: outcome.ok !== false, summary: outcome.summary ?? '',

@@ -16,6 +16,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { CancelledError } from '../openai/errors.js';
+import JSON5 from 'json5';
 import { createClient } from '../openai/client.js';
 import { primaryBackend } from '../openai/fallback.js';
 import { roleToolConfig } from '../core/config.js';
@@ -68,7 +69,8 @@ function parseNames(value) {
     if (!text) return [];
     if (text.startsWith('[')) {
         try {
-            const parsed = JSON.parse(text);
+            // JSON5: список от модели — это «почти JSON» нередко.
+            const parsed = JSON5.parse(text);
             if (Array.isArray(parsed)) return parsed.map((item) => String(item));
         } catch {
             // Not a JSON list: the text is split by the commas.
@@ -543,7 +545,8 @@ export function createToolset({
         async structure_file(args) {
             let rules = {};
             if (typeof args.rules_json === 'string' && args.rules_json.trim()) {
-                try { rules = JSON.parse(args.rules_json); }
+                // JSON5: аргументы вызова пишет модель, и «почти JSON» разбирается так же.
+                try { rules = JSON5.parse(args.rules_json); }
                 catch { throw new Error('rules_json не является JSON.'); }
             }
             if (rules === null || typeof rules !== 'object' || Array.isArray(rules)) throw new Error('rules_json должен быть объектом.');
@@ -902,7 +905,8 @@ export function createToolset({
             if (!info?.isFile()) throw new Error(`Файл не найден: ${args.path}`);
             let quad;
             try {
-                const parsed = JSON.parse(args.corners_json ?? '');
+                // JSON5: аргументы вызова пишет модель, и «почти JSON» разбирается так же.
+                const parsed = JSON5.parse(args.corners_json ?? '');
                 if (!Array.isArray(parsed) || parsed.length !== 4) throw new Error('нужен JSON-массив из 4 объектов {x,y}.');
                 quad = parsed;
             } catch (error) {
@@ -1072,7 +1076,10 @@ export function createToolset({
         let args = {};
         const fail = (message) => ({ output: `Ошибка: ${message}`, summary: message, ok: false, durationMs: Date.now() - started, category: (TOOL_SPECS[name] ?? extraByName.get(name))?.category ?? null });
         if (!allowed.has(name) || !handlers[name]) { stats.errors++; return fail(`инструмент ${name} недоступен.`); }
-        try { args = call.arguments ? JSON.parse(call.arguments) : {}; }
+        // JSON5: аргументы вызова пишет модель, и «почти JSON» (одинарные кавычки, висячие
+        // запятые, комментарии) разбирается так же, как строгий JSON. Строгий разбор терял
+        // вызов целиком, и ход уходил впустую.
+        try { args = call.arguments ? JSON5.parse(call.arguments) : {}; }
         catch { stats.errors++; return fail('аргументы не являются корректным JSON.'); }
         const spec = TOOL_SPECS[name] ?? extraByName.get(name);
         if (!spec?.category) { stats.errors++; return fail(`инструмент ${name} недоступен.`); }

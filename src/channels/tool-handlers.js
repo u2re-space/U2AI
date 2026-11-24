@@ -11,6 +11,7 @@
  */
 
 import { createClient } from '../openai/client.js';
+import JSON5 from 'json5';
 import { primaryBackend } from '../openai/fallback.js';
 import { clipMiddle } from '../util/text.js';
 import { dispatchChannel } from './dispatch.js';
@@ -50,8 +51,9 @@ export function createChannelHandlers({ client = null, config, signal, ledger = 
             const body = {
                 model: String(args.model ?? '').trim() || undefined,
                 preset: args.preset || undefined,
-                state: JSON.parse(args.state_json),
-                ...(questions ? { questions: JSON.parse(questions) } : {}),
+                // JSON5: аргументы вызова пишет модель, и «почти JSON» разбирается так же.
+                state: JSON5.parse(args.state_json),
+                ...(questions ? { questions: JSON5.parse(questions) } : {}),
             };
             const result = await withClient((api) => dispatchChannel({ type: 'decide', body, client: api, config, signal, ledger }));
             return { output: JSON.stringify(result.verdict), summary: `${result.verdict.action} · ${result.verdict.source}` };
@@ -74,7 +76,8 @@ export function createChannelHandlers({ client = null, config, signal, ledger = 
         /** Call one allow-listed Telegram Bot API method. args_json is the method body. */
         async telegram_call(args) {
             if (!TELEGRAM_METHODS.includes(args.method)) throw new TypeError(`Метод Telegram недоступен: ${args.method}`);
-            const body = String(args.args_json ?? '').trim() ? JSON.parse(args.args_json) : {};
+            // JSON5: аргументы вызова пишет модель, и «почти JSON» разбирается так же.
+            const body = String(args.args_json ?? '').trim() ? JSON5.parse(args.args_json) : {};
             if (args.method === 'sendMessage' && typeof body.text === 'string' && body.text.length > 4096) {
                 throw new TypeError('Текст Telegram длиннее 4096 символов.');
             }

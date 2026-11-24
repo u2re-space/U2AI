@@ -563,6 +563,17 @@ test('extractJson: returns null for non-JSON text', () => {
     assert.equal(extractJson(null), null);
 });
 
+test('extractJson: reads JSON5 — the text of a model is often almost-JSON', () => {
+    // Одинарные кавычки, висячие запятые, комментарии, ключи без кавычек.
+    assert.deepEqual(extractJson("{a:1}"), { a: 1 });
+    assert.deepEqual(extractJson("{'a':1}"), { a: 1 });
+    assert.deepEqual(extractJson('{"a":1,}'), { a: 1 });
+    assert.deepEqual(extractJson('{/* the answer */ "a":1}'), { a: 1 });
+    // Тот же JSON5 в огороде текста.
+    assert.deepEqual(extractJson("Here it is:\n```json\n{ a: 'x', b: [1,2,], }\n```\nDone."),
+        { a: 'x', b: [1, 2] });
+});
+
 // ── Context levels (0.2.0) ────────────────────────────────────────────────
 
 test('agent.maxContextBytes resolves a word level to bytes', async () => {

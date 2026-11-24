@@ -594,9 +594,13 @@ function runCli(args, { input = null, env = {} } = {}) {
 test('ai complete --json prints the insertion from stdin', async () => {
     const cliServer = await startMockServer({
         script: (body) => {
-            assert.equal(body.model, 'gpt-6-luna');
-            assert.equal(body.reasoning.effort, 'none');
-            assert.match(body.input, /alpha \|/);
+            // Канал проверяется пробой (`input: "ping"`), а не самим запросом: проба не
+            // обязана содержать текст редактора. Ассерт на текст — только для настоящего запроса.
+            if (body.input !== 'ping') {
+                assert.equal(body.model, 'gpt-6-luna');
+                assert.equal(body.reasoning.effort, 'none');
+                assert.match(body.input, /alpha \|/);
+            }
             return { text: 'beta' };
         },
     });
@@ -608,6 +612,9 @@ test('ai complete --json prints the insertion from stdin', async () => {
                 PROXYAPI_API_KEY: '',
                 SPRUTDOCK_API_KEY: '',
                 GPTUNNEL_API_KEY: '',
+                // Без этого ключа канал routerai остаётся в списке, проба уходит в сеть, и
+                // тест зависит от чужого хоста. Тест проверяет CLI, а не сеть.
+                ROUTERAI_API_KEY: '',
             },
         });
         assert.equal(code, 0);
